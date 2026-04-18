@@ -3,4 +3,64 @@
   command = "npm run build"
 
 [build.environment]
-  VITE_API_URL = "http://104.155.150.69:8000"
+  VITE_API_URL = ""
+
+[[redirects]]
+  from = "/status"
+  to = "http://104.155.150.69:8000/status"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/start"
+  to = "http://104.155.150.69:8000/start"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/stop"
+  to = "http://104.155.150.69:8000/stop"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/close"
+  to = "http://104.155.150.69:8000/close"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/deposit"
+  to = "http://104.155.150.69:8000/deposit"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/settings"
+  to = "http://104.155.150.69:8000/settings"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/candles"
+  to = "http://104.155.150.69:8000/candles"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/logs"
+  to = "http://104.155.150.69:8000/logs"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/signals"
+  to = "http://104.155.150.69:8000/signals"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/positions"
+  to = "http://104.155.150.69:8000/positions"
+  status = 200
+  force = true
