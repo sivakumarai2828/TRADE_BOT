@@ -1,0 +1,8 @@
+anthropic>=0.34.0
+ccxt>=4.4.0
+flask>=3.0.0
+flask-cors>=4.0.0
+pandas>=2.2.0
+python-dotenv>=1.0.1
+schedule>=1.2.2
+ta>=0.11.0

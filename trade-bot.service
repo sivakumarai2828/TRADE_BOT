@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Trade Bot
+After=network.target
+
+[Service]
+User=__USER__
+WorkingDirectory=/home/__USER__/TRADE_BOT
+ExecStart=/home/__USER__/venv/bin/python3 api.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
