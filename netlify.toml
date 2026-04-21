@@ -6,6 +6,12 @@
   VITE_API_URL = ""
 
 [[redirects]]
+  from = "/health"
+  to = "http://104.155.150.69:8000/health"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/status"
   to = "http://104.155.150.69:8000/status"
   status = 200
@@ -62,5 +68,53 @@
 [[redirects]]
   from = "/positions"
   to = "http://104.155.150.69:8000/positions"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/start"
+  to = "http://104.155.150.69:8000/daybot/start"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/stop"
+  to = "http://104.155.150.69:8000/daybot/stop"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/status"
+  to = "http://104.155.150.69:8000/daybot/status"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/positions"
+  to = "http://104.155.150.69:8000/daybot/positions"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/signals"
+  to = "http://104.155.150.69:8000/daybot/signals"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/watchlist"
+  to = "http://104.155.150.69:8000/daybot/watchlist"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/logs"
+  to = "http://104.155.150.69:8000/daybot/logs"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/daybot/settings"
+  to = "http://104.155.150.69:8000/daybot/settings"
   status = 200
   force = true

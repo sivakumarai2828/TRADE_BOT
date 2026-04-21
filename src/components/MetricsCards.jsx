@@ -76,10 +76,13 @@ function detailColor(tone) {
   return "text-neutral-400";
 }
 
-export default function MetricsCards({ metrics }) {
+export default function MetricsCards({ metrics, analytics }) {
   const cards = buildCards(metrics);
+  const expectancy = analytics?.expectancy ?? null;
+  const sharpe = analytics?.sharpe ?? null;
 
   return (
+    <>
     <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {cards.map((card) => {
         const Icon = card.icon;
@@ -106,5 +109,35 @@ export default function MetricsCards({ metrics }) {
         );
       })}
     </section>
+
+    {(expectancy !== null || sharpe !== null) && (
+      <div className="flex flex-wrap gap-3">
+        {expectancy !== null && (
+          <div className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm ${
+            expectancy > 0
+              ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+              : "border-red-400/20 bg-red-400/10 text-red-300"
+          }`}>
+            <span className="text-neutral-400">Expectancy</span>
+            <span className="font-semibold">{expectancy > 0 ? "+" : ""}{fmt(expectancy, 3)}R</span>
+            <span className="text-xs text-neutral-500">{expectancy > 0 ? "edge exists" : "no edge yet"}</span>
+          </div>
+        )}
+        {sharpe !== null && (
+          <div className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm ${
+            sharpe >= 1
+              ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+              : sharpe >= 0
+              ? "border-amber-400/20 bg-amber-400/10 text-amber-300"
+              : "border-red-400/20 bg-red-400/10 text-red-300"
+          }`}>
+            <span className="text-neutral-400">Sharpe</span>
+            <span className="font-semibold">{fmt(sharpe, 2)}</span>
+            <span className="text-xs text-neutral-500">{sharpe >= 1 ? "good" : sharpe >= 0.5 ? "ok" : "poor"}</span>
+          </div>
+        )}
+      </div>
+    )}
+    </>
   );
 }

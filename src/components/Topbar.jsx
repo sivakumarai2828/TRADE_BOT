@@ -1,6 +1,20 @@
-import { Bell, CircleUserRound, Menu, Power, WifiOff } from "lucide-react";
+import { Bell, CircleUserRound, Menu, Power, Server, WifiOff } from "lucide-react";
 
-export default function Topbar({ running, apiError, paperMode, secondsAgo }) {
+function formatUptime(seconds) {
+  if (seconds == null) return null;
+  const s = Number(seconds);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+export default function Topbar({ running, apiError, paperMode, secondsAgo, health }) {
+  const serverUp = health?.ok === true;
+  const uptime = formatUptime(health?.uptime_s);
+  const schedulerOn = health?.scheduler === true;
+
   return (
     <header className="sticky top-0 z-30 border-b border-neutral-800 bg-neutral-950/92 px-4 py-4 backdrop-blur sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between gap-4">
@@ -18,6 +32,24 @@ export default function Topbar({ running, apiError, paperMode, secondsAgo }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+
+          {/* Flask server health */}
+          <div className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-xs sm:flex ${
+            serverUp
+              ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
+              : "border-red-400/25 bg-red-400/10 text-red-300"
+          }`}>
+            <Server className="h-3.5 w-3.5" />
+            <span className="font-medium">{serverUp ? "Server UP" : "Server DOWN"}</span>
+            {serverUp && uptime && (
+              <span className="text-neutral-400">· {uptime}</span>
+            )}
+            {serverUp && (
+              <span className={`ml-1 ${schedulerOn ? "text-emerald-400" : "text-amber-400"}`}>
+                · Scheduler {schedulerOn ? "ON" : "OFF"}
+              </span>
+            )}
+          </div>
 
           {/* Last updated pulse */}
           {!apiError && secondsAgo !== null && (

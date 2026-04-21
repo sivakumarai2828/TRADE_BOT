@@ -20,7 +20,13 @@ from decimal import ROUND_DOWN, Decimal
 import ccxt
 
 from config import BotConfig
-from persistence import save_state, save_trade
+from persistence import save_state as _save_state_raw, save_trade
+
+
+def _save() -> None:
+    from dataclasses import asdict
+    positions = {s: asdict(p) for s, p in bot_state.positions.items() if p is not None}
+    _save_state_raw(bot_state.metrics, bot_state.settings, positions)
 from state import PositionData, bot_state
 from telegram_notify import notify_buy, notify_sell
 
@@ -181,6 +187,8 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
         bot_state.refresh_paper_balance(symbol, float(price))
 
     bot_state.record_trade_result(float(pnl))
+    bot_state.set_cooldown(symbol, cycles=2)  # wait 2 cycles before re-entering
+    bot_state.check_daily_loss_limit()
     notify_sell(symbol, float(price), float(pnl), pnl_pct, reason)
 
     save_trade(
@@ -189,15 +197,20 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
         pnl=float(pnl), pnl_pct=pnl_pct, reason=reason,
         is_house_trade=is_house_trade,
     )
-    save_state(bot_state.metrics, bot_state.settings)
+    _save()
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: float) -> None:
-    """Execute BUY/SELL for a specific symbol. Paper mode simulates with virtual USDT."""
+def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: float,
+                  atr: float = 0.0) -> None:
+    """Execute BUY/SELL for a specific symbol. Paper mode simulates with virtual USDT.
+
+    When atr > 0 the stop-loss is set dynamically at entry - 2×ATR instead of
+    the fixed percentage, giving the trade room proportional to actual volatility.
+    """
 
     current_price = _d(price)
     if not _validate_trade(config, signal, current_price):
@@ -209,6 +222,12 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
     if signal == "BUY":
         if has_position:
             logging.info("BUY skipped — %s position already open", symbol)
+            return
+
+        open_count = sum(1 for p in bot_state.positions.values() if p is not None)
+        if open_count >= 2:
+            logging.info("BUY skipped — portfolio limit reached (%d/2 open positions)", open_count)
+            bot_state.add_log("Trade skipped", f"Portfolio limit: already {open_count} open positions (max 2)", tone="neutral")
             return
 
         if bot_state.settings.trade_size_mode == "percent":
@@ -240,9 +259,13 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         else:
             exchange.create_market_buy_order(symbol, float(amount))
 
-        sl_pct = Decimal(str(bot_state.settings.stop_loss_pct / 100))
         tp_pct = Decimal(str(bot_state.settings.take_profit_pct / 100))
-        stop_loss = (current_price * (1 - sl_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        if atr > 0:
+            # Dynamic stop: 2×ATR below entry — adapts to actual market volatility.
+            stop_loss = (current_price - _d(str(round(atr * 2, 8)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        else:
+            sl_pct = Decimal(str(bot_state.settings.stop_loss_pct / 100))
+            stop_loss = (current_price * (1 - sl_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         take_profit = (current_price * (1 + tp_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
         pos = PositionData(
@@ -268,6 +291,7 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
 
         notify_buy(symbol, float(amount), float(current_price),
                    float(stop_loss), float(take_profit), float(trade_size))
+        _save()
 
         if config.dry_run:
             bot_state.refresh_paper_balance(symbol, float(current_price))
@@ -344,6 +368,53 @@ def _try_house_money_trade(exchange, config: BotConfig, symbol: str, current_pri
         f"TP={s.house_take_profit_pct:.0f}% | Principal ${bot_state.metrics.principal:.2f} SAFE",
         tone="positive",
     )
+
+
+def reconcile_positions(exchange, config: BotConfig) -> None:
+    """On startup compare bot_state positions with actual exchange balances.
+
+    Clears ghost positions (bot thinks open, exchange already closed them while
+    the server was offline). Skipped in paper mode — virtual state is authoritative.
+    """
+    if config.dry_run:
+        return
+
+    try:
+        balance = exchange.fetch_balance()
+        open_symbols = [s for s, p in bot_state.positions.items() if p is not None]
+
+        for symbol in open_symbols:
+            base = symbol.split("/")[0]
+            actual = float(balance.get(base, {}).get("total", 0) or 0)
+            pos = bot_state.get_position(symbol)
+            if pos is None:
+                continue
+
+            if actual < 1e-6:
+                logging.warning("Reconcile: ghost position %s cleared (exchange balance=0)", symbol)
+                bot_state.set_position(symbol, None)
+                bot_state.add_log(
+                    "Position reconciled",
+                    f"{symbol} ghost position cleared — was closed while bot was offline",
+                    tone="warning",
+                )
+                from telegram_notify import _send
+                _send(f"⚠️ <b>Position reconciled</b>\n{symbol} ghost position cleared — closed while bot was offline.")
+            elif abs(actual - pos.amount) / max(pos.amount, 1e-9) > 0.05:
+                logging.warning("Reconcile: %s amount mismatch bot=%.6f exchange=%.6f — updating", symbol, pos.amount, actual)
+                with bot_state._lock:
+                    p = bot_state.positions.get(symbol)
+                    if p:
+                        p.amount = actual
+                bot_state.add_log(
+                    "Position reconciled",
+                    f"{symbol} amount corrected: {pos.amount:.6f} → {actual:.6f}",
+                    tone="warning",
+                )
+
+        logging.info("Position reconciliation complete — %d symbol(s) checked", len(open_symbols))
+    except Exception as exc:
+        logging.warning("Position reconciliation failed: %s", exc)
 
 
 def close_open_position(exchange, config: BotConfig, symbol: str = None) -> bool:

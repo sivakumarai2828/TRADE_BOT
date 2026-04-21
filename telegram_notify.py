@@ -52,12 +52,37 @@ def notify_shield_off(mode: str) -> None:
     _send(f"✅ <b>Auto-Shield OFF</b>\nMarket recovered — back to {mode} mode.")
 
 
-def notify_daily_summary(balance: float, pnl: float, pnl_pct: float, total_trades: int, win_rate: float) -> None:
+def notify_daily_summary(
+    date: str,
+    balance: float,
+    pnl: float,
+    pnl_pct: float,
+    daily_pnl: float,
+    daily_pnl_pct: float,
+    total_trades: int,
+    win_count: int,
+    loss_count: int,
+    win_rate: float,
+    open_positions: list,
+    daily_halted: bool,
+) -> None:
+    status = "🔴 Daily limit hit" if daily_halted else "🟢 Active"
+    pos_lines = ""
+    for p in open_positions:
+        icon = "📈" if p["pnl_pct"] >= 0 else "📉"
+        pos_lines += f"\n  {icon} {p['symbol']}: {p['pnl_pct']:+.2f}% (SL ${p['stop_loss']:,.2f})"
+
     _send(
-        f"📊 <b>Daily Summary</b>\n"
-        f"Balance: ${balance:,.2f}\n"
-        f"Total PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)\n"
-        f"Trades: {total_trades} | Win Rate: {win_rate:.1f}%"
+        f"📊 <b>Daily Summary — {date}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 Balance: <b>${balance:,.2f}</b> (started $500)\n"
+        f"📅 Today's PnL: <b>${daily_pnl:+.2f} ({daily_pnl_pct:+.2f}%)</b>\n"
+        f"📈 Total PnL: ${pnl:+.2f} ({pnl_pct:+.2f}%)\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🎯 Trades today: {total_trades} | ✅ {win_count}W / ❌ {loss_count}L\n"
+        f"📊 Win Rate: {win_rate:.1f}%\n"
+        f"🤖 Bot Status: {status}"
+        + (f"\n━━━━━━━━━━━━━━━\n🔓 Open Positions:{pos_lines}" if pos_lines else "")
     )
 
 

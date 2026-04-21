@@ -27,13 +27,17 @@ def _get_client() -> Optional[Client]:
     return _client
 
 
-def save_state(metrics, settings) -> None:
-    """Upsert full bot state snapshot to Supabase."""
+def save_state(metrics, settings, positions: Optional[dict] = None) -> None:
+    """Upsert full bot state snapshot to Supabase (includes open positions)."""
     client = _get_client()
     if client is None:
         return
     try:
-        data = {"metrics": asdict(metrics), "settings": asdict(settings)}
+        data = {
+            "metrics": asdict(metrics),
+            "settings": asdict(settings),
+            "positions": positions or {},
+        }
         client.table("bot_state").upsert({"key": "main", "data": data}).execute()
     except Exception as exc:
         logging.warning("Supabase save_state failed: %s", exc)
@@ -69,6 +73,55 @@ def save_trade(symbol: str, side: str, amount: float, entry_price: float,
         }).execute()
     except Exception as exc:
         logging.warning("Supabase save_trade failed: %s", exc)
+
+
+def load_claude_cache() -> dict[str, dict]:
+    """Load the last Claude signal result per symbol from Supabase.
+
+    Returns a dict keyed by symbol matching the _last_claude_input schema in strategy.py.
+    """
+    client = _get_client()
+    if client is None:
+        return {}
+    try:
+        result = client.table("claude_signal_cache").select("*").execute()
+        cache = {}
+        for row in result.data or []:
+            cache[row["symbol"]] = {
+                "rsi": row["rsi"],
+                "price": row["price"],
+                "rule_signal": row["rule_signal"],
+                "claude_signal": row["claude_signal"],
+                "claude_confidence": row["claude_confidence"],
+                "claude_reason": row["claude_reason"],
+                "called_at": row["called_at"],
+            }
+        return cache
+    except Exception as exc:
+        logging.warning("Supabase load_claude_cache failed: %s", exc)
+        return {}
+
+
+def save_claude_cache_entry(symbol: str, rsi: float, price: float,
+                             rule_signal: str, claude_signal: str,
+                             claude_confidence: float, claude_reason: str) -> None:
+    """Upsert one symbol's Claude result into the persistent cache."""
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        client.table("claude_signal_cache").upsert({
+            "symbol": symbol,
+            "rsi": rsi,
+            "price": price,
+            "rule_signal": rule_signal,
+            "claude_signal": claude_signal,
+            "claude_confidence": claude_confidence,
+            "claude_reason": claude_reason,
+            "called_at": "now()",
+        }).execute()
+    except Exception as exc:
+        logging.warning("Supabase save_claude_cache_entry failed: %s", exc)
 
 
 def save_log(time: str, log_type: str, message: str, tone: str) -> None:

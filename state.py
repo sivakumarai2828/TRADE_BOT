@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+DAILY_LOSS_LIMIT_PCT = 5.0  # halt trading for the day if balance drops this much %
+
 
 PAPER_INITIAL_USDT = 10_000.0
 
@@ -28,6 +30,8 @@ class SignalData:
     explanation: str = "Bot not started yet."
     rule_signal: str = "HOLD"
     claude_signal: str = "HOLD"
+    claude_confidence: float = 0.0
+    claude_reason: str = ""
     timestamp: str = ""
 
 
@@ -78,6 +82,10 @@ class Metrics:
     shield_active: bool = False
     pre_shield_mode: str = "fixed"
     trade_history: list = field(default_factory=list)  # last 20 bools: True=win
+    # Daily loss tracking
+    daily_start_balance: float = PAPER_INITIAL_USDT
+    daily_date: str = ""          # YYYY-MM-DD; resets tracking when date changes
+    daily_loss_halted: bool = False
 
 
 @dataclass
@@ -117,6 +125,7 @@ class BotState:
         self.metrics: Metrics = Metrics()
         self.settings: BotSettings = BotSettings()
         self._last_prices: dict[str, float] = {}
+        self._cooldowns: dict[str, int] = {}  # symbol → cycles remaining
 
     def add_log(self, log_type: str, message: str, tone: str = "neutral") -> None:
         with self._lock:
@@ -166,7 +175,10 @@ class BotState:
             total = self.metrics.paper_usdt
             detail_parts = [f"${self.metrics.paper_usdt:,.2f} USDT"]
             for base_cur, amount in self.metrics.paper_holdings.items():
-                price = self._last_prices.get(f"{base_cur}/USDT", 0)
+                # Try both /USD and /USDT suffixes (Alpaca uses /USD).
+                price = (self._last_prices.get(f"{base_cur}/USD")
+                         or self._last_prices.get(f"{base_cur}/USDT")
+                         or 0)
                 total += amount * price
                 if amount > 0:
                     detail_parts.append(f"{amount:.6f} {base_cur}")
@@ -230,6 +242,57 @@ class BotState:
                 from telegram_notify import notify_shield_off
                 notify_shield_off(shield_msg[1])
 
+    # ------------------------------------------------------------------
+    # Cooldown helpers
+    # ------------------------------------------------------------------
+
+    def set_cooldown(self, symbol: str, cycles: int = 2) -> None:
+        with self._lock:
+            self._cooldowns[symbol] = cycles
+        self.add_log("Cooldown", f"{symbol} cooling down for {cycles} cycles", tone="neutral")
+
+    def is_on_cooldown(self, symbol: str) -> bool:
+        with self._lock:
+            return self._cooldowns.get(symbol, 0) > 0
+
+    def tick_cooldown(self, symbol: str) -> None:
+        with self._lock:
+            if self._cooldowns.get(symbol, 0) > 0:
+                self._cooldowns[symbol] -= 1
+
+    # ------------------------------------------------------------------
+    # Daily loss limit helpers
+    # ------------------------------------------------------------------
+
+    def check_daily_reset(self) -> bool:
+        """Reset daily tracking when the calendar date rolls over. Returns True on reset."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._lock:
+            if self.metrics.daily_date != today:
+                self.metrics.daily_date = today
+                self.metrics.daily_start_balance = self.metrics.balance
+                self.metrics.daily_loss_halted = False
+                return True
+        return False
+
+    def check_daily_loss_limit(self) -> None:
+        """Halt trading for today if balance has dropped >= DAILY_LOSS_LIMIT_PCT."""
+        with self._lock:
+            if self.metrics.daily_loss_halted:
+                return
+            start = self.metrics.daily_start_balance
+            if start <= 0:
+                return
+            drop_pct = (start - self.metrics.balance) / start * 100
+            if drop_pct >= DAILY_LOSS_LIMIT_PCT:
+                self.metrics.daily_loss_halted = True
+        if self.metrics.daily_loss_halted:
+            self.add_log(
+                "Daily limit hit",
+                f"Balance dropped {drop_pct:.1f}% today — trading paused until tomorrow",
+                tone="negative",
+            )
+
     def _shield_trigger_reason(self) -> Optional[str]:
         """Return reason string if shield should activate, else None. Called within lock."""
         m, s = self.metrics, self.settings
@@ -265,6 +328,42 @@ class BotState:
         else:
             self.metrics.risk_exposure_pct = 0.0
 
+    def _compute_analytics(self) -> dict:
+        """Compute Expectancy and Sharpe ratio from trade_history and metrics."""
+        m = self.metrics
+        if m.total_trades < 5:
+            return {"expectancy": 0.0, "sharpe": 0.0}
+
+        history = getattr(m, "trade_history", [])
+        if not history:
+            return {"expectancy": 0.0, "sharpe": 0.0}
+
+        wins = [r for r in history if r]
+        win_rate = len(wins) / len(history)
+        loss_rate = 1 - win_rate
+
+        # Expectancy: without per-trade $ amounts we use win_rate vs loss_rate
+        # with assumed 1R reward : 1R risk ratio as a baseline (improves with real data)
+        tp_pct = self.settings.take_profit_pct
+        sl_pct = self.settings.stop_loss_pct
+        rr_ratio = tp_pct / sl_pct if sl_pct > 0 else 1.0
+        expectancy = round((win_rate * rr_ratio) - loss_rate, 3)
+
+        # Sharpe: approximate using daily PnL series if enough data
+        try:
+            import math
+            if m.total_trades >= 10 and m.daily_start_balance > 0:
+                avg_return = m.pnl_pct / max(m.total_trades, 1)
+                # Std dev approximation from win/loss ratio
+                std_dev = math.sqrt(win_rate * (1 - win_rate)) * rr_ratio * sl_pct
+                sharpe = round(avg_return / std_dev, 2) if std_dev > 0 else 0.0
+            else:
+                sharpe = 0.0
+        except Exception:
+            sharpe = 0.0
+
+        return {"expectancy": expectancy, "sharpe": sharpe}
+
     def to_dict(self) -> dict:
         with self._lock:
             return {
@@ -276,6 +375,7 @@ class BotState:
                 "logs": [asdict(lg) for lg in self.logs[:30]],
                 "metrics": asdict(self.metrics),
                 "settings": asdict(self.settings),
+                "analytics": self._compute_analytics(),
             }
 
 

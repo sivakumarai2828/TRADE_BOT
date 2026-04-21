@@ -20,6 +20,9 @@ async function request(path, options = {}) {
   return res.json();
 }
 
+/** Lightweight server liveness check. */
+export const fetchHealth = () => request("/health");
+
 /** Full bot state — metrics, signal, position, logs, settings. */
 export const fetchStatus = () => request("/status");
 
@@ -56,3 +59,32 @@ export const closePosition = (symbol) =>
  */
 export const updateSettings = (settings) =>
   request("/settings", { method: "POST", body: JSON.stringify(settings) });
+
+// ---------------------------------------------------------------------------
+// Day Bot API
+// ---------------------------------------------------------------------------
+
+/** Full day bot state — metrics, positions, signals, watchlist, logs. */
+export const fetchDayStatus = () => request("/daybot/status");
+
+/** Start the day bot. */
+export const startDayBot = () => request("/daybot/start", { method: "POST" });
+
+/** Stop the day bot. */
+export const stopDayBot = () => request("/daybot/stop", { method: "POST" });
+
+/** Day bot open positions. */
+export const fetchDayPositions = () => request("/daybot/positions");
+
+/** Day bot signals (per symbol). */
+export const fetchDaySignals = () => request("/daybot/signals");
+
+/** Day bot watchlist. */
+export const fetchDayWatchlist = () => request("/daybot/watchlist");
+
+/** Day bot activity logs. */
+export const fetchDayLogs = () => request("/daybot/logs");
+
+/** Update day bot settings (trade_mode, position_size_pct, shield thresholds). */
+export const updateDaySettings = (settings) =>
+  request("/daybot/settings", { method: "POST", body: JSON.stringify(settings) });

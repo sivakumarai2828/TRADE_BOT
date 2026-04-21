@@ -7,6 +7,7 @@ trend, explanation, etc.) instead of a bare string.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -19,10 +20,70 @@ import ta
 from anthropic import Anthropic
 
 from config import BotConfig
+from persistence import load_claude_cache, save_claude_cache_entry
 from state import bot_state
 
 
 Signal = Literal["BUY", "SELL", "HOLD"]
+
+# 1-hour trend cache per symbol: {symbol: {"trend": str, "rsi": float, "ts": float}}
+_htf_cache: dict[str, dict] = {}
+_HTF_TTL = 1800  # refresh every 30 minutes
+
+
+def _get_htf_trend(exchange, symbol: str) -> str:
+    """Return 1-hour trend for symbol: 'up', 'down', or 'neutral'.
+
+    Cached for 30 minutes — no point re-fetching on every 1-minute cycle.
+    Falls back to 'neutral' (non-blocking) on any error.
+    """
+    import time as _t
+    cached = _htf_cache.get(symbol, {})
+    if cached and (_t.time() - cached.get("ts", 0)) < _HTF_TTL:
+        return cached["trend"]
+
+    try:
+        if exchange.id == "alpaca":
+            candles = _fetch_alpaca_candles(exchange, symbol, "1h", 60)
+        else:
+            candles = exchange.fetch_ohlcv(symbol, "1h", limit=60)
+
+        if not candles or len(candles) < 14:
+            return "neutral"
+
+        df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].apply(
+            pd.to_numeric, errors="coerce"
+        )
+        df["rsi_1h"] = ta.momentum.RSIIndicator(close=df["close"], window=14).rsi()
+        df["sma_1h"] = ta.trend.SMAIndicator(close=df["close"], window=20).sma_indicator()
+        latest = df.dropna(subset=["rsi_1h", "sma_1h"]).iloc[-1]
+
+        rsi_1h = float(latest["rsi_1h"])
+        price_1h = float(latest["close"])
+        sma_1h = float(latest["sma_1h"])
+
+        if price_1h > sma_1h and rsi_1h > 45:
+            trend = "up"
+        elif price_1h < sma_1h and rsi_1h < 55:
+            trend = "down"
+        else:
+            trend = "neutral"
+
+        _htf_cache[symbol] = {"trend": trend, "rsi": rsi_1h, "ts": _t.time()}
+        logging.info("HTF [%s] 1h trend=%s rsi=%.1f", symbol, trend, rsi_1h)
+        return trend
+    except Exception as exc:
+        logging.warning("HTF fetch failed [%s]: %s — defaulting to neutral", symbol, exc)
+        return "neutral"
+
+
+# Per-symbol cache: stores last values sent to Claude to detect meaningful changes.
+# Schema: {symbol: {"rsi", "price", "rule_signal", "claude_signal", "claude_confidence",
+#                    "claude_reason", "called_at"}}
+# Seeded from Supabase on import so server restarts don't cause a cold-start spike.
+_last_claude_input: dict[str, dict] = load_claude_cache()
+logging.info("Claude signal cache loaded: %d symbol(s)", len(_last_claude_input))
 
 
 @dataclass
@@ -32,10 +93,13 @@ class SignalResult:
     rsi: float
     price: float
     sma: float
+    atr: float            # ATR(14) — used for dynamic stop-loss in execution
     trend: str            # "Uptrend" | "Downtrend" | "Neutral"
     explanation: str
     rule_signal: Signal
     claude_signal: Signal
+    claude_confidence: float  # 0.0-1.0 from Claude JSON response
+    claude_reason: str        # Claude's reasoning text
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +165,7 @@ def get_market_data(
 # ---------------------------------------------------------------------------
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add RSI(14) and SMA(50) columns to the DataFrame."""
+    """Add RSI(14), SMA(50), ATR(14), and 20-bar average volume columns."""
 
     if "close" not in df.columns:
         raise ValueError("DataFrame must contain a close column")
@@ -109,6 +173,10 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     result["rsi"] = ta.momentum.RSIIndicator(close=result["close"], window=14).rsi()
     result["sma_50"] = ta.trend.SMAIndicator(close=result["close"], window=50).sma_indicator()
+    result["atr"] = ta.volatility.AverageTrueRange(
+        high=result["high"], low=result["low"], close=result["close"], window=14
+    ).average_true_range()
+    result["vol_avg_20"] = result["volume"].rolling(window=20).mean()
     return result
 
 
@@ -117,63 +185,87 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _rule_based_signal(rsi: float, price: float, sma: float,
-                       oversold: float = 30.0, overbought: float = 70.0) -> Signal:
-    # Allow price within 0.1% below SMA to handle minor fluctuations.
-    if rsi < oversold and price > sma * 0.999:
+                       oversold: float = 30.0, overbought: float = 70.0,
+                       volume: float = 0.0, avg_volume: float = 0.0) -> Signal:
+    # Volume confirmation: require at least 1.2x average volume for BUY/SELL.
+    # Weak signals on low volume are likely noise — skip them.
+    vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
+
+    if rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
-    if rsi > overbought:
+    if rsi > overbought and vol_confirmed:
         return "SELL"
     return "HOLD"
 
 
 def _claude_signal(config: BotConfig, rsi: float, price: float, sma: float,
-                   oversold: float = 30.0, overbought: float = 70.0) -> Signal:
-    """Ask Claude for a strict BUY/SELL/HOLD answer.
+                   oversold: float = 30.0, overbought: float = 70.0,
+                   symbol: str = "BTC/USD") -> tuple[Signal, float, str]:
+    """Ask Claude for a structured JSON signal with confidence score.
 
+    Returns (decision, confidence, reason). Confidence gate of 0.65 is applied
+    in generate_signal() — low-confidence responses are treated as HOLD.
     Uses a cached system prompt (ephemeral cache_control) to avoid re-sending
     the static instruction block on every call.
+    Uses claude-haiku-4-5 for cost efficiency (~3x cheaper than Sonnet).
     """
 
     if not config.anthropic_api_key:
         logging.warning("ANTHROPIC_API_KEY is missing; Claude signal defaults to HOLD")
-        return "HOLD"
+        return "HOLD", 0.0, "No API key"
 
     client = Anthropic(api_key=config.anthropic_api_key)
     prompt = (
-        f"BTC RSI is {rsi:.2f}, current price is ${price:,.2f}, "
+        f"{symbol} RSI is {rsi:.2f}, current price is ${price:,.2f}, "
         f"50-period SMA is ${sma:,.2f}. "
-        f"Our strategy buys when RSI < {oversold} and price > SMA, "
+        f"Our strategy buys when RSI < {oversold} and price is near or above SMA (within 1%), "
         f"sells when RSI > {overbought}. "
-        "Should I BUY, SELL, or HOLD?"
+        "Respond with a JSON object only — no markdown, no extra text."
     )
 
     response = client.messages.create(
-        model=config.anthropic_model,
-        max_tokens=16,
+        model="claude-haiku-4-5",
+        max_tokens=100,
         temperature=0,
         system=[
             {
                 "type": "text",
                 "text": (
                     "You are a crypto trading signal validator. "
-                    "Given RSI, price, and SMA values, respond with exactly ONE word: "
-                    "BUY, SELL, or HOLD. No punctuation, no explanation, nothing else."
+                    "Given market indicators, respond with ONLY a JSON object with these exact fields: "
+                    "\"decision\" (BUY, SELL, or HOLD), "
+                    "\"confidence\" (float 0.0 to 1.0), "
+                    "\"reason\" (one short sentence). "
+                    "Example: {\"decision\": \"BUY\", \"confidence\": 0.78, \"reason\": \"Oversold RSI with price near SMA support\"}"
                 ),
-                # Cache this static system block — avoids re-tokenising on every tick.
                 "cache_control": {"type": "ephemeral"},
             }
         ],
         messages=[{"role": "user", "content": prompt}],
     )
 
-    text = "".join(block.text for block in response.content if hasattr(block, "text"))
-    decision = text.strip().upper()
+    text = "".join(block.text for block in response.content if hasattr(block, "text")).strip()
 
-    if "BUY" in decision:
-        return "BUY"
-    if "SELL" in decision:
-        return "SELL"
-    return "HOLD"
+    try:
+        parsed = json.loads(text)
+        raw_decision = str(parsed.get("decision", "HOLD")).strip().upper()
+        confidence = float(parsed.get("confidence", 0.5))
+        reason = str(parsed.get("reason", ""))
+    except (json.JSONDecodeError, ValueError, TypeError):
+        # Fallback: treat as plain-text word if JSON parse fails
+        logging.warning("Claude returned non-JSON: %s", text[:80])
+        raw_decision = text.upper()
+        confidence = 0.5
+        reason = text[:100]
+
+    if "BUY" in raw_decision:
+        signal: Signal = "BUY"
+    elif "SELL" in raw_decision:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
+
+    return signal, confidence, reason
 
 
 def _compute_confidence(action: Signal, rsi: float) -> int:
@@ -231,7 +323,8 @@ def _build_explanation(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None) -> SignalResult:
+def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
+                    exchange=None) -> SignalResult:
     """Generate the final trading signal for the given symbol.
 
     A trade signal is actionable only when the rule-based strategy and Claude
@@ -245,20 +338,101 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None) -> 
     price = float(latest["close"])
     rsi = float(latest["rsi"])
     sma = float(latest["sma_50"])
+    atr = float(latest["atr"]) if "atr" in latest and not pd.isna(latest["atr"]) else 0.0
+    volume = float(latest["volume"]) if "volume" in latest else 0.0
+    avg_volume = float(latest["vol_avg_20"]) if "vol_avg_20" in latest and not pd.isna(latest["vol_avg_20"]) else 0.0
 
     oversold = bot_state.settings.rsi_oversold
     overbought = bot_state.settings.rsi_overbought
 
     rule_signal = _rule_based_signal(rsi=rsi, price=price, sma=sma,
-                                     oversold=oversold, overbought=overbought)
+                                     oversold=oversold, overbought=overbought,
+                                     volume=volume, avg_volume=avg_volume)
 
-    try:
-        claude_signal = _claude_signal(config=config, rsi=rsi, price=price, sma=sma,
-                                       oversold=oversold, overbought=overbought)
-    except Exception as exc:
-        logging.exception("Claude decision failed; final signal forced to HOLD: %s", exc)
-        claude_signal = "HOLD"
-        bot_state.add_log("Claude error", str(exc)[:120], tone="negative")
+    # Multi-timeframe filter: block BUY when 1h trend is bearish.
+    # SELL signals are not blocked — exits should always be allowed.
+    if rule_signal == "BUY" and exchange is not None:
+        htf = _get_htf_trend(exchange, symbol)
+        if htf == "down":
+            logging.info("MTF filter [%s]: 1h trend=down — BUY overridden to HOLD", symbol)
+            rule_signal = "HOLD"
+
+    claude_confidence = 0.0
+    claude_reason = ""
+    last = _last_claude_input.get(symbol, {})
+
+    # --- Cost optimisation: skip Claude call when it won't change the outcome ---
+    # 1. Rule is HOLD → Claude can't flip the final signal (requires agreement).
+    # 2. Rule matches last cycle AND RSI/price barely moved → reuse cached response.
+    _rsi_delta = abs(rsi - last.get("rsi", rsi + 999))
+    _price_delta_pct = abs(price - last.get("price", 0)) / max(last.get("price", price), 1) * 100
+
+    # Timestamp gate: if last real call was < 10 minutes ago with the same rule_signal, reuse.
+    _called_at_str = last.get("called_at", "")
+    _age_minutes = float("inf")
+    if _called_at_str:
+        try:
+            _called_at = datetime.fromisoformat(_called_at_str.replace("Z", "+00:00"))
+            _age_minutes = (datetime.now(timezone.utc) - _called_at).total_seconds() / 60
+        except Exception:
+            pass
+
+    _reuse_cache = (
+        last
+        and last.get("rule_signal") == rule_signal
+        and (
+            _age_minutes < 10                              # called within last 10 min
+            or (_rsi_delta < 2.0 and _price_delta_pct < 0.3)  # or conditions barely moved
+        )
+    )
+
+    if rule_signal == "HOLD":
+        # No point asking Claude — final can only be HOLD regardless.
+        claude_signal: Signal = "HOLD"
+        claude_reason = "Skipped (rule=HOLD)"
+        logging.debug("Claude skipped for %s — rule signal is HOLD", symbol)
+    elif _reuse_cache:
+        # Conditions barely changed; reuse the last Claude response.
+        claude_signal = last.get("claude_signal", "HOLD")
+        claude_confidence = last.get("claude_confidence", 0.0)
+        claude_reason = last.get("claude_reason", "") + " [cached]"
+        logging.debug(
+            "Claude reused cache for %s — RSI Δ=%.2f price Δ=%.2f%%",
+            symbol, _rsi_delta, _price_delta_pct,
+        )
+    else:
+        try:
+            claude_signal, claude_confidence, claude_reason = _claude_signal(
+                config=config, rsi=rsi, price=price, sma=sma,
+                oversold=oversold, overbought=overbought, symbol=symbol,
+            )
+            # Require confidence >= 0.65 — low-confidence responses count as HOLD.
+            if claude_confidence < 0.65 and claude_signal != "HOLD":
+                logging.info(
+                    "Claude signal %s overridden to HOLD — confidence %.2f < 0.65 | reason: %s",
+                    claude_signal, claude_confidence, claude_reason,
+                )
+                claude_signal = "HOLD"
+            # Update in-memory and Supabase cache after a real API call.
+            _now = datetime.now(timezone.utc).isoformat()
+            _last_claude_input[symbol] = {
+                "rsi": rsi,
+                "price": price,
+                "rule_signal": rule_signal,
+                "claude_signal": claude_signal,
+                "claude_confidence": claude_confidence,
+                "claude_reason": claude_reason,
+                "called_at": _now,
+            }
+            save_claude_cache_entry(
+                symbol=symbol, rsi=rsi, price=price,
+                rule_signal=rule_signal, claude_signal=claude_signal,
+                claude_confidence=claude_confidence, claude_reason=claude_reason,
+            )
+        except Exception as exc:
+            logging.exception("Claude decision failed; final signal forced to HOLD: %s", exc)
+            claude_signal = "HOLD"
+            bot_state.add_log("Claude error", str(exc)[:120], tone="negative")
 
     final_action: Signal = rule_signal if rule_signal == claude_signal else "HOLD"
     confidence = _compute_confidence(final_action, rsi)
@@ -267,15 +441,18 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None) -> 
                                       oversold=oversold, overbought=overbought)
 
     logging.info(
-        "Signal | price=%s rsi=%s sma_50=%s rule=%s claude=%s final=%s confidence=%s%%",
+        "Signal | price=%s rsi=%s sma_50=%s rule=%s claude=%s(conf=%.2f) final=%s confidence=%s%%",
         Decimal(str(round(price, 2))),
         Decimal(str(round(rsi, 2))),
         Decimal(str(round(sma, 2))),
         rule_signal,
         claude_signal,
+        claude_confidence,
         final_action,
         confidence,
     )
+    if claude_reason:
+        logging.info("Claude reasoning: %s", claude_reason)
 
     result = SignalResult(
         action=final_action,
@@ -283,10 +460,13 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None) -> 
         rsi=rsi,
         price=price,
         sma=sma,
+        atr=atr,
         trend=trend,
         explanation=explanation,
         rule_signal=rule_signal,
         claude_signal=claude_signal,
+        claude_confidence=claude_confidence,
+        claude_reason=claude_reason,
     )
 
     # Persist to shared state so the API can read it immediately.
@@ -301,6 +481,8 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None) -> 
         explanation=result.explanation,
         rule_signal=result.rule_signal,
         claude_signal=result.claude_signal,
+        claude_confidence=result.claude_confidence,
+        claude_reason=result.claude_reason,
     )
 
     tone = "positive" if final_action == "BUY" else "negative" if final_action == "SELL" else "neutral"

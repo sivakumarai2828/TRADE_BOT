@@ -32,8 +32,15 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from config import load_config
-from execution import close_open_position, create_exchange, execute_trade, monitor_positions, _try_house_money_trade
-from persistence import load_state, save_state
+from execution import close_open_position, create_exchange, execute_trade, monitor_positions, reconcile_positions, _try_house_money_trade
+from persistence import load_state, save_state as _save_state_raw
+
+
+def _save() -> None:
+    """Save metrics + settings + open positions to Supabase."""
+    from dataclasses import asdict
+    positions = {s: asdict(p) for s, p in bot_state.positions.items() if p is not None}
+    _save_state_raw(bot_state.metrics, bot_state.settings, positions)
 from state import bot_state
 from strategy import calculate_indicators, generate_signal, get_market_data
 
@@ -42,26 +49,64 @@ from strategy import calculate_indicators, generate_signal, get_market_data
 # Flask application
 # ---------------------------------------------------------------------------
 
-app = Flask(__name__)
-CORS(app)  # Allow the Vite dev server (port 5173) to call this API
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+app = Flask(__name__)
+CORS(app)  # Allow the Vite dev server (port 5173) to call this API
+
+import time as _time_module
+_startup_time = _time_module.time()
+_last_cycle_time = _time_module.time()  # updated every cycle; watchdog alerts if stale
+
+
+def _watchdog_loop() -> None:
+    """Alert via Telegram if the bot loop hasn't run a cycle in > 10 minutes."""
+    while True:
+        _time_module.sleep(300)  # check every 5 minutes
+        if bot_state.running:
+            age = _time_module.time() - _last_cycle_time
+            if age > 600:
+                from telegram_notify import _send
+                _send(
+                    f"⚠️ <b>Bot heartbeat missed</b>\n"
+                    f"Last cycle was <b>{age / 60:.0f} min</b> ago — bot may be stuck or crashed."
+                )
+                logging.warning("Watchdog: bot loop stalled for %.0f minutes", age / 60)
+
+
+threading.Thread(target=_watchdog_loop, daemon=True, name="watchdog").start()
+
+from daybot.blueprint import daybot_bp
+from daybot.scheduler import start_scheduler
+from telegram_bot import start_telegram_bot
+app.register_blueprint(daybot_bp, url_prefix="/daybot")
+start_scheduler()
+start_telegram_bot()
+
 # Restore persisted state from Supabase on startup.
 _saved = load_state()
 if _saved:
     m = _saved.get("metrics", {})
     s = _saved.get("settings", {})
+    p = _saved.get("positions", {})
     if m:
         bot_state.update_metrics(**{k: v for k, v in m.items() if k != "paper_holdings"})
         bot_state.metrics.paper_usdt = m.get("paper_usdt", bot_state.metrics.paper_usdt)
         bot_state.metrics.paper_holdings = m.get("paper_holdings", {})
     if s:
         bot_state.update_settings(**s)
+    if p:
+        from state import PositionData
+        for sym, pos_dict in p.items():
+            try:
+                bot_state.set_position(sym, PositionData(**pos_dict))
+            except Exception as exc:
+                logging.warning("Could not restore position %s: %s", sym, exc)
+        logging.info("Restored %d open position(s) from Supabase", len(p))
     logging.info("State restored from Supabase — balance=%.2f", bot_state.metrics.balance)
 
 # ---------------------------------------------------------------------------
@@ -78,15 +123,27 @@ def _run_symbol_cycle(symbol: str) -> None:
     """One complete trading cycle for a single symbol."""
     global _exchange, _config
 
+    # Daily loss limit — skip all trading for the day once threshold hit.
+    if bot_state.metrics.daily_loss_halted:
+        logging.info("Daily loss limit active — skipping %s", symbol)
+        return
+
+    # Cooldown — skip signal generation/trading for N cycles after a trade closes.
+    if bot_state.is_on_cooldown(symbol):
+        remaining = bot_state._cooldowns.get(symbol, 0)
+        logging.info("Cooldown [%s] — %d cycle(s) remaining", symbol, remaining)
+        bot_state.tick_cooldown(symbol)
+        return
+
     try:
         data = get_market_data(exchange=_exchange, symbol=symbol, timeframe=_config.timeframe, limit=_config.candle_limit)
         data = calculate_indicators(data)
         latest_price = float(data.iloc[-1]["close"])
 
-        result = generate_signal(data, _config, symbol=symbol)
+        result = generate_signal(data, _config, symbol=symbol, exchange=_exchange)
 
         if bot_state.settings.auto_mode:
-            execute_trade(_exchange, _config, symbol, result.action, latest_price)
+            execute_trade(_exchange, _config, symbol, result.action, latest_price, atr=result.atr)
 
         # House Money fires only on the first/primary symbol to avoid pool fragmentation.
         if symbol == bot_state.settings.active_symbols[0]:
@@ -99,7 +156,8 @@ def _run_symbol_cycle(symbol: str) -> None:
 
 def _run_cycle() -> None:
     """Run a cycle for every active symbol, then update live balance once."""
-    global _exchange, _config
+    global _exchange, _config, _last_cycle_time
+    _last_cycle_time = _time_module.time()
 
     for symbol in list(bot_state.settings.active_symbols):
         _run_symbol_cycle(symbol)
@@ -116,6 +174,35 @@ def _run_cycle() -> None:
             pass
 
 
+def _send_daily_summary() -> None:
+    """Send end-of-day summary to Telegram (called on midnight UTC reset)."""
+    from dataclasses import asdict
+    from telegram_notify import notify_daily_summary
+    m = bot_state.metrics
+    open_positions = [
+        {"symbol": s, "pnl_pct": p.pnl_pct, "stop_loss": p.stop_loss}
+        for s, p in bot_state.positions.items() if p is not None
+    ]
+    daily_pnl = m.balance - m.daily_start_balance
+    daily_pnl_pct = (daily_pnl / m.daily_start_balance * 100) if m.daily_start_balance > 0 else 0.0
+    from datetime import datetime, timezone
+    yesterday = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    notify_daily_summary(
+        date=yesterday,
+        balance=m.balance,
+        pnl=m.pnl,
+        pnl_pct=m.pnl_pct,
+        daily_pnl=daily_pnl,
+        daily_pnl_pct=daily_pnl_pct,
+        total_trades=m.total_trades,
+        win_count=m.win_count,
+        loss_count=m.loss_count,
+        win_rate=m.win_rate,
+        open_positions=open_positions,
+        daily_halted=m.daily_loss_halted,
+    )
+
+
 def _bot_loop() -> None:
     """Runs _run_cycle() on each tick until _stop_event is set."""
     from telegram_notify import notify_bot_started, notify_bot_stopped
@@ -124,6 +211,8 @@ def _bot_loop() -> None:
     notify_bot_started()
 
     while not _stop_event.is_set():
+        if bot_state.check_daily_reset():
+            _send_daily_summary()
         _run_cycle()
         polling = bot_state.settings.polling_seconds
         _stop_event.wait(timeout=polling)
@@ -136,6 +225,19 @@ def _bot_loop() -> None:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/health")
+def health():
+    """Lightweight liveness check — returns server uptime and scheduler status."""
+    from daybot.scheduler import _scheduler
+    import time
+    return jsonify({
+        "ok": True,
+        "server": "flask",
+        "uptime_s": round(time.time() - _startup_time, 0),
+        "scheduler": _scheduler.running if _scheduler else False,
+    })
+
 
 @app.get("/status")
 def status():
@@ -220,9 +322,8 @@ def start():
 
     try:
         _config = load_config()
-        # Let runtime settings override .env values.
-        _config = _config  # BotConfig is frozen; settings in bot_state take precedence at use time.
         _exchange = create_exchange(_config)
+        reconcile_positions(_exchange, _config)
     except Exception as exc:
         msg = f"Failed to initialise exchange: {exc}"
         logging.error(msg)
@@ -305,7 +406,7 @@ def deposit():
         bot_state.metrics.trade_history = []
 
     bot_state.add_log("Deposit", f"Paper balance set to ${float(amount):,.2f} USDT", tone="positive")
-    save_state(bot_state.metrics, bot_state.settings)
+    _save()
     return jsonify({"ok": True, "balance": float(amount)})
 
 
@@ -328,6 +429,14 @@ def settings():
         return jsonify({"ok": False, "message": "No valid settings provided"}), 400
 
     bot_state.update_settings(**filtered)
+
+    # pre_shield_mode lives in Metrics (it's what shield restores on recovery).
+    # Allow setting it here so switching to "percent" sticks after shield lifts.
+    if "pre_shield_mode" in body and body["pre_shield_mode"] in {"fixed", "percent", "house_money"}:
+        with bot_state._lock:
+            bot_state.metrics.pre_shield_mode = body["pre_shield_mode"]
+
+    _save()
     with bot_state._lock:
         from dataclasses import asdict
         return jsonify({"ok": True, "settings": asdict(bot_state.settings)})
