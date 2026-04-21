@@ -63,7 +63,7 @@ def load_config() -> BotConfig:
     if polling_seconds < 10:
         raise ValueError("POLLING_SECONDS should be at least 10 to avoid excessive API calls")
 
-    trade_size = _get_decimal("TRADE_SIZE_USDT", "50")
+    trade_size = _get_decimal("TRADE_SIZE_USDT", "100")
 
     # Support both the new generic key names and the old BINANCE_* names so
     # existing .env files keep working without changes.

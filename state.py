@@ -90,14 +90,14 @@ class Metrics:
 
 @dataclass
 class BotSettings:
-    trade_size_usdt: float = 50.0
+    trade_size_usdt: float = 100.0
     trade_size_mode: str = "fixed"
-    trade_size_pct: float = 50.0
+    trade_size_pct: float = 20.0
     stop_loss_pct: float = 2.0
-    take_profit_pct: float = 5.0
+    take_profit_pct: float = 6.0
     polling_seconds: int = 60
     auto_mode: bool = True
-    rsi_oversold: float = 30.0
+    rsi_oversold: float = 38.0
     rsi_overbought: float = 70.0
     house_profit_threshold: float = 2.0
     house_take_profit_pct: float = 15.0

@@ -185,14 +185,20 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _rule_based_signal(rsi: float, price: float, sma: float,
-                       oversold: float = 30.0, overbought: float = 70.0,
+                       oversold: float = 38.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0) -> Signal:
     # Volume confirmation: require at least 1.2x average volume for BUY/SELL.
     # Weak signals on low volume are likely noise — skip them.
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
 
+    # Setup A: Dip buy — RSI oversold with price near SMA support
     if rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
+
+    # Setup B: Momentum breakout — RSI rising in bullish zone, price above SMA
+    if 50.0 <= rsi <= 65.0 and price > sma * 1.001 and vol_confirmed:
+        return "BUY"
+
     if rsi > overbought and vol_confirmed:
         return "SELL"
     return "HOLD"
@@ -406,8 +412,8 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                 config=config, rsi=rsi, price=price, sma=sma,
                 oversold=oversold, overbought=overbought, symbol=symbol,
             )
-            # Require confidence >= 0.65 — low-confidence responses count as HOLD.
-            if claude_confidence < 0.65 and claude_signal != "HOLD":
+            # Require confidence >= 0.55 — low-confidence responses count as HOLD.
+            if claude_confidence < 0.55 and claude_signal != "HOLD":
                 logging.info(
                     "Claude signal %s overridden to HOLD — confidence %.2f < 0.65 | reason: %s",
                     claude_signal, claude_confidence, claude_reason,
