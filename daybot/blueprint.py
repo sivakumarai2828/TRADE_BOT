@@ -78,6 +78,7 @@ def _fetch_bars(symbol: str, limit: int = 100) -> dict | None:
     from datetime import timedelta
     import pandas as pd
 
+    from alpaca.data.enums import DataFeed
     client = StockHistoricalDataClient(_config.alpaca_api_key, _config.alpaca_secret_key)
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=5)  # fetch last 5 days to get enough bars
@@ -86,6 +87,7 @@ def _fetch_bars(symbol: str, limit: int = 100) -> dict | None:
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Minute,
             start=start, end=end, limit=limit,
+            feed=DataFeed.IEX,
         )
         bars = client.get_stock_bars(req)
         df = bars.df
@@ -140,6 +142,7 @@ def _fetch_weekly_context(symbol: str) -> dict | None:
     from datetime import timedelta
     import pandas as pd
 
+    from alpaca.data.enums import DataFeed
     client = StockHistoricalDataClient(_config.alpaca_api_key, _config.alpaca_secret_key)
     end = datetime.now(timezone.utc)
     start = end - timedelta(weeks=5)  # 5 weeks to guarantee 4 full weeks of trading days
@@ -149,6 +152,7 @@ def _fetch_weekly_context(symbol: str) -> dict | None:
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
             start=start, end=end,
+            feed=DataFeed.IEX,
         )
         bars = client.get_stock_bars(req)
         df = bars.df
