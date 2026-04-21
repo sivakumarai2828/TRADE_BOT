@@ -268,11 +268,7 @@ def _run_cycle() -> None:
         day_state.add_log("Risk", "Daily loss limit hit — no new trades today", "negative")
         return
 
-    # --- Skip new entries outside trading windows ---
-    if not _in_trading_window():
-        return
-
-    # --- Refresh watchlist every N minutes ---
+    # --- Refresh watchlist every N minutes (runs regardless of trading window) ---
     scan_interval = _config.scan_interval_minutes * 60
     now_ts = datetime.now(timezone.utc).timestamp()
     if not hasattr(_run_cycle, "_last_scan") or (now_ts - _run_cycle._last_scan) >= scan_interval:
@@ -281,6 +277,10 @@ def _run_cycle() -> None:
         with day_state._lock:
             day_state.watchlist = symbols
         _run_cycle._last_scan = now_ts
+
+    # --- Skip new entries outside trading windows ---
+    if not _in_trading_window():
+        return
 
     # --- Per-symbol cycle (only pre-market approved stocks if list is available) ---
     approved = day_state.premarket_approved
