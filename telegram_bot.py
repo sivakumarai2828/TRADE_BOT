@@ -509,8 +509,8 @@ def _poll_loop() -> None:
 
     logging.info("Telegram bot polling started (authorized chat: %s)", authorized_chat)
     _send(
-        "🤖 <b>Trading Assistant online</b>\n"
-        "Ask me anything — status, P&amp;L, analysis, or say 'stop bot', 'close positions'."
+        "🤖 *Trading Assistant online*\n"
+        "Ask me anything — status, P&L, analysis, or say 'stop bot', 'close positions'."
     )
 
     offset = 0
