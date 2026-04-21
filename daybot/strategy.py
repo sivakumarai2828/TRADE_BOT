@@ -34,12 +34,12 @@ def generate_signal(
 
     # --- SELL logic (only when position is open) ---
     if has_position:
-        if rsi > 65:
+        if rsi > 72:
             return SignalResult(symbol, "SELL", price, ema, rsi, volume, avg_volume,
-                                trend, f"RSI {rsi:.1f} overbought (>65)")
-        if price < ema:
+                                trend, f"RSI {rsi:.1f} overbought (>72)")
+        if price < ema * 0.995:
             return SignalResult(symbol, "SELL", price, ema, rsi, volume, avg_volume,
-                                trend, "Price crossed below EMA — trend break")
+                                trend, "Price broke below EMA — trend reversal")
 
     # --- HOLD conditions ---
     if 45.0 <= rsi <= 55.0:
@@ -50,16 +50,30 @@ def generate_signal(
                             trend, "Volume below average — no conviction")
 
     # --- BUY conditions ---
+    # Setup A: Pullback dip — RSI recovering from oversold, price near EMA with volume
     if (
         price > ema
-        and 0.0 <= pct_from_ema <= 1.5
-        and 35.0 <= rsi <= 45.0
+        and 0.0 <= pct_from_ema <= 3.0
+        and 30.0 <= rsi <= 52.0
         and vol_rising
         and not has_position
     ):
         return SignalResult(
             symbol, "BUY", price, ema, rsi, volume, avg_volume, trend,
-            f"RSI {rsi:.1f} pullback, {pct_from_ema:.1f}% above EMA, volume up",
+            f"RSI {rsi:.1f} pullback dip, {pct_from_ema:.1f}% above EMA, volume up",
+        )
+
+    # Setup B: Momentum breakout — strong uptrend, RSI rising with high volume
+    if (
+        price > ema
+        and pct_from_ema > 3.0
+        and 55.0 <= rsi <= 70.0
+        and vol_rising
+        and not has_position
+    ):
+        return SignalResult(
+            symbol, "BUY", price, ema, rsi, volume, avg_volume, trend,
+            f"RSI {rsi:.1f} momentum breakout, {pct_from_ema:.1f}% above EMA, volume surge",
         )
 
     return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
