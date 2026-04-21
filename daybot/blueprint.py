@@ -407,6 +407,9 @@ def _bot_loop() -> None:
     _risk.reset_daily(portfolio_value)
     with day_state._lock:
         day_state.metrics.daily_start_value = portfolio_value
+        # Sync position size from config into state (so dashboard shows correct %)
+        day_state.metrics.position_size_pct = _config.position_size_pct
+        day_state.normal_size_pct = _config.position_size_pct
 
     while not _stop_event.is_set():
         try:
