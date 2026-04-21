@@ -8,8 +8,9 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 
 
 class TradeExecutor:
-    def __init__(self, api_key: str, secret_key: str, paper: bool = True) -> None:
+    def __init__(self, api_key: str, secret_key: str, paper: bool = True, budget: float = 0.0) -> None:
         self._client = TradingClient(api_key, secret_key, paper=paper)
+        self._budget = budget  # if > 0, cap reported portfolio value to this amount
 
     def _with_retry(self, fn, retries: int = 3):
         for attempt in range(retries):
@@ -54,11 +55,17 @@ class TradeExecutor:
 
     def get_portfolio_value(self) -> float:
         account = self._with_retry(lambda: self._client.get_account())
-        return float(account.portfolio_value)
+        value = float(account.portfolio_value)
+        if self._budget > 0:
+            value = min(value, self._budget)
+        return value
 
     def get_cash(self) -> float:
         account = self._with_retry(lambda: self._client.get_account())
-        return float(account.cash)
+        cash = float(account.cash)
+        if self._budget > 0:
+            cash = min(cash, self._budget)
+        return cash
 
     def is_market_open(self) -> bool:
         clock = self._with_retry(lambda: self._client.get_clock())

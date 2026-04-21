@@ -19,6 +19,7 @@ class DayBotConfig:
     stop_loss_pct: float
     take_profit_pct: float
     claude_model: str
+    paper_budget: float            # cap portfolio to this amount (0 = no cap)
 
 
 def load_config() -> DayBotConfig:
@@ -36,4 +37,5 @@ def load_config() -> DayBotConfig:
         stop_loss_pct=float(os.getenv("DAY_STOP_LOSS_PCT", "0.01")),
         take_profit_pct=float(os.getenv("DAY_TAKE_PROFIT_PCT", "0.025")),
         claude_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+        paper_budget=float(os.getenv("DAY_PAPER_BUDGET", "0")),
     )
