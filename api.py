@@ -118,6 +118,10 @@ _stop_event = threading.Event()
 _exchange = None
 _config = None
 
+# Per-symbol error backoff: tracks consecutive failures and cycles to skip
+_symbol_errors: dict[str, int] = {}      # symbol → consecutive error count
+_symbol_skip_cycles: dict[str, int] = {} # symbol → cycles remaining to skip
+
 
 def _run_symbol_cycle(symbol: str) -> None:
     """One complete trading cycle for a single symbol."""
@@ -126,6 +130,12 @@ def _run_symbol_cycle(symbol: str) -> None:
     # Daily loss limit — skip all trading for the day once threshold hit.
     if bot_state.metrics.daily_loss_halted:
         logging.info("Daily loss limit active — skipping %s", symbol)
+        return
+
+    # Per-symbol error backoff — skip if this symbol is in cooldown from repeated failures.
+    if _symbol_skip_cycles.get(symbol, 0) > 0:
+        _symbol_skip_cycles[symbol] -= 1
+        logging.info("Backoff [%s] — %d cycle(s) remaining", symbol, _symbol_skip_cycles[symbol])
         return
 
     # Cooldown — skip signal generation/trading for N cycles after a trade closes.
@@ -149,9 +159,27 @@ def _run_symbol_cycle(symbol: str) -> None:
         if symbol == bot_state.settings.active_symbols[0]:
             _try_house_money_trade(_exchange, _config, symbol, latest_price)
 
+        # Success — reset error counter
+        _symbol_errors.pop(symbol, None)
+
     except Exception as exc:
-        logging.exception("Cycle error [%s]: %s", symbol, exc)
-        bot_state.add_log("Cycle error", f"[{symbol}] {str(exc)[:100]}", tone="negative")
+        err_count = _symbol_errors.get(symbol, 0) + 1
+        _symbol_errors[symbol] = err_count
+
+        # Exponential backoff: 1st error logs immediately; after 3 consecutive errors
+        # skip for 2, 4, 8… up to 16 cycles (~16 min at 60s polling) before retrying.
+        if err_count <= 2:
+            logging.warning("Cycle error [%s]: %s", symbol, exc)
+            bot_state.add_log("Cycle error", f"[{symbol}] {str(exc)[:100]}", tone="negative")
+        else:
+            skip = min(2 ** (err_count - 2), 16)
+            _symbol_skip_cycles[symbol] = skip
+            logging.warning("Backoff [%s] after %d errors — pausing %d cycles: %s", symbol, err_count, skip, exc)
+            bot_state.add_log(
+                "Backoff",
+                f"[{symbol}] API errors ({err_count}×) — pausing {skip} cycles",
+                tone="warning",
+            )
 
 
 def _run_cycle() -> None:
