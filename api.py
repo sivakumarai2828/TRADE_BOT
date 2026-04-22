@@ -117,6 +117,8 @@ _bot_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _exchange = None
 _config = None
+_crypto_mode_manager = None   # CryptoModeManager — created on /start
+_harvester = None             # ProfitHarvester — created on /start
 
 # Per-symbol error backoff: tracks consecutive failures and cycles to skip
 _symbol_errors: dict[str, int] = {}      # symbol → consecutive error count
@@ -182,10 +184,32 @@ def _run_symbol_cycle(symbol: str) -> None:
             )
 
 
+def _handle_crypto_mode_switch(new_mode: str, old_mode: str) -> None:
+    """Apply new mode params to state and send Telegram alert."""
+    from telegram_notify import notify_mode_change
+    params = _crypto_mode_manager.params()
+    bot_state.update_settings(current_mode=new_mode)
+    bot_state.add_log(
+        "Mode",
+        f"{old_mode} → {new_mode} | size ×{params.size_multiplier} "
+        f"SL={params.stop_loss_pct:.1f}% TP={params.take_profit_pct:.1f}%",
+        "positive" if new_mode == "AGGRESSIVE" else "warning" if new_mode == "SHIELD" else "neutral",
+    )
+    notify_mode_change("CryptoBot", old_mode, new_mode, params)
+
+
 def _run_cycle() -> None:
     """Run a cycle for every active symbol, then update live balance once."""
     global _exchange, _config, _last_cycle_time
     _last_cycle_time = _time_module.time()
+
+    # Adaptive mode evaluation — runs once per cycle before any symbol
+    if _crypto_mode_manager is not None:
+        from strategy import _get_htf_trend
+        btc_trend = _get_htf_trend(_exchange, "BTC/USD")
+        new_mode, old_mode = _crypto_mode_manager.evaluate(bot_state.metrics, btc_trend=btc_trend)
+        if old_mode is not None:
+            _handle_crypto_mode_switch(new_mode, old_mode)
 
     for symbol in list(bot_state.settings.active_symbols):
         _run_symbol_cycle(symbol)
@@ -203,9 +227,8 @@ def _run_cycle() -> None:
 
 
 def _send_daily_summary() -> None:
-    """Send end-of-day summary to Telegram (called on midnight UTC reset)."""
-    from dataclasses import asdict
-    from telegram_notify import notify_daily_summary
+    """Send end-of-day summary to Telegram and trigger harvest extraction."""
+    from telegram_notify import notify_daily_summary, notify_harvest_extraction
     m = bot_state.metrics
     open_positions = [
         {"symbol": s, "pnl_pct": p.pnl_pct, "stop_loss": p.stop_loss}
@@ -229,6 +252,32 @@ def _send_daily_summary() -> None:
         open_positions=open_positions,
         daily_halted=m.daily_loss_halted,
     )
+
+    # Harvest extraction at daily reset
+    try:
+        if _harvester and daily_pnl > 0:
+            from strategy import _get_htf_trend
+            btc_trend = _get_htf_trend(_exchange, "BTC/USD") if _exchange else "neutral"
+            regime = "trending_up" if btc_trend == "up" else "trending_down" if btc_trend == "down" else "choppy"
+            extracted = _harvester.check_and_extract(
+                daily_pnl=daily_pnl,
+                bot_type="crypto",
+                watchlist=[],
+                market_regime=regime,
+            )
+            if extracted:
+                notify_harvest_extraction("CryptoBot", extracted, regime)
+            # Also monitor existing harvest positions
+            _harvester.monitor(
+                bot_type="crypto",
+                watchlist=[],
+                market_regime=regime,
+                on_base_increase=lambda bonus: bot_state.update_metrics(
+                    paper_usdt=round(bot_state.metrics.paper_usdt + bonus, 2)
+                ),
+            )
+    except Exception as exc:
+        logging.warning("Harvest daily check failed: %s", exc)
 
 
 def _bot_loop() -> None:
@@ -327,7 +376,7 @@ def candles():
 @app.post("/start")
 def start():
     """Start the bot loop. Optional JSON body can override runtime settings."""
-    global _bot_thread, _stop_event, _exchange, _config
+    global _bot_thread, _stop_event, _exchange, _config, _crypto_mode_manager, _harvester
 
     body = request.get_json(silent=True) or {}
 
@@ -357,6 +406,16 @@ def start():
         logging.error(msg)
         bot_state.add_log("Start error", msg[:120], tone="negative")
         return jsonify({"ok": False, "message": msg}), 500
+
+    from crypto_mode_manager import CryptoModeManager
+    from harvest.manager import ProfitHarvester
+    _crypto_mode_manager = CryptoModeManager()
+    _harvester = ProfitHarvester(
+        anthropic_api_key=_config.anthropic_api_key,
+        alpaca_api_key=_config.api_key,
+        alpaca_secret_key=_config.api_secret,
+        claude_model=_config.anthropic_model,
+    )
 
     _stop_event = threading.Event()
     _bot_thread = threading.Thread(target=_bot_loop, daemon=True)

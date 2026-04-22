@@ -59,6 +59,8 @@ class DayMetrics:
     consecutive_wins: int = 0
     shield_active: bool = False
     pre_shield_mode: str = "compound"   # mode to restore when shield lifts
+    # Adaptive mode
+    current_mode: str = "SAFE"          # SAFE | AGGRESSIVE | SHIELD
 
 
 class DayBotState:

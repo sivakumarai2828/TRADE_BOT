@@ -259,13 +259,26 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         else:
             exchange.create_market_buy_order(symbol, float(amount))
 
-        tp_pct = Decimal(str(bot_state.settings.take_profit_pct / 100))
+        # Use adaptive mode SL/TP if mode manager is active, else fall back to settings
+        try:
+            from api import _crypto_mode_manager
+            if _crypto_mode_manager is not None:
+                mp = _crypto_mode_manager.params()
+                _sl_pct = mp.stop_loss_pct / 100
+                _tp_pct = mp.take_profit_pct / 100
+                # Also scale trade size by mode multiplier
+                trade_size = Decimal(str(round(float(trade_size) * mp.size_multiplier, 2)))
+            else:
+                raise ImportError
+        except (ImportError, Exception):
+            _sl_pct = bot_state.settings.stop_loss_pct / 100
+            _tp_pct = bot_state.settings.take_profit_pct / 100
+
+        tp_pct = Decimal(str(_tp_pct))
         if atr > 0:
-            # Dynamic stop: 2×ATR below entry — adapts to actual market volatility.
             stop_loss = (current_price - _d(str(round(atr * 2, 8)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         else:
-            sl_pct = Decimal(str(bot_state.settings.stop_loss_pct / 100))
-            stop_loss = (current_price * (1 - sl_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            stop_loss = (current_price * (1 - Decimal(str(_sl_pct)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         take_profit = (current_price * (1 + tp_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
         pos = PositionData(

@@ -86,6 +86,37 @@ def notify_daily_summary(
     )
 
 
+def notify_mode_change(bot: str, old_mode: str, new_mode: str, params) -> None:
+    icons = {"SAFE": "🟡", "AGGRESSIVE": "🚀", "SHIELD": "🛡"}
+    icon = icons.get(new_mode, "🔄")
+    if hasattr(params, "position_size_pct"):
+        size_line = f"Position size: {params.position_size_pct*100:.0f}%"
+        sl_line = f"SL {params.stop_loss_pct*100:.1f}% / TP {params.take_profit_pct*100:.1f}%"
+    else:
+        size_line = f"Size multiplier: ×{params.size_multiplier}"
+        sl_line = f"SL {params.stop_loss_pct:.1f}% / TP {params.take_profit_pct:.1f}%"
+    _send(
+        f"{icon} <b>{bot} Mode: {old_mode} → {new_mode}</b>\n"
+        f"{size_line} | {sl_line}"
+    )
+
+
+def notify_harvest_extraction(bot: str, amount: float, regime: str) -> None:
+    _send(
+        f"🌱 <b>{bot} Harvest</b>\n"
+        f"Extracted <b>${amount:.2f}</b> profit → long-term position opened\n"
+        f"Market regime: {regime}"
+    )
+
+
+def notify_harvest_target(bot: str, bucket: str, symbol: str, pnl_pct: float, pnl: float) -> None:
+    _send(
+        f"🎯 <b>{bot} Harvest Target Hit!</b>\n"
+        f"[{bucket}] {symbol}: <b>+{pnl_pct:.1f}%</b> (${pnl:+.2f})\n"
+        f"Profits reinvested per 3-bucket split."
+    )
+
+
 def notify_daybot_summary(
     date: str,
     portfolio_value: float,

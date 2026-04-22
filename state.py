@@ -103,6 +103,8 @@ class BotSettings:
     house_take_profit_pct: float = 15.0
     house_stop_loss_pct: float = 50.0
     active_symbols: list = field(default_factory=lambda: ["BTC/USD", "ETH/USD", "SOL/USD"])
+    # Adaptive mode
+    current_mode: str = "SAFE"          # SAFE | AGGRESSIVE | SHIELD
     # Auto-Shield settings
     shield_enabled: bool = True
     shield_loss_streak: int = 5        # consecutive losses to trigger

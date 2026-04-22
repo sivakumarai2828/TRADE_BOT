@@ -36,6 +36,8 @@ _logger: TradeLogger | None = None
 
 _bot_thread: threading.Thread | None = None
 _stop_event = threading.Event()
+_mode_manager = None   # DayModeManager — created on /start
+_harvester = None      # ProfitHarvester — created on /start
 
 # Trading windows (ET): active 9:50–11:30, 14:00–15:30; close-only 15:30–15:50
 # 9:35–9:50 is the opening range — most chaotic, institutions are still positioning.
@@ -235,6 +237,22 @@ def _get_spy_return() -> float:
 # Main trading loop
 # ---------------------------------------------------------------------------
 
+def _handle_mode_switch(new_mode: str, old_mode: str) -> None:
+    """Apply new mode params to state and send Telegram alert."""
+    from telegram_notify import notify_mode_change
+    params = _mode_manager.params()
+    with day_state._lock:
+        day_state.metrics.current_mode = new_mode
+        day_state.metrics.position_size_pct = params.position_size_pct
+        day_state.normal_size_pct = params.position_size_pct
+    day_state.add_log(
+        "Mode", f"{old_mode} → {new_mode} | size={params.position_size_pct*100:.0f}% "
+        f"SL={params.stop_loss_pct*100:.1f}% TP={params.take_profit_pct*100:.1f}%",
+        "positive" if new_mode == "AGGRESSIVE" else "warning" if new_mode == "SHIELD" else "neutral",
+    )
+    notify_mode_change("DayBot", old_mode, new_mode, params)
+
+
 def _run_cycle() -> None:
     global _scanner, _risk, _monitor, _ai, _logger
 
@@ -285,6 +303,13 @@ def _run_cycle() -> None:
     # --- Skip new entries outside trading windows ---
     if not _in_trading_window():
         return
+
+    # --- Adaptive mode evaluation ---
+    spy_ret = _get_spy_return()
+    new_mode, old_mode = _mode_manager.evaluate(day_state.metrics, spy_return=spy_ret)
+    if old_mode is not None:
+        _handle_mode_switch(new_mode, old_mode)
+    mode_params = _mode_manager.params()
 
     # --- Per-symbol cycle (only pre-market approved stocks if list is available) ---
     approved = day_state.premarket_approved
@@ -339,6 +364,13 @@ def _run_cycle() -> None:
 
         # --- BUY ---
         if sig.action == "BUY":
+            # SHIELD / SAFE block momentum breakouts — only take pullback setups
+            if not mode_params.allow_breakout and "breakout" in sig.reason.lower():
+                day_state.add_log(
+                    "Skipped", f"{symbol}: breakout filtered in {_mode_manager.mode} mode", "neutral"
+                )
+                continue
+
             if has_earnings_soon(symbol, days_ahead=2):
                 day_state.add_log("Skipped", f"{symbol}: earnings within 2 days — too risky", "warning")
                 continue
@@ -356,8 +388,9 @@ def _run_cycle() -> None:
             qty = _risk.calculate_position_size(portfolio_value, sig.price, state=day_state)
             try:
                 _executor.place_buy_order(symbol, qty)
-                sl = round(sig.price * (1 - _config.stop_loss_pct), 2)
-                tp = round(sig.price * (1 + _config.take_profit_pct), 2)
+                # Use mode-specific SL/TP instead of fixed config values
+                sl = round(sig.price * (1 - mode_params.stop_loss_pct), 2)
+                tp = round(sig.price * (1 + mode_params.take_profit_pct), 2)
                 pos = DayPosition(
                     symbol=symbol, qty=qty, entry_price=sig.price,
                     current_price=sig.price, stop_loss=sl, take_profit=tp,
@@ -440,6 +473,23 @@ def _bot_loop() -> None:
     except Exception:
         pass
 
+    # Profit extraction: if daily profit ≥ threshold, open a long-term harvest position
+    try:
+        if _harvester and daily_pnl > 0:
+            from telegram_notify import notify_harvest_extraction
+            spy_ret = _get_spy_return()
+            regime = "trending_up" if spy_ret > 0.3 else "trending_down" if spy_ret < -0.3 else "choppy"
+            extracted = _harvester.check_and_extract(
+                daily_pnl=daily_pnl,
+                bot_type="day",
+                watchlist=list(day_state.watchlist),
+                market_regime=regime,
+            )
+            if extracted:
+                notify_harvest_extraction("DayBot", extracted, regime)
+    except Exception as exc:
+        logging.warning("Harvest extraction failed: %s", exc)
+
     logging.info("Day bot loop stopped")
     day_state.add_log("Day Bot", "Trading loop stopped", "warning")
 
@@ -451,7 +501,7 @@ def _bot_loop() -> None:
 @daybot_bp.post("/start")
 def start():
     global _config, _scanner, _ai, _executor, _monitor, _risk, _logger
-    global _bot_thread
+    global _bot_thread, _mode_manager, _harvester
 
     if day_state.running:
         return jsonify({"ok": False, "message": "Already running"})
@@ -479,6 +529,16 @@ def start():
         take_profit_pct=_config.take_profit_pct,
     )
 
+    from daybot.mode_manager import DayModeManager
+    from harvest.manager import ProfitHarvester
+    _mode_manager = DayModeManager()
+    _harvester = ProfitHarvester(
+        anthropic_api_key=_config.anthropic_api_key,
+        alpaca_api_key=_config.alpaca_api_key,
+        alpaca_secret_key=_config.alpaca_secret_key,
+        claude_model=_config.claude_model,
+    )
+
     _stop_event.clear()
     day_state.running = True
     _bot_thread = threading.Thread(target=_bot_loop, daemon=True)
@@ -490,6 +550,7 @@ def start():
 def _start_bot_internal() -> None:
     """Called by the scheduler — mirrors /start without HTTP context."""
     global _config, _scanner, _ai, _executor, _monitor, _risk, _logger, _bot_thread
+    global _mode_manager, _harvester
 
     if day_state.running:
         return
@@ -516,6 +577,16 @@ def _start_bot_internal() -> None:
         data_client, _executor, _risk, day_state,
         stop_loss_pct=_config.stop_loss_pct,
         take_profit_pct=_config.take_profit_pct,
+    )
+
+    from daybot.mode_manager import DayModeManager
+    from harvest.manager import ProfitHarvester
+    _mode_manager = DayModeManager()
+    _harvester = ProfitHarvester(
+        anthropic_api_key=_config.anthropic_api_key,
+        alpaca_api_key=_config.alpaca_api_key,
+        alpaca_secret_key=_config.alpaca_secret_key,
+        claude_model=_config.claude_model,
     )
 
     _stop_event.clear()
