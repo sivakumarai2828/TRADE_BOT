@@ -162,6 +162,8 @@ _harvester = None             # ProfitHarvester — created on /start
 # Per-symbol error backoff: tracks consecutive failures and cycles to skip
 _symbol_errors: dict[str, int] = {}      # symbol → consecutive error count
 _symbol_skip_cycles: dict[str, int] = {} # symbol → cycles remaining to skip
+_symbol_timeout_alerted: dict[str, bool] = {}  # symbol → alert already sent this session
+_TIMEOUT_ALERT_THRESHOLD = 3             # alert after this many consecutive timeouts
 
 
 def _run_symbol_cycle(symbol: str) -> None:
@@ -221,6 +223,12 @@ def _run_symbol_cycle(symbol: str) -> None:
                 f"[{symbol}] API errors ({err_count}×) — pausing {skip} cycles",
                 tone="warning",
             )
+
+        # Telegram alert on threshold — send once per session per symbol
+        if err_count == _TIMEOUT_ALERT_THRESHOLD and not _symbol_timeout_alerted.get(symbol):
+            _symbol_timeout_alerted[symbol] = True
+            from telegram_notify import notify_api_timeout
+            notify_api_timeout("CryptoBot", symbol, err_count)
 
 
 def _handle_crypto_mode_switch(new_mode: str, old_mode: str) -> None:

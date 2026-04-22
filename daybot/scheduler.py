@@ -103,6 +103,53 @@ def job_autostop() -> None:
         logging.exception("Scheduler: auto-stop failed: %s", exc)
 
 
+def job_health_check() -> None:
+    """11:00 AM ET Mon–Fri — send mid-session health check to Telegram."""
+    try:
+        import os, requests as req
+        from .state import day_state
+        from telegram_notify import notify_health_check
+
+        # Check Alpaca reachability
+        alpaca_ok = False
+        try:
+            r = req.get("https://data.alpaca.markets", timeout=5)
+            alpaca_ok = r.status_code in (200, 401, 403)
+        except Exception:
+            alpaca_ok = False
+
+        # Crypto bot status via local API
+        crypto_running, crypto_balance, crypto_trades, crypto_errors = False, 0.0, 0, 0
+        try:
+            r = req.get("http://localhost:8000/status", timeout=5)
+            if r.ok:
+                d = r.json()
+                m = d.get("metrics", {})
+                crypto_running = d.get("running", False)
+                crypto_balance = m.get("balance", 0.0)
+                crypto_trades = m.get("total_trades", 0)
+                from api import _symbol_errors
+                crypto_errors = sum(_symbol_errors.values())
+        except Exception:
+            pass
+
+        # Day bot status from shared state
+        dm = day_state.metrics
+        notify_health_check(
+            crypto_running=crypto_running,
+            crypto_balance=crypto_balance,
+            crypto_trades=crypto_trades,
+            crypto_errors=crypto_errors,
+            day_running=day_state.running,
+            day_trades=dm.trades_today,
+            day_pnl=dm.daily_pnl,
+            alpaca_ok=alpaca_ok,
+        )
+        logging.info("Scheduler: 11 AM health check sent")
+    except Exception as exc:
+        logging.exception("Scheduler: health check failed: %s", exc)
+
+
 def job_daily_reset() -> None:
     """Midnight UTC — reset daily halted flag so bot trades again tomorrow."""
     try:
@@ -188,6 +235,11 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         job_premarket, CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=tz),
         id="premarket", name="Pre-market analysis",
+    )
+    # Health check: 11:00 AM ET, Mon–Fri
+    _scheduler.add_job(
+        job_health_check, CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone=tz),
+        id="health_check", name="11 AM health check",
     )
     # Auto-start: 9:35 AM ET, Mon–Fri
     _scheduler.add_job(

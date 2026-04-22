@@ -288,7 +288,14 @@ def _run_cycle() -> None:
     # --- Check daily loss limit ---
     if _risk.check_daily_loss(portfolio_value):
         with day_state._lock:
+            already_halted = day_state.metrics.daily_loss_halted
             day_state.metrics.daily_loss_halted = True
+        if not already_halted:
+            from telegram_notify import notify_daily_loss_halted
+            m = day_state.metrics
+            start = m.daily_start_value or portfolio_value
+            loss_pct = (start - portfolio_value) / start * 100 if start > 0 else 0
+            notify_daily_loss_halted("DayBot", loss_pct)
         day_state.add_log("Risk", "Daily loss limit hit — no new trades today", "negative")
         return
 
@@ -305,6 +312,16 @@ def _run_cycle() -> None:
     # --- Skip new entries outside trading windows ---
     if not _in_trading_window():
         return
+
+    # --- No-trade alert after 90 min in window with 0 trades ---
+    if not getattr(_run_cycle, "_no_trade_alerted", False):
+        if not hasattr(_run_cycle, "_window_entry_time"):
+            _run_cycle._window_entry_time = datetime.now(timezone.utc).timestamp()
+        elapsed = (datetime.now(timezone.utc).timestamp() - _run_cycle._window_entry_time) / 60
+        if elapsed >= 90 and day_state.metrics.trades_today == 0:
+            _run_cycle._no_trade_alerted = True
+            from telegram_notify import notify_no_trades_alert
+            notify_no_trades_alert("DayBot", int(elapsed))
 
     # --- Adaptive mode evaluation ---
     spy_ret = _get_spy_return()
@@ -437,7 +454,10 @@ def _run_cycle() -> None:
 
 def _bot_loop() -> None:
     global _risk
-    _run_cycle._eod_done = False  # reset EOD guard for new trading day
+    _run_cycle._eod_done = False          # reset EOD guard for new trading day
+    _run_cycle._no_trade_alerted = False  # reset no-trade alert for new day
+    if hasattr(_run_cycle, "_window_entry_time"):
+        del _run_cycle._window_entry_time
     logging.info("Day bot loop started")
     day_state.add_log("Day Bot", "Trading loop started", "positive")
 

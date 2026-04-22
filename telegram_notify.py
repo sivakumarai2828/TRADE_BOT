@@ -146,3 +146,52 @@ def notify_bot_started() -> None:
 
 def notify_bot_stopped() -> None:
     _send("⛔ <b>AI Trade Bot stopped</b>")
+
+
+def notify_api_timeout(bot: str, symbol: str, consecutive: int) -> None:
+    _send(
+        f"⚠️ <b>{bot} API Timeout</b>\n"
+        f"{symbol} — {consecutive} consecutive failures\n"
+        f"Alpaca data feed unreachable. Bot is retrying automatically."
+    )
+
+
+def notify_no_trades_alert(bot: str, minutes_in_window: int) -> None:
+    _send(
+        f"🔕 <b>{bot} — No Trades Yet</b>\n"
+        f"Been in trading window for <b>{minutes_in_window} min</b> with 0 trades.\n"
+        f"Check bot logs — signals may be too tight or data feed issues."
+    )
+
+
+def notify_health_check(
+    crypto_running: bool,
+    crypto_balance: float,
+    crypto_trades: int,
+    crypto_errors: int,
+    day_running: bool,
+    day_trades: int,
+    day_pnl: float,
+    alpaca_ok: bool,
+) -> None:
+    crypto_icon = "✅" if crypto_running else "🔴"
+    day_icon = "✅" if day_running else "⏸"
+    alpaca_icon = "✅" if alpaca_ok else "❌"
+    _send(
+        f"🩺 <b>11 AM Health Check</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{crypto_icon} Crypto Bot: {'running' if crypto_running else 'stopped'} | "
+        f"${crypto_balance:.2f} | {crypto_trades} trades | {crypto_errors} errors\n"
+        f"{day_icon} Day Bot: {'running' if day_running else 'stopped'} | "
+        f"{day_trades} trades | ${day_pnl:+.2f} PnL\n"
+        f"{alpaca_icon} Alpaca API: {'reachable' if alpaca_ok else 'UNREACHABLE'}\n"
+        f"━━━━━━━━━━━━━━━"
+    )
+
+
+def notify_daily_loss_halted(bot: str, loss_pct: float) -> None:
+    _send(
+        f"🛑 <b>{bot} — Daily Loss Limit Hit</b>\n"
+        f"Loss: <b>{loss_pct:.1f}%</b> — no new trades today.\n"
+        f"Bot will resume tomorrow after midnight reset."
+    )
