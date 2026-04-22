@@ -261,23 +261,25 @@ def _run_cycle() -> None:
         day_state.metrics.portfolio_value = portfolio_value
         day_state.metrics.market_open = _executor.is_market_open()
 
-    # --- Close-only window: close all and stop ---
+    # --- Close-only window: close all, persist session, stop bot (runs once) ---
     if _in_close_only_window():
-        if day_state.positions:
-            day_state.add_log("EOD", "Close-only window — closing all positions", "warning")
-            _executor.close_all_positions()
-            with day_state._lock:
-                day_state.positions.clear()
-        _logger.generate_eod_report()
-        # Persist today's session summary so Claude has market regime history
-        m = day_state.metrics
-        spy_ret = _get_spy_return()
-        regime = "trending_up" if spy_ret > 0.3 else "trending_down" if spy_ret < -0.3 else "choppy"
-        upsert_market_session(
-            spy_return_pct=spy_ret, market_regime=regime,
-            total_trades=m.trades_today, wins=m.wins_today,
-            losses=m.losses_today, daily_pnl=m.daily_pnl,
-        )
+        if not getattr(_run_cycle, "_eod_done", False):
+            _run_cycle._eod_done = True
+            if day_state.positions:
+                day_state.add_log("EOD", "Close-only window — closing all positions", "warning")
+                _executor.close_all_positions()
+                with day_state._lock:
+                    day_state.positions.clear()
+            _logger.generate_eod_report()
+            m = day_state.metrics
+            spy_ret = _get_spy_return()
+            regime = "trending_up" if spy_ret > 0.3 else "trending_down" if spy_ret < -0.3 else "choppy"
+            upsert_market_session(
+                spy_return_pct=spy_ret, market_regime=regime,
+                total_trades=m.trades_today, wins=m.wins_today,
+                losses=m.losses_today, daily_pnl=m.daily_pnl,
+            )
+            _stop_bot_internal()
         return
 
     # --- Monitor existing positions every cycle ---
@@ -433,6 +435,7 @@ def _run_cycle() -> None:
 
 def _bot_loop() -> None:
     global _risk
+    _run_cycle._eod_done = False  # reset EOD guard for new trading day
     logging.info("Day bot loop started")
     day_state.add_log("Day Bot", "Trading loop started", "positive")
 
