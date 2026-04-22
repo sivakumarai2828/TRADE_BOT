@@ -29,35 +29,45 @@ def _et_offset() -> int:
 # Job functions
 # ---------------------------------------------------------------------------
 
+def _get_api_keys() -> tuple[str, str, str]:
+    """Read API keys from env vars — works before the bot is manually started."""
+    import os
+    return (
+        os.getenv("ANTHROPIC_API_KEY", ""),
+        os.getenv("EXCHANGE_API_KEY", ""),
+        os.getenv("EXCHANGE_API_SECRET", ""),
+    )
+
+
 def job_evening_analysis() -> None:
     """8:00 PM ET Mon–Fri — Claude sub-agent deep analysis for next day's watchlist."""
     try:
-        from .blueprint import _config
         from .evening_agent import run_evening_analysis
-        if _config is None:
-            logging.info("Scheduler: evening analysis skipped — bot not yet initialised")
+        anthropic_key, alpaca_key, alpaca_secret = _get_api_keys()
+        if not alpaca_key:
+            logging.warning("Scheduler: evening analysis skipped — EXCHANGE_API_KEY not set")
             return
         run_evening_analysis(
-            anthropic_api_key=_config.anthropic_api_key,
-            alpaca_api_key=_config.alpaca_api_key,
-            alpaca_secret_key=_config.alpaca_secret_key,
+            anthropic_api_key=anthropic_key,
+            alpaca_api_key=alpaca_key,
+            alpaca_secret_key=alpaca_secret,
         )
     except Exception as exc:
         logging.exception("Scheduler: evening analysis failed: %s", exc)
 
 
 def job_premarket() -> None:
-    """9:00 AM ET — Claude analyses all 33 stocks, builds approved list."""
+    """9:00 AM ET — Price confirmation of evening watchlist (or full scan fallback)."""
     try:
-        from .blueprint import _config
         from .premarket import run_premarket_analysis
-        if _config is None:
-            logging.info("Scheduler: pre-market skipped — bot not yet initialised")
+        anthropic_key, alpaca_key, alpaca_secret = _get_api_keys()
+        if not alpaca_key:
+            logging.warning("Scheduler: pre-market skipped — EXCHANGE_API_KEY not set")
             return
         run_premarket_analysis(
-            anthropic_api_key=_config.anthropic_api_key,
-            alpaca_api_key=_config.alpaca_api_key,
-            alpaca_secret_key=_config.alpaca_secret_key,
+            anthropic_api_key=anthropic_key,
+            alpaca_api_key=alpaca_key,
+            alpaca_secret_key=alpaca_secret,
         )
     except Exception as exc:
         logging.exception("Scheduler: pre-market analysis failed: %s", exc)
