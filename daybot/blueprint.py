@@ -316,7 +316,9 @@ def _run_cycle() -> None:
     # --- Per-symbol cycle (only pre-market approved stocks if list is available) ---
     approved = day_state.premarket_approved
     universe = [s for s in day_state.watchlist if not approved or s in approved]
-    for symbol in universe:
+    for i, symbol in enumerate(universe):
+        if i > 0:
+            import time as _time; _time.sleep(2)  # stagger fetches to reduce I/O on e2-micro
         has_pos = symbol in day_state.positions
         data = _fetch_bars(symbol)
         if data is None:

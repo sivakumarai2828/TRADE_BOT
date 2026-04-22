@@ -213,6 +213,7 @@ def _run_cycle() -> None:
 
     for symbol in list(bot_state.settings.active_symbols):
         _run_symbol_cycle(symbol)
+        _time_module.sleep(2)  # stagger fetches to reduce concurrent I/O on e2-micro
 
     monitor_positions(_exchange, _config)
 
