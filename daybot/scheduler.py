@@ -2,7 +2,8 @@
 
 All jobs run inside the Flask process — no external cron needed.
 Schedule (all times US/Eastern):
-  Mon–Fri 09:00  Pre-market analysis  — Claude ranks all 33 stocks
+  Mon–Fri 20:00  Evening analysis     — Claude sub-agent deep analysis for next day
+  Mon–Fri 09:00  Pre-market analysis  — price confirmation of evening watchlist (or fallback)
   Mon–Fri 09:35  Auto-start bot       — begins trading loop
   Mon–Fri 15:55  Auto-stop bot        — ensures loop is stopped after EOD close
   Daily   00:00  Daily reset          — clears halted flag, resets counters
@@ -11,8 +12,6 @@ Schedule (all times US/Eastern):
 from __future__ import annotations
 
 import logging
-import threading
-from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -29,6 +28,23 @@ def _et_offset() -> int:
 # ---------------------------------------------------------------------------
 # Job functions
 # ---------------------------------------------------------------------------
+
+def job_evening_analysis() -> None:
+    """8:00 PM ET Mon–Fri — Claude sub-agent deep analysis for next day's watchlist."""
+    try:
+        from .blueprint import _config
+        from .evening_agent import run_evening_analysis
+        if _config is None:
+            logging.info("Scheduler: evening analysis skipped — bot not yet initialised")
+            return
+        run_evening_analysis(
+            anthropic_api_key=_config.anthropic_api_key,
+            alpaca_api_key=_config.alpaca_api_key,
+            alpaca_secret_key=_config.alpaca_secret_key,
+        )
+    except Exception as exc:
+        logging.exception("Scheduler: evening analysis failed: %s", exc)
+
 
 def job_premarket() -> None:
     """9:00 AM ET — Claude analyses all 33 stocks, builds approved list."""
@@ -153,6 +169,11 @@ def start_scheduler() -> None:
 
     tz = "America/New_York"
 
+    # Evening analysis: 8:00 PM ET, Mon–Fri (next day prep)
+    _scheduler.add_job(
+        job_evening_analysis, CronTrigger(day_of_week="mon-fri", hour=20, minute=0, timezone=tz),
+        id="evening_analysis", name="Evening sub-agent analysis",
+    )
     # Pre-market: 9:00 AM ET, Mon–Fri
     _scheduler.add_job(
         job_premarket, CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=tz),
@@ -181,8 +202,8 @@ def start_scheduler() -> None:
 
     _scheduler.start()
     logging.info(
-        "Day bot scheduler started — jobs: pre-market 9:00AM, auto-start 9:35AM, "
-        "auto-stop 3:55PM, daily-reset midnight, weekly-report Sunday 8AM (all ET)"
+        "Day bot scheduler started — jobs: evening-analysis 8:00PM, pre-market 9:00AM, "
+        "auto-start 9:35AM, auto-stop 3:55PM, daily-reset midnight, weekly-report Sunday 8AM (all ET)"
     )
 
 

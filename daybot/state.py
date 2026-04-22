@@ -77,6 +77,13 @@ class DayBotState:
         # Pre-market analysis results
         self.premarket_approved: list[str] = []
         self.premarket_time: str = ""
+        # Evening sub-agent analysis results (set at 8 PM ET, used next day)
+        self.evening_approved: list[str] = []
+        self.evening_entry_zones: dict[str, list[float]] = {}
+        self.evening_risk_flags: dict[str, str] = {}
+        self.evening_regime: str = ""
+        self.evening_notes: dict[str, str] = {}
+        self.evening_analysis_date: str = ""
 
         # Shield thresholds (configurable at runtime via /daybot/settings)
         self.shield_loss_streak: int = 2      # activate after N consecutive losses
