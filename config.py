@@ -92,7 +92,7 @@ def load_config() -> BotConfig:
         stop_loss_pct=_get_decimal("STOP_LOSS_PCT", "0.02"),
         take_profit_pct=_get_decimal("TAKE_PROFIT_PCT", "0.05"),
         trailing_stop_pct=_get_decimal("TRAILING_STOP_PCT", "0.015"),
-        use_trailing_stop=_get_bool("USE_TRAILING_STOP", "false"),
+        use_trailing_stop=_get_bool("USE_TRAILING_STOP", "true"),
         testnet=_get_bool("USE_TESTNET", "true"),
         dry_run=_get_bool("DRY_RUN", "true"),
         polling_seconds=polling_seconds,

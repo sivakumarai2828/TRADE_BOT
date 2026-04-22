@@ -86,6 +86,29 @@ def notify_daily_summary(
     )
 
 
+def notify_daybot_summary(
+    date: str,
+    portfolio_value: float,
+    daily_pnl: float,
+    daily_pnl_pct: float,
+    trades: int,
+    wins: int,
+    losses: int,
+    halted: bool,
+) -> None:
+    status = "🔴 Daily limit hit" if halted else "✅ Market closed"
+    icon = "📈" if daily_pnl >= 0 else "📉"
+    _send(
+        f"📊 <b>Day Bot Summary — {date}</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💰 Portfolio: <b>${portfolio_value:,.2f}</b>\n"
+        f"{icon} Today's PnL: <b>${daily_pnl:+.2f} ({daily_pnl_pct:+.2f}%)</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🎯 Trades: {trades} | ✅ {wins}W / ❌ {losses}L\n"
+        f"🤖 Status: {status}"
+    )
+
+
 def notify_bot_started() -> None:
     _send("🚀 <b>AI Trade Bot started</b>\nMonitoring BTC/USD, ETH/USD, SOL/USD")
 

@@ -187,7 +187,7 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
         bot_state.refresh_paper_balance(symbol, float(price))
 
     bot_state.record_trade_result(float(pnl))
-    bot_state.set_cooldown(symbol, cycles=2)  # wait 2 cycles before re-entering
+    bot_state.set_cooldown(symbol, cycles=10)  # wait 10 cycles (~10 min) before re-entering
     bot_state.check_daily_loss_limit()
     notify_sell(symbol, float(price), float(pnl), pnl_pct, reason)
 

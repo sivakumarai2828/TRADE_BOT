@@ -419,6 +419,27 @@ def _bot_loop() -> None:
             day_state.add_log("Error", str(exc)[:120], "negative")
         _stop_event.wait(timeout=_config.loop_interval_seconds)
 
+    # Send EOD summary to Telegram whenever the bot stops
+    try:
+        from telegram_notify import notify_daybot_summary
+        from datetime import datetime, timezone
+        m = day_state.metrics
+        start = m.daily_start_value or m.portfolio_value
+        daily_pnl = m.portfolio_value - start
+        daily_pnl_pct = (daily_pnl / start * 100) if start > 0 else 0.0
+        notify_daybot_summary(
+            date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            portfolio_value=m.portfolio_value,
+            daily_pnl=daily_pnl,
+            daily_pnl_pct=daily_pnl_pct,
+            trades=m.trades_today,
+            wins=m.wins_today,
+            losses=m.losses_today,
+            halted=m.daily_loss_halted,
+        )
+    except Exception:
+        pass
+
     logging.info("Day bot loop stopped")
     day_state.add_log("Day Bot", "Trading loop stopped", "warning")
 
