@@ -109,6 +109,45 @@ if _saved:
         logging.info("Restored %d open position(s) from Supabase", len(p))
     logging.info("State restored from Supabase — balance=%.2f", bot_state.metrics.balance)
 
+# --- Startup Telegram alert ---
+def _send_startup_alert() -> None:
+    import os, requests as _req, platform
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        mem_line = f"💾 RAM: {mem.used // 1024 // 1024}MB / {mem.total // 1024 // 1024}MB"
+        swap_line = f"🔄 Swap: {swap.used // 1024 // 1024}MB / {swap.total // 1024 // 1024}MB"
+    except Exception:
+        mem_line = ""
+        swap_line = ""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "🚀 <b>Trade Bot Service Started</b>",
+        f"🕐 {now}",
+        "━━━━━━━━━━━━━━━",
+        "✅ Crypto Bot: ready (start via dashboard)",
+        "✅ Day Bot: auto-starts at 9:35 AM ET",
+        "✅ Scheduler: running",
+    ]
+    if mem_line:
+        lines += ["━━━━━━━━━━━━━━━", mem_line, swap_line]
+    try:
+        _req.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "HTML"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+threading.Thread(target=_send_startup_alert, daemon=True, name="startup-alert").start()
+
 # ---------------------------------------------------------------------------
 # Bot thread management
 # ---------------------------------------------------------------------------
