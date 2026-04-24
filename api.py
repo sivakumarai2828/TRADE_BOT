@@ -63,8 +63,28 @@ _startup_time = _time_module.time()
 _last_cycle_time = _time_module.time()  # updated every cycle; watchdog alerts if stale
 
 
+def _watchdog_auto_recover() -> None:
+    """Restart the bot loop thread when it's confirmed stuck beyond recovery."""
+    global _bot_thread, _stop_event, _last_cycle_time
+    logging.warning("Watchdog: triggering auto-recovery — restarting bot loop")
+    from telegram_notify import _send
+    _send("🔄 <b>Watchdog auto-recovery</b>\nBot loop was stuck 20+ min — force-restarting loop. Positions preserved.")
+
+    _stop_event.set()
+    if _bot_thread and _bot_thread.is_alive():
+        _bot_thread.join(timeout=15)  # give stuck thread a chance to exit
+
+    _stop_event = threading.Event()
+    _last_cycle_time = _time_module.time()
+    _bot_thread = threading.Thread(target=_bot_loop, daemon=True, name="bot")
+    _bot_thread.start()
+    logging.info("Watchdog: bot loop restarted successfully")
+
+
 def _watchdog_loop() -> None:
-    """Alert via Telegram if the bot loop hasn't run a cycle in > 10 minutes."""
+    """Alert via Telegram if the bot loop hasn't run a cycle in > 10 minutes.
+    Auto-recovers by restarting the loop after 20 minutes of no activity.
+    """
     while True:
         _time_module.sleep(300)  # check every 5 minutes
         if bot_state.running:
@@ -76,9 +96,18 @@ def _watchdog_loop() -> None:
                     f"Last cycle was <b>{age / 60:.0f} min</b> ago — bot may be stuck or crashed."
                 )
                 logging.warning("Watchdog: bot loop stalled for %.0f minutes", age / 60)
+            if age > 1200:  # 20 minutes — attempt auto-recovery
+                try:
+                    _watchdog_auto_recover()
+                except Exception as exc:
+                    logging.error("Watchdog auto-recovery failed: %s", exc)
 
 
-threading.Thread(target=_watchdog_loop, daemon=True, name="watchdog").start()
+# Flask debug reloader spawns a parent + child process — both would import this module
+# and start a watchdog. Only start in the child (WERKZEUG_RUN_MAIN=true) or in
+# non-debug runs where the env var is absent.
+if os.environ.get("WERKZEUG_RUN_MAIN", "true") == "true":
+    threading.Thread(target=_watchdog_loop, daemon=True, name="watchdog").start()
 
 from daybot.blueprint import daybot_bp
 from daybot.scheduler import start_scheduler
@@ -262,7 +291,10 @@ def _run_cycle() -> None:
         _run_symbol_cycle(symbol)
         _time_module.sleep(2)  # stagger fetches to reduce concurrent I/O on e2-micro
 
-    monitor_positions(_exchange, _config)
+    try:
+        monitor_positions(_exchange, _config)
+    except Exception as exc:
+        logging.warning("monitor_positions error (skipped): %s", exc)
 
     if not _config.dry_run:
         try:
@@ -338,7 +370,11 @@ def _bot_loop() -> None:
     while not _stop_event.is_set():
         if bot_state.check_daily_reset():
             _send_daily_summary()
-        _run_cycle()
+        try:
+            _run_cycle()
+        except Exception as exc:
+            logging.exception("Unhandled cycle error — loop continues: %s", exc)
+            bot_state.add_log("Cycle crash", str(exc)[:120], tone="negative")
         polling = bot_state.settings.polling_seconds
         _stop_event.wait(timeout=polling)
 

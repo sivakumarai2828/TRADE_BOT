@@ -382,7 +382,7 @@ def run_evening_analysis(
         logging.warning("Evening analysis: no Anthropic key — skipping")
         return {}
 
-    client = anthropic.Anthropic(api_key=anthropic_api_key)
+    client = anthropic.Anthropic(api_key=anthropic_api_key, timeout=120.0, max_retries=1)
     messages = [
         {
             "role": "user",

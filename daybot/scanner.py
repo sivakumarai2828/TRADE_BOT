@@ -1,8 +1,20 @@
 """Market scanner — filters a curated liquid stock universe by volume and movement."""
 from __future__ import annotations
+import functools
 import logging
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockSnapshotRequest
+
+
+def _patch_timeout(client, seconds: int = 10):
+    orig = client._session.request
+
+    @functools.wraps(orig)
+    def _req(method, url, **kwargs):
+        kwargs.setdefault("timeout", seconds)
+        return orig(method, url, **kwargs)
+
+    client._session.request = _req
 
 # Curated universe of highly liquid, actively traded US stocks
 STOCK_UNIVERSE = [
@@ -16,6 +28,7 @@ STOCK_UNIVERSE = [
 class MarketScanner:
     def __init__(self, api_key: str, secret_key: str) -> None:
         self._client = StockHistoricalDataClient(api_key, secret_key)
+        _patch_timeout(self._client, 10)
 
     def _get_snapshots(self, symbols: list[str]) -> dict:
         try:
@@ -75,6 +88,14 @@ class MarketScanner:
         candidates.update(self.get_top_movers(snapshots))
         candidates.update(self.get_high_volume_stocks(snapshots))
         candidates.update(["SPY", "QQQ"])  # always include market ETFs
+
+        # If filters returned too few, pad with liquid defaults so bot has enough to work with
+        if len(candidates) < 6:
+            logging.warning("Scanner: only %d candidates after filters — padding with defaults", len(candidates))
+            for sym in ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "AMD", "GOOGL"]:
+                candidates.add(sym)
+                if len(candidates) >= 12:
+                    break
 
         result = list(candidates)[:15]
         logging.info("Scanner: %d candidates — %s", len(result), result)

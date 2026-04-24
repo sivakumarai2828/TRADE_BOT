@@ -11,6 +11,7 @@ original Claude one-shot ranking from the full universe.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from datetime import datetime, timezone
@@ -34,6 +35,23 @@ _SYSTEM = (
 def run_premarket_analysis(anthropic_api_key: str, alpaca_api_key: str, alpaca_secret_key: str) -> list[str]:
     """Confirm or build the approved watchlist at 9:00 AM ET."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # --- Reload evening analysis from Supabase if state was lost (e.g. service restart) ---
+    if not (day_state.evening_analysis_date == today and day_state.evening_approved):
+        try:
+            from .evening_db import load_evening_analysis
+            row = load_evening_analysis(today)
+            if row and row.get("approved"):
+                logging.info("Pre-market: reloaded evening analysis from Supabase for %s", today)
+                with day_state._lock:
+                    day_state.evening_approved = row["approved"]
+                    day_state.evening_entry_zones = row.get("entry_zones") or {}
+                    day_state.evening_risk_flags = row.get("risk_flags") or {}
+                    day_state.evening_regime = row.get("regime", "unknown")
+                    day_state.evening_notes = row.get("notes") or {}
+                    day_state.evening_analysis_date = today
+        except Exception as exc:
+            logging.warning("Pre-market: Supabase reload failed: %s", exc)
 
     # --- Try to use last night's evening analysis first ---
     if day_state.evening_analysis_date == today and day_state.evening_approved:
@@ -123,16 +141,47 @@ def _confirm_with_premarket_prices(
     return confirmed if confirmed else candidates
 
 
+def _patch_timeout(client, seconds: int = 10):
+    orig = client._session.request
+
+    @functools.wraps(orig)
+    def _req(method, url, **kwargs):
+        kwargs.setdefault("timeout", seconds)
+        return orig(method, url, **kwargs)
+
+    client._session.request = _req
+
+
 def _fetch_all_snapshots(api_key: str, secret_key: str) -> dict:
-    try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.requests import StockSnapshotRequest
-        client = StockHistoricalDataClient(api_key, secret_key)
-        req = StockSnapshotRequest(symbol_or_symbols=STOCK_UNIVERSE)
-        return client.get_stock_snapshot(req)
-    except Exception as exc:
-        logging.warning("Pre-market snapshot failed: %s", exc)
+    import threading
+    result_box = [{}]
+    exc_box = [None]
+
+    def _run():
+        try:
+            result_box[0] = _fetch_snapshots_impl(api_key, secret_key)
+        except Exception as e:
+            exc_box[0] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=15)
+    if t.is_alive():
+        logging.warning("Pre-market snapshot timed out")
         return {}
+    if exc_box[0]:
+        logging.warning("Pre-market snapshot failed: %s", exc_box[0])
+        return {}
+    return result_box[0]
+
+
+def _fetch_snapshots_impl(api_key: str, secret_key: str) -> dict:
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockSnapshotRequest
+    client = StockHistoricalDataClient(api_key, secret_key)
+    _patch_timeout(client, 10)
+    req = StockSnapshotRequest(symbol_or_symbols=STOCK_UNIVERSE)
+    return client.get_stock_snapshot(req)
 
 
 def _build_summaries(snapshots: dict) -> list[dict]:
@@ -180,7 +229,7 @@ def _ask_claude(api_key: str, summaries: list[dict]) -> list[str]:
     )
 
     try:
-        client = Anthropic(api_key=api_key)
+        client = Anthropic(api_key=api_key, timeout=30.0, max_retries=1)
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=300,

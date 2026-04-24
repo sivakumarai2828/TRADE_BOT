@@ -1,6 +1,7 @@
 """Flask blueprint — all /daybot/* endpoints and the intraday trading loop."""
 from __future__ import annotations
 
+import functools
 import logging
 import threading
 from datetime import datetime, timezone, time as dtime
@@ -72,57 +73,158 @@ def _in_close_only_window() -> bool:
 # Data helpers
 # ---------------------------------------------------------------------------
 
+_API_TIMEOUT = 12  # seconds — Alpaca SDK has no built-in timeout; wrap to prevent loop stall
+
+
+def _run_with_timeout(fn, *args, timeout=_API_TIMEOUT, **kwargs):
+    """Run fn in a daemon thread. Returns (result, timed_out).
+    ThreadPoolExecutor.shutdown(wait=True) blocks on hung threads — daemon threads don't.
+    """
+    result_box = [None]
+    exc_box = [None]
+
+    def _target():
+        try:
+            result_box[0] = fn(*args, **kwargs)
+        except Exception as e:
+            exc_box[0] = e
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        return None, True  # timed out — thread still running but won't block loop
+    if exc_box[0]:
+        raise exc_box[0]
+    return result_box[0], False
+
+# Singleton data client — reuse one TCP+TLS connection instead of handshaking per call
+_data_client = None
+
+# Circuit breaker — pause trading if Alpaca is repeatedly unreachable
+_alpaca_fail_count = 0
+_alpaca_pause_until = 0.0
+_ALPACA_FAIL_THRESHOLD = 3   # consecutive timeouts before pause
+_ALPACA_PAUSE_SECONDS = 300  # 5 min cooldown
+
+
+def _alpaca_ok() -> bool:
+    """Return False during circuit-breaker pause."""
+    import time as _t
+    global _alpaca_fail_count, _alpaca_pause_until
+    if _alpaca_pause_until and _t.time() < _alpaca_pause_until:
+        return False
+    if _alpaca_pause_until and _t.time() >= _alpaca_pause_until:
+        _alpaca_pause_until = 0.0
+        _alpaca_fail_count = 0
+        logging.info("Alpaca circuit breaker reset — resuming")
+    return True
+
+
+def _alpaca_record_failure() -> None:
+    import time as _t
+    global _alpaca_fail_count, _alpaca_pause_until
+    _alpaca_fail_count += 1
+    if _alpaca_fail_count >= _ALPACA_FAIL_THRESHOLD:
+        _alpaca_pause_until = _t.time() + _ALPACA_PAUSE_SECONDS
+        logging.warning("Alpaca circuit breaker OPEN — pausing %ds after %d failures",
+                        _ALPACA_PAUSE_SECONDS, _alpaca_fail_count)
+        try:
+            from telegram_notify import notify_api_timeout
+            notify_api_timeout("DayBot", "data.alpaca.markets", _alpaca_fail_count)
+        except Exception:
+            pass
+
+
+def _alpaca_record_success() -> None:
+    global _alpaca_fail_count
+    _alpaca_fail_count = 0
+
+
+def _patch_alpaca_timeout(client, seconds: int = 10):
+    """Inject a default timeout into an Alpaca SDK client's requests.Session."""
+    orig = client._session.request
+
+    @functools.wraps(orig)
+    def _request(method, url, **kwargs):
+        kwargs.setdefault("timeout", seconds)
+        return orig(method, url, **kwargs)
+
+    client._session.request = _request
+    return client
+
+
+def _get_data_client():
+    global _data_client
+    if _data_client is None:
+        from alpaca.data.historical import StockHistoricalDataClient
+        _data_client = StockHistoricalDataClient(_config.alpaca_api_key, _config.alpaca_secret_key)
+        _patch_alpaca_timeout(_data_client, 10)
+    return _data_client
+
+
 def _fetch_bars(symbol: str, limit: int = 100) -> dict | None:
     """Fetch intraday bars and compute indicators. Returns dict or None on error."""
-    from alpaca.data.historical import StockHistoricalDataClient
+    if not _alpaca_ok():
+        return None
+    try:
+        result, timed_out = _run_with_timeout(_fetch_bars_impl, symbol, limit)
+        if timed_out:
+            logging.warning("Bar fetch timed out [%s]", symbol)
+            _alpaca_record_failure()
+            return None
+        _alpaca_record_success()
+        return result
+    except Exception as exc:
+        logging.warning("Bar fetch failed [%s]: %s", symbol, exc)
+        return None
+
+
+def _fetch_bars_impl(symbol: str, limit: int = 100) -> dict | None:
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
     from datetime import timedelta
     import pandas as pd
 
     from alpaca.data.enums import DataFeed
-    client = StockHistoricalDataClient(_config.alpaca_api_key, _config.alpaca_secret_key)
+    client = _get_data_client()
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=5)  # fetch last 5 days to get enough bars
-    try:
-        req = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Minute,
-            start=start, end=end, limit=limit,
-            feed=DataFeed.IEX,
-        )
-        bars = client.get_stock_bars(req)
-        df = bars.df
-        if df is None or df.empty:
-            return None
-
-        # Flatten multi-index if present
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.xs(symbol, level="symbol") if symbol in df.index.get_level_values("symbol") else df
-
-        df = df.rename(columns={"open": "open", "high": "high", "low": "low",
-                                 "close": "close", "volume": "volume"})
-        if len(df) < 20:
-            return None
-
-        df = add_indicators(df)
-        latest = df.dropna(subset=["ema_50", "rsi"]).iloc[-1]
-        prev_close = float(df["close"].iloc[-2]) if len(df) >= 2 else float(latest["close"])
-
-        vwap = float(latest["vwap"]) if "vwap" in latest and not pd.isna(latest["vwap"]) else 0.0
-        return {
-            "symbol": symbol,
-            "price": float(latest["close"]),
-            "ema": float(latest["ema_50"]),
-            "rsi": float(latest["rsi"]),
-            "volume": float(latest["volume"]),
-            "avg_volume": float(latest["vol_avg"]) if latest["vol_avg"] > 0 else 1,
-            "day_change_pct": (float(latest["close"]) - prev_close) / prev_close * 100,
-            "vwap": vwap,
-        }
-    except Exception as exc:
-        logging.warning("Bar fetch failed [%s]: %s", symbol, exc)
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Minute,
+        start=start, end=end, limit=limit,
+        feed=DataFeed.IEX,
+    )
+    bars = client.get_stock_bars(req)
+    df = bars.df
+    if df is None or df.empty:
         return None
+
+    # Flatten multi-index if present
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.xs(symbol, level="symbol") if symbol in df.index.get_level_values("symbol") else df
+
+    df = df.rename(columns={"open": "open", "high": "high", "low": "low",
+                             "close": "close", "volume": "volume"})
+    if len(df) < 20:
+        return None
+
+    df = add_indicators(df)
+    latest = df.dropna(subset=["ema_50", "rsi"]).iloc[-1]
+    prev_close = float(df["close"].iloc[-2]) if len(df) >= 2 else float(latest["close"])
+
+    vwap = float(latest["vwap"]) if "vwap" in latest and not pd.isna(latest["vwap"]) else 0.0
+    return {
+        "symbol": symbol,
+        "price": float(latest["close"]),
+        "ema": float(latest["ema_50"]),
+        "rsi": float(latest["rsi"]),
+        "volume": float(latest["volume"]),
+        "avg_volume": float(latest["vol_avg"]) if latest["vol_avg"] > 0 else 1,
+        "day_change_pct": (float(latest["close"]) - prev_close) / prev_close * 100,
+        "vwap": vwap,
+    }
 
 
 # Cache weekly context per symbol to avoid fetching every cycle (refresh every 6 hours)
@@ -138,88 +240,94 @@ def _fetch_weekly_context(symbol: str) -> dict | None:
     if cached and (now_ts - cached[0]) < _WEEKLY_TTL:
         return cached[1]
 
-    from alpaca.data.historical import StockHistoricalDataClient
+    try:
+        result, timed_out = _run_with_timeout(_fetch_weekly_context_impl, symbol, now_ts)
+        if timed_out:
+            logging.warning("Weekly context fetch timed out [%s]", symbol)
+            return None
+        return result
+    except Exception as exc:
+        logging.warning("Weekly context fetch failed [%s]: %s", symbol, exc)
+        return None
+
+
+def _fetch_weekly_context_impl(symbol: str, now_ts: float) -> dict | None:
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
     from datetime import timedelta
     import pandas as pd
 
     from alpaca.data.enums import DataFeed
-    client = StockHistoricalDataClient(_config.alpaca_api_key, _config.alpaca_secret_key)
+    client = _get_data_client()
     end = datetime.now(timezone.utc)
     start = end - timedelta(weeks=5)  # 5 weeks to guarantee 4 full weeks of trading days
 
-    try:
-        req = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame.Day,
-            start=start, end=end,
-            feed=DataFeed.IEX,
-        )
-        bars = client.get_stock_bars(req)
-        df = bars.df
-        if df is None or df.empty:
-            return None
-
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.xs(symbol, level="symbol") if symbol in df.index.get_level_values("symbol") else df
-
-        df = df.rename(columns={"open": "open", "high": "high", "low": "low",
-                                 "close": "close", "volume": "volume"})
-        df = df.sort_index()
-
-        if len(df) < 10:
-            return None
-
-        closes = df["close"].values
-
-        # Split into 4 weekly buckets (approx 5 trading days each)
-        days = min(len(df), 20)
-        df_recent = df.iloc[-days:]
-        closes_r = df_recent["close"].values
-        vols_r = df_recent["volume"].values
-
-        week_chunks = [closes_r[i:i+5] for i in range(0, min(20, len(closes_r)), 5)]
-        weekly_returns = []
-        for chunk in week_chunks[-4:]:
-            if len(chunk) >= 2:
-                ret = (chunk[-1] - chunk[0]) / chunk[0] * 100
-                weekly_returns.append(round(ret, 2))
-
-        four_week_high = float(df_recent["high"].max())
-        four_week_low = float(df_recent["low"].min())
-        current_price = float(closes[-1])
-        price_range = four_week_high - four_week_low
-        position_in_range = round((current_price - four_week_low) / price_range * 100, 1) if price_range > 0 else 50.0
-
-        four_week_return = round((closes_r[-1] - closes_r[0]) / closes_r[0] * 100, 2) if len(closes_r) >= 2 else 0.0
-
-        # Simple support/resistance: recent swing low/high
-        support = round(float(df_recent["low"].iloc[-10:].min()), 2)
-        resistance = round(float(df_recent["high"].iloc[-10:].max()), 2)
-
-        # Volume trend: compare last week avg vs 3-week avg
-        last_week_vol = float(vols_r[-5:].mean()) if len(vols_r) >= 5 else 0
-        prior_vol = float(vols_r[:-5].mean()) if len(vols_r) > 5 else last_week_vol
-        vol_trend = "rising" if last_week_vol > prior_vol * 1.05 else "falling" if last_week_vol < prior_vol * 0.95 else "stable"
-
-        context = {
-            "weekly_returns": weekly_returns,
-            "four_week_return_pct": four_week_return,
-            "four_week_high": round(four_week_high, 2),
-            "four_week_low": round(four_week_low, 2),
-            "position_in_range_pct": position_in_range,
-            "support": support,
-            "resistance": resistance,
-            "volume_trend": vol_trend,
-        }
-        _weekly_cache[symbol] = (now_ts, context)
-        logging.info("Weekly context [%s]: 4wk_return=%.1f%% pos_in_range=%.0f%%", symbol, four_week_return, position_in_range)
-        return context
-
-    except Exception as exc:
-        logging.warning("Weekly context fetch failed [%s]: %s", symbol, exc)
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame.Day,
+        start=start, end=end,
+        feed=DataFeed.IEX,
+    )
+    bars = client.get_stock_bars(req)
+    df = bars.df
+    if df is None or df.empty:
         return None
+
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.xs(symbol, level="symbol") if symbol in df.index.get_level_values("symbol") else df
+
+    df = df.rename(columns={"open": "open", "high": "high", "low": "low",
+                             "close": "close", "volume": "volume"})
+    df = df.sort_index()
+
+    if len(df) < 10:
+        return None
+
+    closes = df["close"].values
+
+    # Split into 4 weekly buckets (approx 5 trading days each)
+    days = min(len(df), 20)
+    df_recent = df.iloc[-days:]
+    closes_r = df_recent["close"].values
+    vols_r = df_recent["volume"].values
+
+    week_chunks = [closes_r[i:i+5] for i in range(0, min(20, len(closes_r)), 5)]
+    weekly_returns = []
+    for chunk in week_chunks[-4:]:
+        if len(chunk) >= 2:
+            ret = (chunk[-1] - chunk[0]) / chunk[0] * 100
+            weekly_returns.append(round(ret, 2))
+
+    four_week_high = float(df_recent["high"].max())
+    four_week_low = float(df_recent["low"].min())
+    current_price = float(closes[-1])
+    price_range = four_week_high - four_week_low
+    position_in_range = round((current_price - four_week_low) / price_range * 100, 1) if price_range > 0 else 50.0
+
+    four_week_return = round((closes_r[-1] - closes_r[0]) / closes_r[0] * 100, 2) if len(closes_r) >= 2 else 0.0
+
+    # Simple support/resistance: recent swing low/high
+    support = round(float(df_recent["low"].iloc[-10:].min()), 2)
+    resistance = round(float(df_recent["high"].iloc[-10:].max()), 2)
+
+    # Volume trend: compare last week avg vs 3-week avg
+    last_week_vol = float(vols_r[-5:].mean()) if len(vols_r) >= 5 else 0
+    prior_vol = float(vols_r[:-5].mean()) if len(vols_r) > 5 else last_week_vol
+    vol_trend = "rising" if last_week_vol > prior_vol * 1.05 else "falling" if last_week_vol < prior_vol * 0.95 else "stable"
+
+    context = {
+        "weekly_returns": weekly_returns,
+        "four_week_return_pct": four_week_return,
+        "four_week_high": round(four_week_high, 2),
+        "four_week_low": round(four_week_low, 2),
+        "position_in_range_pct": position_in_range,
+        "support": support,
+        "resistance": resistance,
+        "volume_trend": vol_trend,
+    }
+    _weekly_cache[symbol] = (now_ts, context)
+    logging.info("Weekly context [%s]: 4wk_return=%.1f%% pos_in_range=%.0f%%", symbol, four_week_return, position_in_range)
+    return context
 
 
 def _get_spy_return() -> float:
@@ -256,10 +364,25 @@ def _handle_mode_switch(new_mode: str, old_mode: str) -> None:
 def _run_cycle() -> None:
     global _scanner, _risk, _monitor, _ai, _logger
 
-    portfolio_value = _executor.get_portfolio_value()
+    try:
+        pv, timed_out = _run_with_timeout(_executor.get_portfolio_value)
+        portfolio_value = pv if not timed_out and pv is not None else (day_state.metrics.portfolio_value or 0.0)
+        if timed_out:
+            logging.warning("get_portfolio_value timed out — using cached value")
+    except Exception as exc:
+        logging.warning("get_portfolio_value failed: %s", exc)
+        portfolio_value = day_state.metrics.portfolio_value or 0.0
+
+    try:
+        mkt_open, timed_out = _run_with_timeout(_executor.is_market_open)
+        if timed_out:
+            mkt_open = day_state.metrics.market_open
+    except Exception:
+        mkt_open = day_state.metrics.market_open
+
     with day_state._lock:
         day_state.metrics.portfolio_value = portfolio_value
-        day_state.metrics.market_open = _executor.is_market_open()
+        day_state.metrics.market_open = mkt_open
 
     # --- Close-only window: close all, persist session, stop bot (runs once) ---
     if _in_close_only_window():
@@ -283,7 +406,12 @@ def _run_cycle() -> None:
         return
 
     # --- Monitor existing positions every cycle ---
-    _monitor.monitor_positions()
+    try:
+        _, timed_out = _run_with_timeout(_monitor.monitor_positions)
+        if timed_out:
+            logging.warning("Position monitor timed out — skipping")
+    except Exception as exc:
+        logging.warning("Position monitor error: %s", exc)
 
     # --- Check daily loss limit ---
     if _risk.check_daily_loss(portfolio_value):
@@ -303,7 +431,14 @@ def _run_cycle() -> None:
     scan_interval = _config.scan_interval_minutes * 60
     now_ts = datetime.now(timezone.utc).timestamp()
     if not hasattr(_run_cycle, "_last_scan") or (now_ts - _run_cycle._last_scan) >= scan_interval:
-        symbols = _scanner.run_scan()
+        try:
+            symbols, timed_out = _run_with_timeout(_scanner.run_scan)
+            if timed_out:
+                logging.warning("Scanner timed out — keeping previous watchlist")
+                symbols = list(day_state.watchlist) or []
+        except Exception as exc:
+            logging.warning("Scanner error: %s", exc)
+            symbols = list(day_state.watchlist) or []
         _logger.log_scan(symbols)
         with day_state._lock:
             day_state.watchlist = symbols
@@ -461,7 +596,11 @@ def _bot_loop() -> None:
     logging.info("Day bot loop started")
     day_state.add_log("Day Bot", "Trading loop started", "positive")
 
-    portfolio_value = _executor.get_portfolio_value()
+    try:
+        pv, _ = _run_with_timeout(_executor.get_portfolio_value)
+        portfolio_value = pv if pv is not None else 0.0
+    except Exception:
+        portfolio_value = 0.0
     _risk.reset_daily(portfolio_value)
     with day_state._lock:
         day_state.metrics.daily_start_value = portfolio_value
@@ -623,8 +762,10 @@ def _start_bot_internal() -> None:
 
 def _stop_bot_internal() -> None:
     """Called by the scheduler — mirrors /stop without HTTP context."""
+    global _data_client
     _stop_event.set()
     day_state.running = False
+    _data_client = None  # force fresh client+connection on next start
 
 
 @daybot_bp.post("/stop")

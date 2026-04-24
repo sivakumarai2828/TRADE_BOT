@@ -1,5 +1,6 @@
 """Monitor open positions and trigger stop-loss / take-profit exits."""
 from __future__ import annotations
+import functools
 import logging
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
@@ -7,6 +8,17 @@ from .db import save_trade as db_save_trade
 from .executor import TradeExecutor
 from .risk_manager import RiskManager
 from .state import DayBotState, DayPosition
+
+
+def _patch_timeout(client, seconds: int = 10):
+    orig = client._session.request
+
+    @functools.wraps(orig)
+    def _req(method, url, **kwargs):
+        kwargs.setdefault("timeout", seconds)
+        return orig(method, url, **kwargs)
+
+    client._session.request = _req
 
 
 class PositionMonitor:
@@ -19,6 +31,7 @@ class PositionMonitor:
         stop_loss_pct: float = 0.01,
         take_profit_pct: float = 0.025,
     ) -> None:
+        _patch_timeout(data_client, 10)
         self._data = data_client
         self._executor = executor
         self._risk = risk_manager

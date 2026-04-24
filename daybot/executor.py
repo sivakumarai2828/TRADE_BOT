@@ -1,5 +1,6 @@
 """Alpaca order execution with retry logic — paper trading only."""
 from __future__ import annotations
+import functools
 import logging
 import time
 from alpaca.trading.client import TradingClient
@@ -7,9 +8,21 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 
+def _patch_timeout(client, seconds: int = 10):
+    orig = client._session.request
+
+    @functools.wraps(orig)
+    def _req(method, url, **kwargs):
+        kwargs.setdefault("timeout", seconds)
+        return orig(method, url, **kwargs)
+
+    client._session.request = _req
+
+
 class TradeExecutor:
     def __init__(self, api_key: str, secret_key: str, paper: bool = True, budget: float = 0.0) -> None:
         self._client = TradingClient(api_key, secret_key, paper=paper)
+        _patch_timeout(self._client, 10)
         self._budget = budget  # if > 0, cap reported portfolio value to this amount
 
     def _with_retry(self, fn, retries: int = 3):

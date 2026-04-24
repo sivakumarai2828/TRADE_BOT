@@ -26,7 +26,7 @@ class AIDecision:
 
 class AIValidator:
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-6") -> None:
-        self._client = Anthropic(api_key=api_key)
+        self._client = Anthropic(api_key=api_key, timeout=20.0, max_retries=1)
         self._model = model
 
     def validate(

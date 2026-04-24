@@ -30,7 +30,9 @@ def generate_signal(
 ) -> SignalResult:
     trend = "uptrend" if price > ema else "downtrend"
     pct_from_ema = (price - ema) / ema * 100 if ema > 0 else 0.0
-    vol_rising = avg_volume > 0 and volume >= avg_volume * 1.2
+    # vol_data_available: False when IEX feed returns 0 volume (known data gap)
+    vol_data_available = avg_volume > 1 and volume > 0
+    vol_rising = not vol_data_available or volume >= avg_volume * 1.2
 
     # --- SELL logic (only when position is open) ---
     if has_position:
@@ -45,25 +47,24 @@ def generate_signal(
     if 45.0 <= rsi <= 55.0:
         return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
                             trend, f"RSI {rsi:.1f} neutral zone (45–55) — no edge")
-    if not vol_rising and not has_position:
+    if vol_data_available and not vol_rising and not has_position:
         return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
                             trend, "Volume below average — no conviction")
 
     # --- BUY conditions ---
-    # Setup A: Pullback dip — RSI recovering from oversold, price near EMA with volume
+    # Setup A: Pullback dip — RSI recovering from oversold, price near EMA
     if (
         price > ema
         and 0.0 <= pct_from_ema <= 3.0
         and 30.0 <= rsi <= 52.0
-        and vol_rising
         and not has_position
     ):
         return SignalResult(
             symbol, "BUY", price, ema, rsi, volume, avg_volume, trend,
-            f"RSI {rsi:.1f} pullback dip, {pct_from_ema:.1f}% above EMA, volume up",
+            f"RSI {rsi:.1f} pullback dip, {pct_from_ema:.1f}% above EMA",
         )
 
-    # Setup B: Momentum breakout — strong uptrend, RSI rising with high volume
+    # Setup B: Momentum breakout — strong uptrend, RSI rising
     if (
         price > ema
         and pct_from_ema > 3.0
@@ -73,7 +74,7 @@ def generate_signal(
     ):
         return SignalResult(
             symbol, "BUY", price, ema, rsi, volume, avg_volume, trend,
-            f"RSI {rsi:.1f} momentum breakout, {pct_from_ema:.1f}% above EMA, volume surge",
+            f"RSI {rsi:.1f} momentum breakout, {pct_from_ema:.1f}% above EMA",
         )
 
     return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,

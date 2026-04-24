@@ -187,16 +187,16 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def _rule_based_signal(rsi: float, price: float, sma: float,
                        oversold: float = 38.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0) -> Signal:
-    # Volume confirmation: require at least 1.2x average volume for BUY/SELL.
-    # Weak signals on low volume are likely noise — skip them.
+    # Volume confirmation: require at least 1.2x average volume for dip buys and sells.
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
 
     # Setup A: Dip buy — RSI oversold with price near SMA support
     if rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
 
-    # Setup B: Momentum breakout — RSI rising in bullish zone, price above SMA
-    if 50.0 <= rsi <= 65.0 and price > sma * 1.001 and vol_confirmed:
+    # Setup B: Momentum breakout — RSI rising in bullish zone, price above SMA.
+    # No volume gate here — momentum moves often start before volume confirms.
+    if 50.0 <= rsi <= 65.0 and price > sma * 1.001:
         return "BUY"
 
     if rsi > overbought and vol_confirmed:
@@ -220,7 +220,7 @@ def _claude_signal(config: BotConfig, rsi: float, price: float, sma: float,
         logging.warning("ANTHROPIC_API_KEY is missing; Claude signal defaults to HOLD")
         return "HOLD", 0.0, "No API key"
 
-    client = Anthropic(api_key=config.anthropic_api_key)
+    client = Anthropic(api_key=config.anthropic_api_key, timeout=20.0, max_retries=1)
     prompt = (
         f"{symbol} RSI is {rsi:.2f}, current price is ${price:,.2f}, "
         f"50-period SMA is ${sma:,.2f}. "

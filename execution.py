@@ -60,6 +60,7 @@ def create_exchange(config: BotConfig):
             "apiKey": config.api_key or "",
             "secret": config.api_secret or "",
             "enableRateLimit": True,
+            "timeout": 30000,  # 30s — prevents indefinite hang on slow/unresponsive API
             "options": {"defaultType": "spot"},
             **alpaca_opts,
         }
