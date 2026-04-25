@@ -513,10 +513,23 @@ def _run_cycle() -> None:
                 day_state.signals[symbol].ai_confidence = ai_dec.confidence
                 day_state.signals[symbol].ai_reason = ai_dec.reason
 
-        # Only act when rule + AI agree
-        if ai_dec.decision != sig.action:
-            logging.info("%s: rule=%s AI=%s — disagreement, skipping", symbol, sig.action, ai_dec.decision)
+        # AI veto: only block when AI gives the OPPOSITE signal with >70% confidence.
+        # AI returning HOLD (uncertain) does NOT block the rule signal.
+        if (
+            ai_dec.decision != sig.action
+            and ai_dec.decision != "HOLD"
+            and ai_dec.confidence > 0.70
+        ):
+            logging.info(
+                "%s: rule=%s AI=%s conf=%.2f — strong AI veto, skipping",
+                symbol, sig.action, ai_dec.decision, ai_dec.confidence,
+            )
             continue
+        if ai_dec.decision != sig.action:
+            logging.info(
+                "%s: rule=%s AI=%s conf=%.2f — AI uncertain, proceeding with rule",
+                symbol, sig.action, ai_dec.decision, ai_dec.confidence,
+            )
 
         # --- BUY ---
         if sig.action == "BUY":

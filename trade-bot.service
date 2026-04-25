@@ -7,7 +7,10 @@ User=__USER__
 WorkingDirectory=/home/__USER__/TRADE_BOT
 ExecStart=/home/__USER__/venv/bin/python3 api.py
 Restart=always
-RestartSec=5
+RestartSec=15
+StartLimitIntervalSec=600
+StartLimitBurst=5
+MemoryMax=750M
 StandardOutput=journal
 StandardError=journal
 

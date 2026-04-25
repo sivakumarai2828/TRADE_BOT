@@ -185,7 +185,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _rule_based_signal(rsi: float, price: float, sma: float,
-                       oversold: float = 38.0, overbought: float = 70.0,
+                       oversold: float = 43.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0) -> Signal:
     # Volume confirmation: require at least 1.2x average volume for dip buys and sells.
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
@@ -440,7 +440,25 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
             claude_signal = "HOLD"
             bot_state.add_log("Claude error", str(exc)[:120], tone="negative")
 
-    final_action: Signal = rule_signal if rule_signal == claude_signal else "HOLD"
+    # Rule is primary. Claude is advisory:
+    #   - Rule=HOLD → always HOLD regardless
+    #   - Both agree → use that signal
+    #   - Claude=HOLD (uncertain) → trust the rule
+    #   - Claude=opposite with confidence >0.70 → strong veto, HOLD
+    #   - Claude=opposite with confidence <=0.70 → weak disagreement, trust rule
+    if rule_signal == "HOLD":
+        final_action: Signal = "HOLD"
+    elif claude_signal == rule_signal:
+        final_action = rule_signal
+    elif claude_signal == "HOLD":
+        final_action = rule_signal  # Claude uncertain — rule wins
+        logging.info("Claude uncertain (HOLD) for %s rule=%s — proceeding with rule", symbol, rule_signal)
+    elif claude_confidence > 0.70:
+        final_action = "HOLD"  # Claude strongly disagrees — veto
+        logging.info("Claude strong veto for %s (conf=%.2f) rule=%s claude=%s — HOLD", symbol, claude_confidence, rule_signal, claude_signal)
+    else:
+        final_action = rule_signal  # Weak disagreement — rule wins
+        logging.info("Claude weak disagreement for %s (conf=%.2f) — proceeding with rule %s", symbol, claude_confidence, rule_signal)
     confidence = _compute_confidence(final_action, rsi)
     trend = _compute_trend(price, sma)
     explanation = _build_explanation(final_action, rule_signal, claude_signal, rsi, price, sma,

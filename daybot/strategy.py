@@ -44,9 +44,9 @@ def generate_signal(
                                 trend, "Price broke below EMA — trend reversal")
 
     # --- HOLD conditions ---
-    if 45.0 <= rsi <= 55.0:
+    if 48.0 <= rsi <= 52.0:
         return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
-                            trend, f"RSI {rsi:.1f} neutral zone (45–55) — no edge")
+                            trend, f"RSI {rsi:.1f} neutral zone (48–52) — no edge")
     if vol_data_available and not vol_rising and not has_position:
         return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
                             trend, "Volume below average — no conviction")
@@ -56,7 +56,7 @@ def generate_signal(
     if (
         price > ema
         and 0.0 <= pct_from_ema <= 3.0
-        and 30.0 <= rsi <= 52.0
+        and 30.0 <= rsi <= 56.0
         and not has_position
     ):
         return SignalResult(
@@ -68,7 +68,7 @@ def generate_signal(
     if (
         price > ema
         and pct_from_ema > 3.0
-        and 55.0 <= rsi <= 70.0
+        and 53.0 <= rsi <= 72.0
         and vol_rising
         and not has_position
     ):
