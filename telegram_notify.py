@@ -195,3 +195,99 @@ def notify_daily_loss_halted(bot: str, loss_pct: float) -> None:
         f"Loss: <b>{loss_pct:.1f}%</b> — no new trades today.\n"
         f"Bot will resume tomorrow after midnight reset."
     )
+
+
+def notify_options_suggestions(picks: list, vix: float, regime: str) -> None:
+    if not picks:
+        return
+    regime_icon = {"trending_up": "📈", "trending_down": "📉", "sideways": "↔️"}.get(regime, "❓")
+    vix_note = " ⚠️ High VIX — size small" if vix > 25 else ""
+    lines = [
+        f"🎯 <b>Options Suggestions — {len(picks)} setup(s)</b>",
+        f"{regime_icon} Regime: {regime.replace('_',' ').title()} | VIX: {vix:.1f}{vix_note}",
+        f"━━━━━━━━━━━━━━━",
+        f"<i>Suggestions only — trade manually on Robinhood</i>",
+        f"━━━━━━━━━━━━━━━",
+    ]
+    for p in picks:
+        opt_icon = "📞" if p.get("option_type") == "call" else "📉"
+        lines += [
+            f"{opt_icon} <b>{p['symbol']} ${p.get('strike')} {p.get('option_type','').upper()}"
+            f" exp {p.get('expiry')}</b>",
+            f"  Entry: ~${p.get('entry_price',0):.2f} | Target: ~${p.get('target_price',0):.2f}"
+            f" ({round((p.get('target_price',0)/max(p.get('entry_price',0.01),0.01)-1)*100):.0f}% gain)",
+            f"  Underlying stop: ${p.get('underlying_stop',0):.2f}",
+            f"  OI: {p.get('open_interest',0):,} | IV: {p.get('iv',0)*100:.0f}%",
+            f"  ↳ {p.get('reason','')}",
+            f"━━━━━━━━━━━━━━━",
+        ]
+    _send("\n".join(lines))
+
+
+def notify_user_stop_loss(
+    symbol: str,
+    asset_type: str,
+    current_price: float,
+    stop_price: float,
+    entry_price: float,
+    option_detail: str = "",
+) -> None:
+    pnl_pct = (current_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+    if asset_type == "option":
+        _send(
+            f"🚨 <b>OPTIONS STOP ALERT — {symbol}</b>\n"
+            f"Underlying at <b>${current_price:.2f}</b> — below your stop ${stop_price:.2f}\n"
+            f"Position: {option_detail}\n"
+            f"⚠️ Consider exiting on Robinhood now."
+        )
+    else:
+        icon = "📉" if pnl_pct < 0 else "📈"
+        _send(
+            f"🚨 <b>STOP LOSS ALERT — {symbol}</b>\n"
+            f"{icon} Price: <b>${current_price:.2f}</b> | Stop: ${stop_price:.2f}\n"
+            f"Entry: ${entry_price:.2f} | P&L: {pnl_pct:+.1f}%\n"
+            f"⚠️ Consider exiting on Robinhood now."
+        )
+
+
+def notify_market_close_reminder(open_positions: list) -> None:
+    if not open_positions:
+        return
+    lines = [
+        "⏰ <b>Market closes in 20 min!</b>",
+        f"You have <b>{len(open_positions)}</b> open position(s) — review on Robinhood:",
+    ]
+    for p in open_positions[:5]:
+        sym = p.get("symbol", "")
+        atype = p.get("asset_type", "stock")
+        entry = p.get("entry_price", 0)
+        stop = p.get("stop_price") or p.get("underlying_stop") or 0
+        detail = f" {p.get('option_type','').upper()} ${p.get('strike')} {p.get('expiry')}" if atype == "option" else ""
+        lines.append(f"  • {sym}{detail} | Entry ${entry:.2f} | Stop ${stop:.2f}")
+    _send("\n".join(lines))
+
+
+def notify_morning_briefing(approved: list, entry_zones: dict, stop_levels: dict,
+                             targets: dict, notes: dict, regime: str) -> None:
+    if not approved:
+        return
+    regime_icon = {"trending_up": "📈", "trending_down": "📉", "sideways": "↔️"}.get(regime, "❓")
+    lines = [
+        f"☀️ <b>Morning Briefing — Today's Stock Picks</b>",
+        f"{regime_icon} Regime: {regime.replace('_',' ').title()}",
+        f"━━━━━━━━━━━━━━━",
+        f"<i>Suggestions only — monitor and trade manually</i>",
+        f"━━━━━━━━━━━━━━━",
+    ]
+    for sym in approved[:8]:
+        ez = entry_zones.get(sym, [])
+        sl = stop_levels.get(sym)
+        tp = targets.get(sym)
+        note = notes.get(sym, "")
+        entry_str = f"${ez[0]:.2f}–${ez[1]:.2f}" if len(ez) == 2 else "—"
+        sl_str = f"${sl:.2f}" if sl else "—"
+        tp_str = f"${tp:.2f}" if tp else "—"
+        lines.append(f"<b>{sym}</b> | Entry: {entry_str} | SL: {sl_str} | Target: {tp_str}")
+        if note:
+            lines.append(f"  ↳ {note}")
+    _send("\n".join(lines))

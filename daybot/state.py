@@ -84,6 +84,12 @@ class DayBotState:
         self.evening_regime: str = ""
         self.evening_notes: dict[str, str] = {}
         self.evening_analysis_date: str = ""
+        self.evening_stop_levels: dict[str, float] = {}   # symbol → stop price
+        self.evening_targets: dict[str, float] = {}       # symbol → target price
+        self.evening_direction: dict[str, str] = {}       # symbol → BUY/SELL
+        # Options picks (set at 9:15 AM ET)
+        self.options_picks: list[dict] = []
+        self.options_picks_date: str = ""
 
         # Shield thresholds (configurable at runtime via /daybot/settings)
         self.shield_loss_streak: int = 2      # activate after N consecutive losses

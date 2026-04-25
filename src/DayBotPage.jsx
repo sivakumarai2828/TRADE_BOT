@@ -5,12 +5,23 @@ import DayBotLogs from "./components/daybot/DayBotLogs.jsx";
 import DayBotMetrics from "./components/daybot/DayBotMetrics.jsx";
 import DayBotPositions from "./components/daybot/DayBotPositions.jsx";
 import DayBotSignals from "./components/daybot/DayBotSignals.jsx";
+import MyPositions from "./components/daybot/MyPositions.jsx";
+import OptionsSuggestions from "./components/daybot/OptionsSuggestions.jsx";
+import SuggestionsPanel from "./components/daybot/SuggestionsPanel.jsx";
 
 const POLL_MS = 5_000;
+
+const TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "suggestions", label: "Stock Picks" },
+  { id: "options", label: "Options Picks" },
+  { id: "mypositions", label: "My Positions" },
+];
 
 export default function DayBotPage() {
   const [data, setData] = useState(null);
   const [apiError, setApiError] = useState(false);
+  const [tab, setTab] = useState("overview");
 
   const refresh = useCallback(async () => {
     try {
@@ -53,17 +64,41 @@ export default function DayBotPage() {
         </div>
       )}
 
-      <DayBotMetrics metrics={data?.metrics} />
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b border-neutral-800">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-2 text-xs font-medium transition-colors ${
+              tab === t.id
+                ? "border-b-2 border-indigo-400 text-indigo-300"
+                : "text-neutral-500 hover:text-neutral-300"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
-        <DayBotPositions positions={data?.positions} />
-        <DayBotSignals signals={data?.signals} watchlist={data?.watchlist} />
-      </section>
+      {/* Overview tab — original layout */}
+      {tab === "overview" && (
+        <>
+          <DayBotMetrics metrics={data?.metrics} />
+          <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
+            <DayBotPositions positions={data?.positions} />
+            <DayBotSignals signals={data?.signals} watchlist={data?.watchlist} />
+          </section>
+          <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
+            <DayBotLogs logs={data?.logs} />
+            <DayBotControls running={data?.running} metrics={data?.metrics} onRefresh={refresh} />
+          </section>
+        </>
+      )}
 
-      <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
-        <DayBotLogs logs={data?.logs} />
-        <DayBotControls running={data?.running} metrics={data?.metrics} onRefresh={refresh} />
-      </section>
+      {tab === "suggestions" && <SuggestionsPanel />}
+      {tab === "options" && <OptionsSuggestions />}
+      {tab === "mypositions" && <MyPositions />}
     </main>
   );
 }

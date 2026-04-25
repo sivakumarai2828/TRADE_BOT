@@ -846,3 +846,82 @@ def settings():
             "shield_active": day_state.metrics.shield_active,
             "profit_pool": day_state.metrics.profit_pool,
         })
+
+
+@daybot_bp.get("/suggestions")
+def suggestions():
+    """AI-generated stock suggestions from evening analysis (entry zone, SL, target per symbol)."""
+    with day_state._lock:
+        approved = day_state.premarket_approved or day_state.evening_approved or []
+        data = []
+        for sym in approved:
+            entry_zone = day_state.evening_entry_zones.get(sym, [])
+            data.append({
+                "symbol": sym,
+                "direction": day_state.evening_direction.get(sym, "BUY"),
+                "entry_low": entry_zone[0] if len(entry_zone) == 2 else None,
+                "entry_high": entry_zone[1] if len(entry_zone) == 2 else None,
+                "stop": day_state.evening_stop_levels.get(sym),
+                "target": day_state.evening_targets.get(sym),
+                "note": day_state.evening_notes.get(sym, ""),
+                "regime": day_state.evening_regime,
+            })
+    return jsonify({"suggestions": data, "regime": day_state.evening_regime})
+
+
+@daybot_bp.get("/options-suggestions")
+def options_suggestions():
+    """Latest options picks from the 9:15 AM AI options picker."""
+    with day_state._lock:
+        return jsonify({
+            "picks": day_state.options_picks,
+            "date": day_state.options_picks_date,
+        })
+
+
+@daybot_bp.get("/user-positions")
+def user_positions_get():
+    """All open user-logged manual positions (Robinhood stocks + options)."""
+    from user_positions import get_open_positions
+    positions = get_open_positions()
+    return jsonify({"positions": positions})
+
+
+@daybot_bp.post("/user-positions")
+def user_positions_post():
+    """Log a new user manual position."""
+    from flask import request
+    from user_positions import save_user_position
+    body = request.get_json(silent=True) or {}
+    required = ["symbol", "side", "asset_type", "qty", "entry_price"]
+    missing = [f for f in required if not body.get(f)]
+    if missing:
+        return jsonify({"ok": False, "message": f"Missing fields: {missing}"}), 400
+    row = save_user_position(
+        symbol=body["symbol"],
+        side=body["side"],
+        asset_type=body["asset_type"],
+        qty=float(body["qty"]),
+        entry_price=float(body["entry_price"]),
+        stop_price=body.get("stop_price"),
+        target_price=body.get("target_price"),
+        notes=body.get("notes", ""),
+        option_type=body.get("option_type"),
+        strike=body.get("strike"),
+        expiry=body.get("expiry"),
+        underlying_stop=body.get("underlying_stop"),
+    )
+    return jsonify({"ok": True, "position": row})
+
+
+@daybot_bp.post("/user-positions/<int:position_id>/close")
+def user_positions_close(position_id: int):
+    """Close a user position by ID."""
+    from flask import request
+    from user_positions import close_user_position
+    body = request.get_json(silent=True) or {}
+    exit_price = body.get("exit_price")
+    if not exit_price:
+        return jsonify({"ok": False, "message": "exit_price required"}), 400
+    ok = close_user_position(position_id, float(exit_price), reason=body.get("reason", "manual"))
+    return jsonify({"ok": ok})

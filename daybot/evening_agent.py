@@ -359,8 +359,15 @@ Output ONLY a JSON object in this exact format — no markdown, no explanation:
   "skip": ["TSLA", "BABA"],
   "risk_flags": {"TSLA": "earnings tomorrow", "BABA": "negative news"},
   "entry_zones": {"NVDA": [480.0, 495.0], "MSFT": [415.0, 422.0]},
+  "stop_levels": {"NVDA": 476.0, "MSFT": 412.0},
+  "targets": {"NVDA": 508.0, "MSFT": 430.0},
+  "direction": {"NVDA": "BUY", "MSFT": "BUY"},
   "notes": {"NVDA": "strong momentum, RSI cooling to 42, volume 1.4x avg"}
 }
+
+stop_levels: 1-1.5% below entry zone low (intraday stop).
+targets: 2.5-4% above entry zone high (intraday target).
+direction: BUY for long setups, SELL for short/avoid setups.
 """
 
 
@@ -487,6 +494,9 @@ def run_evening_analysis(
         day_state.evening_regime = result.get("regime", "unknown")
         day_state.evening_notes = result.get("notes", {})
         day_state.evening_analysis_date = trade_date
+        day_state.evening_stop_levels = result.get("stop_levels", {})
+        day_state.evening_targets = result.get("targets", {})
+        day_state.evening_direction = result.get("direction", {})
 
     from .evening_db import save_evening_analysis
     save_evening_analysis(trade_date, result)
@@ -525,7 +535,26 @@ def _notify_evening_summary(trade_date: str, result: dict) -> None:
         if risk_flags:
             for sym, flag in list(risk_flags.items())[:3]:
                 lines.append(f"⚠️ {sym}: {flag}")
-        if notes:
+        entry_zones = result.get("entry_zones", {})
+        stop_levels = result.get("stop_levels", {})
+        targets = result.get("targets", {})
+        if approved:
+            lines.append("━━━━━━━━━━━━━━━")
+            lines.append("📋 <b>Tomorrow's Picks</b>")
+            for sym in approved[:6]:
+                ez = entry_zones.get(sym, [])
+                sl = stop_levels.get(sym)
+                tp = targets.get(sym)
+                note = notes.get(sym, "")
+                entry_str = f"${ez[0]:.2f}–${ez[1]:.2f}" if len(ez) == 2 else "—"
+                sl_str = f"${sl:.2f}" if sl else "—"
+                tp_str = f"${tp:.2f}" if tp else "—"
+                lines.append(
+                    f"  <b>{sym}</b> | Entry: {entry_str} | SL: {sl_str} | Target: {tp_str}"
+                )
+                if note:
+                    lines.append(f"  ↳ {note}")
+        elif notes:
             lines.append("━━━━━━━━━━━━━━━")
             for sym, note in list(notes.items())[:4]:
                 lines.append(f"• {sym}: {note}")

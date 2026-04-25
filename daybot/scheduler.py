@@ -69,6 +69,19 @@ def job_premarket() -> None:
             alpaca_api_key=alpaca_key,
             alpaca_secret_key=alpaca_secret,
         )
+        # Send morning briefing with today's stock suggestions
+        from .state import day_state
+        from telegram_notify import notify_morning_briefing
+        approved = day_state.premarket_approved or day_state.evening_approved
+        if approved:
+            notify_morning_briefing(
+                approved=approved,
+                entry_zones=day_state.evening_entry_zones,
+                stop_levels=day_state.evening_stop_levels,
+                targets=day_state.evening_targets,
+                notes=day_state.evening_notes,
+                regime=day_state.evening_regime,
+            )
     except Exception as exc:
         logging.exception("Scheduler: pre-market analysis failed: %s", exc)
 
@@ -167,6 +180,54 @@ def job_daily_reset() -> None:
         logging.exception("Scheduler: daily reset failed: %s", exc)
 
 
+def job_options_picker() -> None:
+    """9:15 AM ET Mon–Fri — AI options suggestions from today's confirmed watchlist."""
+    try:
+        import os
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not anthropic_key:
+            logging.warning("Scheduler: options picker skipped — ANTHROPIC_API_KEY not set")
+            return
+        from .options_picker import run_options_analysis
+        picks = run_options_analysis(anthropic_api_key=anthropic_key)
+        logging.info("Scheduler: options picker complete — %d picks", len(picks))
+    except Exception as exc:
+        logging.exception("Scheduler: options picker failed: %s", exc)
+
+
+def job_stop_loss_monitor() -> None:
+    """Every 5 min during market hours — check user positions against live prices."""
+    try:
+        import os
+        from datetime import datetime, timezone
+        # Only run 9:30 AM – 4:00 PM ET on weekdays
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        if now_et.weekday() >= 5:
+            return
+        if not (9 * 60 + 30 <= now_et.hour * 60 + now_et.minute <= 16 * 60):
+            return
+        alpaca_key = os.getenv("EXCHANGE_API_KEY", "")
+        alpaca_secret = os.getenv("EXCHANGE_API_SECRET", "")
+        if not alpaca_key:
+            return
+        from user_positions import check_stop_losses
+        check_stop_losses(alpaca_key, alpaca_secret)
+    except Exception as exc:
+        logging.exception("Scheduler: stop loss monitor failed: %s", exc)
+
+
+def job_market_close_reminder() -> None:
+    """3:30 PM ET Mon–Fri — remind user to review open positions before close."""
+    try:
+        from user_positions import get_open_positions
+        from telegram_notify import notify_market_close_reminder
+        positions = get_open_positions()
+        notify_market_close_reminder(positions)
+    except Exception as exc:
+        logging.exception("Scheduler: market close reminder failed: %s", exc)
+
+
 def job_weekly_report() -> None:
     """Sunday 8:00 AM ET — send weekly performance summary to Telegram."""
     try:
@@ -250,6 +311,21 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         job_autostop, CronTrigger(day_of_week="mon-fri", hour=15, minute=55, timezone=tz),
         id="autostop", name="Auto-stop bot",
+    )
+    # Options picker: 9:15 AM ET, Mon–Fri (after pre-market confirms watchlist)
+    _scheduler.add_job(
+        job_options_picker, CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=tz),
+        id="options_picker", name="Options suggestions picker",
+    )
+    # Stop loss monitor: every 5 min (self-guards against non-market hours)
+    _scheduler.add_job(
+        job_stop_loss_monitor, CronTrigger(minute="*/5"),
+        id="stop_loss_monitor", name="User position stop loss monitor",
+    )
+    # Market close reminder: 3:30 PM ET, Mon–Fri
+    _scheduler.add_job(
+        job_market_close_reminder, CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=tz),
+        id="market_close_reminder", name="Market close reminder",
     )
     # Daily reset: midnight UTC
     _scheduler.add_job(

@@ -88,3 +88,31 @@ export const fetchDayLogs = () => request("/daybot/logs");
 /** Update day bot settings (trade_mode, position_size_pct, shield thresholds). */
 export const updateDaySettings = (settings) =>
   request("/daybot/settings", { method: "POST", body: JSON.stringify(settings) });
+
+/** AI stock suggestions from evening analysis (entry zone, SL, target). */
+export const fetchSuggestions = () => request("/daybot/suggestions");
+
+/** AI options picks from 9:15 AM morning run. */
+export const fetchOptionsSuggestions = () => request("/daybot/options-suggestions");
+
+/** Open user-logged manual positions (Robinhood stocks + options). */
+export const fetchUserPositions = () => request("/daybot/user-positions");
+
+/**
+ * Log a new user manual position.
+ * @param {object} position - {symbol, side, asset_type, qty, entry_price, stop_price?, target_price?, notes?, option_type?, strike?, expiry?, underlying_stop?}
+ */
+export const addUserPosition = (position) =>
+  request("/daybot/user-positions", { method: "POST", body: JSON.stringify(position) });
+
+/**
+ * Close a user position.
+ * @param {number} id - position ID
+ * @param {number} exitPrice
+ * @param {string} [reason]
+ */
+export const closeUserPosition = (id, exitPrice, reason = "manual") =>
+  request(`/daybot/user-positions/${id}/close`, {
+    method: "POST",
+    body: JSON.stringify({ exit_price: exitPrice, reason }),
+  });
