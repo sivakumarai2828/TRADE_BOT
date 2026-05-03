@@ -52,11 +52,9 @@ _CLOSE_ONLY_END = dtime(15, 50)
 
 
 def _et_now() -> dtime:
-    """Current time in US/Eastern (approximated as UTC-4 for simplicity)."""
-    from datetime import timedelta
-    utc = datetime.now(timezone.utc)
-    et = utc - timedelta(hours=4)  # EDT; adjust to -5 for EST in winter
-    return et.time()
+    """Current time in US/Eastern with proper DST handling."""
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/New_York")).time()
 
 
 def _in_trading_window() -> bool:
@@ -467,7 +465,11 @@ def _run_cycle() -> None:
 
     # --- Per-symbol cycle (only pre-market approved stocks if list is available) ---
     approved = day_state.premarket_approved
-    universe = [s for s in day_state.watchlist if not approved or s in approved]
+    if approved:
+        filtered = [s for s in day_state.watchlist if s in approved]
+        universe = filtered if filtered else list(day_state.watchlist)
+    else:
+        universe = list(day_state.watchlist)
     for i, symbol in enumerate(universe):
         if i > 0:
             import time as _time; _time.sleep(2)  # stagger fetches to reduce I/O on e2-micro
@@ -545,9 +547,11 @@ def _run_cycle() -> None:
                 continue
 
             vwap = data.get("vwap", 0.0)
-            if vwap > 0 and sig.price < vwap:
-                day_state.add_log("Skipped", f"{symbol}: price ${sig.price:.2f} below VWAP ${vwap:.2f} — bearish", "neutral")
-                continue
+            if vwap > 0:
+                vwap_pct = (sig.price - vwap) / vwap * 100
+                if vwap_pct < -1.5:
+                    day_state.add_log("Skipped", f"{symbol}: price {vwap_pct:.1f}% below VWAP ${vwap:.2f} — too bearish", "neutral")
+                    continue
 
             ok, reason = _risk.can_trade(symbol, portfolio_value)
             if not ok:
@@ -867,6 +871,106 @@ def suggestions():
                 "regime": day_state.evening_regime,
             })
     return jsonify({"suggestions": data, "regime": day_state.evening_regime})
+
+
+@daybot_bp.get("/india-suggestions")
+def india_suggestions():
+    """Indian NSE stock suggestions from evening analysis."""
+    with day_state._lock:
+        data = []
+        for sym in day_state.india_approved:
+            entry_zone = day_state.india_entry_zones.get(sym, [])
+            data.append({
+                "symbol": sym,
+                "display": sym.replace(".NS", ""),
+                "direction": day_state.india_direction.get(sym, "BUY"),
+                "entry_low": entry_zone[0] if len(entry_zone) == 2 else None,
+                "entry_high": entry_zone[1] if len(entry_zone) == 2 else None,
+                "stop": day_state.india_stop_levels.get(sym),
+                "target": day_state.india_targets.get(sym),
+                "note": day_state.india_notes.get(sym, ""),
+                "regime": day_state.india_regime,
+                "analysis_date": day_state.india_analysis_date,
+            })
+    return jsonify({
+        "suggestions": data,
+        "regime": day_state.india_regime,
+        "analysis_date": day_state.india_analysis_date,
+    })
+
+
+@daybot_bp.post("/debug/seed-watchlist")
+def debug_seed_watchlist():
+    """DEV ONLY — seed state with test watchlist so options picker can run."""
+    symbols = ["AAPL", "NVDA", "SPY", "MSFT", "AMD"]
+    with day_state._lock:
+        day_state.evening_approved = symbols
+        day_state.premarket_approved = symbols
+        day_state.evening_regime = "trending_up"
+        day_state.evening_direction = {s: "BUY" for s in symbols}
+        day_state.evening_entry_zones = {
+            "AAPL": [210, 215], "NVDA": [130, 135], "SPY": [550, 555],
+            "MSFT": [420, 425], "AMD": [160, 165],
+        }
+        day_state.evening_notes = {
+            "AAPL": "momentum setup", "NVDA": "AI tailwind",
+            "SPY": "market uptrend", "MSFT": "cloud growth", "AMD": "data center demand",
+        }
+    return jsonify({"ok": True, "seeded": symbols})
+
+
+@daybot_bp.post("/run-options-picker")
+def run_options_picker_adhoc():
+    """Trigger options picker on demand (runs in background thread)."""
+    import os, threading
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not anthropic_key:
+        return jsonify({"ok": False, "message": "ANTHROPIC_API_KEY not set"}), 400
+
+    def _run():
+        from .options_picker import run_options_analysis
+        run_options_analysis(anthropic_api_key=anthropic_key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "Options analysis started — results ready in ~30 seconds"})
+
+
+@daybot_bp.post("/run-india-analysis")
+def run_india_analysis_adhoc():
+    """Trigger India NSE evening analysis on demand (runs in background thread)."""
+    import os, threading
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not anthropic_key:
+        return jsonify({"ok": False, "message": "ANTHROPIC_API_KEY not set"}), 400
+
+    def _run():
+        from .india_agent import run_india_analysis
+        run_india_analysis(anthropic_api_key=anthropic_key)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "India analysis started — results ready in ~30 seconds"})
+
+
+@daybot_bp.post("/run-evening-analysis")
+def run_evening_analysis_adhoc():
+    """Trigger US evening analysis on demand (runs in background thread)."""
+    import os, threading
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    alpaca_key = os.getenv("EXCHANGE_API_KEY", "")
+    alpaca_secret = os.getenv("EXCHANGE_API_SECRET", "")
+    if not anthropic_key or not alpaca_key:
+        return jsonify({"ok": False, "message": "API keys not set"}), 400
+
+    def _run():
+        from .evening_agent import run_evening_analysis
+        run_evening_analysis(
+            anthropic_api_key=anthropic_key,
+            alpaca_api_key=alpaca_key,
+            alpaca_secret_key=alpaca_secret,
+        )
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "US evening analysis started — results ready in ~60 seconds"})
 
 
 @daybot_bp.get("/options-suggestions")

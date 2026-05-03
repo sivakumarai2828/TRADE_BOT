@@ -217,6 +217,67 @@ def job_stop_loss_monitor() -> None:
         logging.exception("Scheduler: stop loss monitor failed: %s", exc)
 
 
+def job_india_evening_analysis() -> None:
+    """4:30 PM IST (11:00 AM UTC) Mon–Fri — Claude evening analysis for NSE next session."""
+    try:
+        import os
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not anthropic_key:
+            logging.warning("Scheduler: India analysis skipped — ANTHROPIC_API_KEY not set")
+            return
+        from .india_agent import run_india_analysis
+        run_india_analysis(anthropic_api_key=anthropic_key)
+        logging.info("Scheduler: India evening analysis complete")
+    except Exception as exc:
+        logging.exception("Scheduler: India evening analysis failed: %s", exc)
+
+
+def job_india_premarket_briefing() -> None:
+    """8:30 AM IST (3:00 AM UTC) Mon–Fri — send India pre-market briefing to Telegram."""
+    try:
+        from .state import day_state
+        from telegram_notify import notify_india_suggestions
+        approved = day_state.india_approved
+        if not approved:
+            return
+        notify_india_suggestions(
+            approved=approved,
+            entry_zones=day_state.india_entry_zones,
+            stop_levels=day_state.india_stop_levels,
+            targets=day_state.india_targets,
+            notes=day_state.india_notes,
+            regime=day_state.india_regime,
+            nifty_level=0,
+            nifty_trend="",
+        )
+        logging.info("Scheduler: India pre-market briefing sent")
+    except Exception as exc:
+        logging.exception("Scheduler: India pre-market briefing failed: %s", exc)
+
+
+def job_india_stop_monitor() -> None:
+    """Every 5 min during NSE hours (3:45–10:00 AM UTC) — check India positions."""
+    try:
+        import os
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # NSE market: 9:15 AM–3:30 PM IST = 3:45–10:00 AM UTC
+        now_utc = datetime.now(ZoneInfo("UTC"))
+        if now_utc.weekday() >= 5:
+            return
+        utc_minutes = now_utc.hour * 60 + now_utc.minute
+        if not (3 * 60 + 45 <= utc_minutes <= 10 * 60):
+            return
+        alpaca_key = os.getenv("EXCHANGE_API_KEY", "")
+        alpaca_secret = os.getenv("EXCHANGE_API_SECRET", "")
+        from user_positions import check_stop_losses
+        # Pass empty Alpaca keys — india positions use yfinance, US ones skip if no key
+        check_stop_losses(alpaca_key, alpaca_secret)
+        logging.debug("Scheduler: India stop monitor ran")
+    except Exception as exc:
+        logging.exception("Scheduler: India stop monitor failed: %s", exc)
+
+
 def job_market_close_reminder() -> None:
     """3:30 PM ET Mon–Fri — remind user to review open positions before close."""
     try:
@@ -336,6 +397,21 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         job_weekly_report, CronTrigger(day_of_week="sun", hour=8, minute=0, timezone=tz),
         id="weekly_report", name="Weekly report",
+    )
+    # India evening analysis: 4:30 PM IST = 11:00 AM UTC, Mon–Fri
+    _scheduler.add_job(
+        job_india_evening_analysis, CronTrigger(day_of_week="mon-fri", hour=11, minute=0, timezone="UTC"),
+        id="india_evening_analysis", name="India NSE evening analysis",
+    )
+    # India pre-market briefing: 8:30 AM IST = 3:00 AM UTC, Mon–Fri
+    _scheduler.add_job(
+        job_india_premarket_briefing, CronTrigger(day_of_week="mon-fri", hour=3, minute=0, timezone="UTC"),
+        id="india_premarket_briefing", name="India pre-market briefing",
+    )
+    # India stop monitor: every 5 min during NSE hours (self-guards against non-market hours)
+    _scheduler.add_job(
+        job_india_stop_monitor, CronTrigger(minute="*/5"),
+        id="india_stop_monitor", name="India position stop/target monitor",
     )
 
     _scheduler.start()

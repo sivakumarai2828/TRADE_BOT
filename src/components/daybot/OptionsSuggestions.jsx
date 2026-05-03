@@ -1,16 +1,34 @@
 import { useEffect, useState } from "react";
-import { fetchOptionsSuggestions } from "../../api.js";
+import { fetchOptionsSuggestions, runOptionsPicker } from "../../api.js";
 
 export default function OptionsSuggestions() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState("");
 
-  useEffect(() => {
+  const refresh = () => {
+    setLoading(true);
     fetchOptionsSuggestions()
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const handleRunNow = async () => {
+    setRunning(true);
+    setRunMsg("");
+    try {
+      const res = await runOptionsPicker();
+      setRunMsg(res.message ?? "Started…");
+      setTimeout(() => { refresh(); setRunning(false); }, 35000);
+    } catch (e) {
+      setRunMsg("Failed: " + e.message);
+      setRunning(false);
+    }
+  };
 
   const picks = data?.picks ?? [];
   const date = data?.date ?? "";
@@ -27,12 +45,29 @@ export default function OptionsSuggestions() {
     <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">AI Options Suggestions</h3>
-        {date && (
-          <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
-            {date}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {date && (
+            <span className="rounded-full border border-neutral-700 px-2 py-0.5 text-xs text-neutral-400">
+              {date}
+            </span>
+          )}
+          <button
+            onClick={handleRunNow}
+            disabled={running}
+            className="rounded-lg border border-indigo-700 bg-indigo-900/40 px-3 py-1 text-xs font-medium text-indigo-300 hover:bg-indigo-800/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {running ? "Running…" : "▶ Run Now"}
+          </button>
+          <button
+            onClick={refresh}
+            disabled={loading}
+            className="rounded-lg border border-neutral-700 px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-800 disabled:opacity-50 transition-colors"
+          >
+            ↻
+          </button>
+        </div>
       </div>
+      {runMsg && <p className="mb-2 text-xs text-indigo-400">{runMsg}</p>}
 
       {picks.length === 0 ? (
         <p className="text-xs text-neutral-500">

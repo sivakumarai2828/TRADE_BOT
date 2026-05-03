@@ -44,24 +44,25 @@ def generate_signal(
                                 trend, "Price broke below EMA — trend reversal")
 
     # --- HOLD conditions ---
-    if 48.0 <= rsi <= 52.0:
+    if 49.0 <= rsi <= 51.0:
         return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
-                            trend, f"RSI {rsi:.1f} neutral zone (48–52) — no edge")
+                            trend, f"RSI {rsi:.1f} neutral zone (49–51) — no edge")
     if vol_data_available and not vol_rising and not has_position:
         return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
                             trend, "Volume below average — no conviction")
 
     # --- BUY conditions ---
     # Setup A: Pullback dip — RSI recovering from oversold, price near EMA
+    # Allow slight EMA undercut (-0.5%) on deep oversold (RSI<38) for bounce entries
+    ema_low = -0.5 if rsi < 38.0 else 0.0
     if (
-        price > ema
-        and 0.0 <= pct_from_ema <= 3.0
-        and 30.0 <= rsi <= 56.0
+        ema_low <= pct_from_ema <= 3.0
+        and 30.0 <= rsi <= 62.0
         and not has_position
     ):
         return SignalResult(
             symbol, "BUY", price, ema, rsi, volume, avg_volume, trend,
-            f"RSI {rsi:.1f} pullback dip, {pct_from_ema:.1f}% above EMA",
+            f"RSI {rsi:.1f} pullback dip, {pct_from_ema:.1f}% from EMA",
         )
 
     # Setup B: Momentum breakout — strong uptrend, RSI rising

@@ -117,39 +117,67 @@ def get_all_positions(limit: int = 50) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def check_stop_losses(alpaca_api_key: str, alpaca_secret_key: str) -> None:
-    """Fetch live prices for open stock positions and alert if stop breached."""
+    """Fetch live prices for open positions and alert on stop breach or target hit."""
     positions = get_open_positions()
     if not positions:
         return
 
-    stock_positions = [p for p in positions if p.get("asset_type") == "stock" and p.get("stop_price")]
+    stock_positions = [p for p in positions if p.get("asset_type") == "stock"
+                       and (p.get("stop_price") or p.get("target_price"))]
     option_positions = [p for p in positions if p.get("asset_type") == "option" and p.get("underlying_stop")]
     monitored = stock_positions + option_positions
     if not monitored:
         return
 
-    symbols = list({p["symbol"] for p in monitored})
-    prices = _fetch_prices(symbols, alpaca_api_key, alpaca_secret_key)
+    # Split US vs India symbols (India ends in .NS)
+    india_syms = list({p["symbol"] for p in monitored if p["symbol"].endswith(".NS")})
+    us_syms = list({p["symbol"] for p in monitored if not p["symbol"].endswith(".NS")})
 
-    from telegram_notify import notify_user_stop_loss
+    prices: dict[str, float] = {}
+    if us_syms:
+        prices.update(_fetch_prices(us_syms, alpaca_api_key, alpaca_secret_key))
+    if india_syms:
+        prices.update(_fetch_india_prices(india_syms))
+
+    from telegram_notify import notify_user_stop_loss, notify_user_target_hit
     for pos in monitored:
         sym = pos["symbol"]
         price = prices.get(sym)
         if price is None:
             continue
+        market = "IN" if sym.endswith(".NS") else "US"
 
         if pos.get("asset_type") == "stock":
-            stop = pos["stop_price"]
+            stop = pos.get("stop_price")
+            target = pos.get("target_price")
             side = pos.get("side", "BUY")
-            breached = (side == "BUY" and price <= stop) or (side == "SELL" and price >= stop)
-            if breached:
-                notify_user_stop_loss(
-                    symbol=sym,
-                    asset_type="stock",
-                    current_price=price,
-                    stop_price=stop,
-                    entry_price=pos.get("entry_price", 0),
-                )
+
+            # Stop loss check
+            if stop:
+                breached = (side == "BUY" and price <= stop) or (side == "SELL" and price >= stop)
+                if breached:
+                    notify_user_stop_loss(
+                        symbol=sym,
+                        asset_type="stock",
+                        current_price=price,
+                        stop_price=stop,
+                        entry_price=pos.get("entry_price", 0),
+                        market=market,
+                    )
+
+            # Target hit check
+            if target:
+                hit = (side == "BUY" and price >= target) or (side == "SELL" and price <= target)
+                if hit:
+                    notify_user_target_hit(
+                        symbol=sym,
+                        asset_type="stock",
+                        current_price=price,
+                        target_price=target,
+                        entry_price=pos.get("entry_price", 0),
+                        market=market,
+                    )
+
         elif pos.get("asset_type") == "option":
             underlying_stop = pos["underlying_stop"]
             option_type = pos.get("option_type", "call")
@@ -178,3 +206,21 @@ def _fetch_prices(symbols: list[str], api_key: str, secret_key: str) -> dict[str
     except Exception as exc:
         logging.warning("user_positions price fetch failed: %s", exc)
         return {}
+
+
+def _fetch_india_prices(symbols: list[str]) -> dict[str, float]:
+    """Fetch latest prices for NSE stocks via yfinance (15-min delayed)."""
+    result: dict[str, float] = {}
+    try:
+        import yfinance as yf
+        for sym in symbols:
+            try:
+                ticker = yf.Ticker(sym)
+                price = ticker.fast_info.last_price
+                if price and price > 0:
+                    result[sym] = float(price)
+            except Exception as exc:
+                logging.warning("India price fetch failed for %s: %s", sym, exc)
+    except ImportError:
+        logging.warning("yfinance not installed — cannot fetch India prices")
+    return result

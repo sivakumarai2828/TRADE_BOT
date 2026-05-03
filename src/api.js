@@ -95,6 +95,18 @@ export const fetchSuggestions = () => request("/daybot/suggestions");
 /** AI options picks from 9:15 AM morning run. */
 export const fetchOptionsSuggestions = () => request("/daybot/options-suggestions");
 
+/** Indian NSE stock suggestions from 4:30 PM IST evening analysis. */
+export const fetchIndiaSuggestions = () => request("/daybot/india-suggestions");
+
+/** Trigger India analysis on demand. */
+export const runIndiaAnalysis = () => request("/daybot/run-india-analysis", { method: "POST" });
+
+/** Trigger US evening analysis on demand. */
+export const runEveningAnalysis = () => request("/daybot/run-evening-analysis", { method: "POST" });
+
+/** Trigger options picker on demand. */
+export const runOptionsPicker = () => request("/daybot/run-options-picker", { method: "POST" });
+
 /** Open user-logged manual positions (Robinhood stocks + options). */
 export const fetchUserPositions = () => request("/daybot/user-positions");
 

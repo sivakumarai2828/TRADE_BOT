@@ -113,19 +113,10 @@ Rules:
 - Target: 80-100% gain on the option (not 2x underlying).
 - Underlying stop: the stock/ETF price level where the thesis is broken.
 
-Respond ONLY with JSON (or null if no good setup):
-{{
-  "symbol": "{symbol}",
-  "option_type": "call",
-  "strike": 880.0,
-  "expiry": "2026-05-02",
-  "entry_price": 8.50,
-  "target_price": 16.00,
-  "underlying_stop": 865.0,
-  "open_interest": 2840,
-  "iv": 0.42,
-  "reason": "one sentence"
-}}"""
+Respond ONLY with a raw JSON object — no markdown, no code fences, no explanation. If no good setup exists, respond with exactly: null
+
+Example output:
+{{"symbol":"{symbol}","option_type":"call","strike":880.0,"expiry":"2026-05-02","entry_price":8.50,"target_price":16.00,"underlying_stop":865.0,"open_interest":2840,"iv":0.42,"reason":"one sentence"}}"""
 
     try:
         resp = client.messages.create(
@@ -134,7 +125,12 @@ Respond ONLY with JSON (or null if no good setup):
             messages=[{"role": "user", "content": prompt}],
         )
         text = resp.content[0].text.strip()
-        if text.lower() == "null" or not text.startswith("{"):
+        # Strip markdown fences robustly
+        if "```" in text:
+            import re
+            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+            text = m.group(1).strip() if m else re.sub(r"```[a-z]*", "", text).strip()
+        if not text or text.lower() in ("null", "skip") or "{" not in text:
             logging.info("Options picker: Claude skipped %s — %s", symbol, text[:80])
             return None
         pick = json.loads(text)

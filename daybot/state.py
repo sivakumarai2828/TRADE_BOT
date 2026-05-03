@@ -91,6 +91,16 @@ class DayBotState:
         self.options_picks: list[dict] = []
         self.options_picks_date: str = ""
 
+        # India (NSE) evening analysis results (set at 4:30 PM IST, used next morning)
+        self.india_approved: list[str] = []
+        self.india_entry_zones: dict[str, list[float]] = {}
+        self.india_stop_levels: dict[str, float] = {}
+        self.india_targets: dict[str, float] = {}
+        self.india_notes: dict[str, str] = {}
+        self.india_direction: dict[str, str] = {}
+        self.india_regime: str = ""
+        self.india_analysis_date: str = ""
+
         # Shield thresholds (configurable at runtime via /daybot/settings)
         self.shield_loss_streak: int = 2      # activate after N consecutive losses
         self.shield_recovery_wins: int = 2    # deactivate after N consecutive wins

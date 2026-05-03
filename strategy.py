@@ -65,7 +65,9 @@ def _get_htf_trend(exchange, symbol: str) -> str:
 
         if price_1h > sma_1h and rsi_1h > 45:
             trend = "up"
-        elif price_1h < sma_1h and rsi_1h < 55:
+        elif price_1h < sma_1h and rsi_1h < 42:
+            # Only "down" when genuinely bearish — RSI<42 means actual selling pressure.
+            # rsi<55 was too broad (fires in neutral market, blocks all bounces).
             trend = "down"
         else:
             trend = "neutral"
@@ -192,6 +194,11 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
 
     # Setup A: Dip buy — RSI oversold with price near SMA support
     if rsi < oversold and price > sma * 0.99 and vol_confirmed:
+        return "BUY"
+
+    # Setup C: Recovery — RSI emerging from oversold zone (38–50), price holding near SMA.
+    # Fills the dead zone between Setup A and B. Classic bounce-recovery entry.
+    if oversold <= rsi <= 50.0 and price > sma * 0.98:
         return "BUY"
 
     # Setup B: Momentum breakout — RSI rising in bullish zone, price above SMA.

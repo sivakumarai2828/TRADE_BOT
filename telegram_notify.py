@@ -231,23 +231,92 @@ def notify_user_stop_loss(
     stop_price: float,
     entry_price: float,
     option_detail: str = "",
+    market: str = "US",
 ) -> None:
+    currency = "₹" if market == "IN" else "$"
     pnl_pct = (current_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+    display = symbol.replace(".NS", "") if market == "IN" else symbol
     if asset_type == "option":
         _send(
-            f"🚨 <b>OPTIONS STOP ALERT — {symbol}</b>\n"
-            f"Underlying at <b>${current_price:.2f}</b> — below your stop ${stop_price:.2f}\n"
+            f"🚨 <b>OPTIONS STOP ALERT — {display}</b>\n"
+            f"Underlying at <b>{currency}{current_price:.2f}</b> — below your stop {currency}{stop_price:.2f}\n"
             f"Position: {option_detail}\n"
-            f"⚠️ Consider exiting on Robinhood now."
+            f"⚠️ Consider exiting now."
         )
     else:
         icon = "📉" if pnl_pct < 0 else "📈"
         _send(
-            f"🚨 <b>STOP LOSS ALERT — {symbol}</b>\n"
-            f"{icon} Price: <b>${current_price:.2f}</b> | Stop: ${stop_price:.2f}\n"
-            f"Entry: ${entry_price:.2f} | P&L: {pnl_pct:+.1f}%\n"
-            f"⚠️ Consider exiting on Robinhood now."
+            f"🚨 <b>STOP LOSS ALERT — {display}</b>\n"
+            f"{icon} Price: <b>{currency}{current_price:.2f}</b> | Stop: {currency}{stop_price:.2f}\n"
+            f"Entry: {currency}{entry_price:.2f} | P&L: {pnl_pct:+.1f}%\n"
+            f"⚠️ Consider exiting now."
         )
+
+
+def notify_user_target_hit(
+    symbol: str,
+    asset_type: str,
+    current_price: float,
+    target_price: float,
+    entry_price: float,
+    market: str = "US",
+    option_detail: str = "",
+) -> None:
+    currency = "₹" if market == "IN" else "$"
+    pnl_pct = (current_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+    if asset_type == "option":
+        _send(
+            f"🎯 <b>OPTIONS TARGET HIT — {symbol}</b>\n"
+            f"Underlying at <b>{currency}{current_price:.2f}</b> ≥ target {currency}{target_price:.2f}\n"
+            f"Position: {option_detail}\n"
+            f"✅ Consider taking profits on Robinhood now."
+        )
+    else:
+        _send(
+            f"🎯 <b>TARGET HIT — {symbol}</b>\n"
+            f"📈 Price: <b>{currency}{current_price:.2f}</b> | Target: {currency}{target_price:.2f}\n"
+            f"Entry: {currency}{entry_price:.2f} | Gain: <b>+{pnl_pct:.1f}%</b>\n"
+            f"✅ Consider taking profits now."
+        )
+
+
+def notify_india_suggestions(
+    approved: list,
+    entry_zones: dict,
+    stop_levels: dict,
+    targets: dict,
+    notes: dict,
+    regime: str,
+    nifty_level: float = 0,
+    nifty_trend: str = "",
+) -> None:
+    from datetime import datetime, timezone
+    trade_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    regime_icon = {"bullish": "📈", "bearish": "📉", "mixed": "↔️"}.get(regime, "❓")
+    nifty_str = f" {nifty_level:,.0f} ({nifty_trend})" if nifty_level else ""
+    lines = [
+        f"🌙 <b>India Evening Analysis — {trade_date}</b>",
+        f"━━━━━━━━━━━━━━━",
+        f"{regime_icon} Market: <b>{regime.title()}</b>{nifty_str and f' | Nifty{nifty_str}' or ''}",
+        f"✅ Picks ({len(approved)}): <b>{', '.join([s.replace('.NS','') for s in approved])}</b>",
+        "━━━━━━━━━━━━━━━",
+        "📋 <b>Tomorrow's NSE Picks</b>",
+    ]
+    for sym in approved[:6]:
+        ez = entry_zones.get(sym, [])
+        sl = stop_levels.get(sym)
+        tp = targets.get(sym)
+        note = notes.get(sym, "")
+        display = sym.replace(".NS", "")
+        entry_str = f"₹{ez[0]:.1f}–₹{ez[1]:.1f}" if len(ez) == 2 else "—"
+        sl_str = f"₹{sl:.1f}" if sl else "—"
+        tp_str = f"₹{tp:.1f}" if tp else "—"
+        lines.append(f"  <b>{display}</b> | Entry: {entry_str} | SL: {sl_str} | Target: {tp_str}")
+        if note:
+            lines.append(f"  ↳ {note}")
+    lines.append("━━━━━━━━━━━━━━━")
+    lines.append("⚠️ Trade manually on Zerodha/Groww. Prices via yfinance (15-min delayed).")
+    _send("\n".join(lines))
 
 
 def notify_market_close_reminder(open_positions: list) -> None:

@@ -8,6 +8,7 @@ import DayBotSignals from "./components/daybot/DayBotSignals.jsx";
 import MyPositions from "./components/daybot/MyPositions.jsx";
 import OptionsSuggestions from "./components/daybot/OptionsSuggestions.jsx";
 import SuggestionsPanel from "./components/daybot/SuggestionsPanel.jsx";
+import IndiaSuggestions from "./components/daybot/IndiaSuggestions.jsx";
 
 const POLL_MS = 5_000;
 
@@ -15,6 +16,7 @@ const TABS = [
   { id: "overview", label: "Overview" },
   { id: "suggestions", label: "Stock Picks" },
   { id: "options", label: "Options Picks" },
+  { id: "india", label: "🇮🇳 India Picks" },
   { id: "mypositions", label: "My Positions" },
 ];
 
@@ -98,6 +100,7 @@ export default function DayBotPage() {
 
       {tab === "suggestions" && <SuggestionsPanel />}
       {tab === "options" && <OptionsSuggestions />}
+      {tab === "india" && <IndiaSuggestions />}
       {tab === "mypositions" && <MyPositions />}
     </main>
   );
