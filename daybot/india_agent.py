@@ -211,6 +211,11 @@ Use bare symbol names (no .NS suffix) as JSON keys."""
             timeout=60,
         )
         raw = resp.content[0].text.strip()
+        # Strip markdown fences if Claude wrapped response
+        if "```" in raw:
+            import re
+            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+            raw = m.group(1).strip() if m else re.sub(r"```[a-z]*", "", raw).strip()
         result = json.loads(raw)
 
         # Re-add .NS suffix to approved list for internal use
