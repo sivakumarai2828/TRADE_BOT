@@ -1,0 +1,17 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/daybot/:path*", "destination": "http://104.155.150.69:8000/daybot/:path*" },
+    { "source": "/status",        "destination": "http://104.155.150.69:8000/status" },
+    { "source": "/start",         "destination": "http://104.155.150.69:8000/start" },
+    { "source": "/stop",          "destination": "http://104.155.150.69:8000/stop" },
+    { "source": "/signals",       "destination": "http://104.155.150.69:8000/signals" },
+    { "source": "/positions",     "destination": "http://104.155.150.69:8000/positions" },
+    { "source": "/logs",          "destination": "http://104.155.150.69:8000/logs" },
+    { "source": "/candles",       "destination": "http://104.155.150.69:8000/candles" },
+    { "source": "/settings",      "destination": "http://104.155.150.69:8000/settings" },
+    { "source": "/close",         "destination": "http://104.155.150.69:8000/close" },
+    { "source": "/health",        "destination": "http://104.155.150.69:8000/health" }
+  ]
+}
