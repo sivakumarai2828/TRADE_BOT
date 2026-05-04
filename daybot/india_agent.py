@@ -223,7 +223,7 @@ Use bare symbol names (no .NS suffix) as JSON keys."""
         result["approved"] = ns_approved
 
         # Re-key dicts with .NS suffix
-        for field in ("direction", "entry_zones", "stop_levels", "targets", "notes"):
+        for field in ("direction", "entry_zones", "stop_levels", "targets", "notes", "rank", "conviction"):
             old = result.get(field, {})
             result[field] = {(k + ".NS" if not k.endswith(".NS") else k): v for k, v in old.items()}
 
