@@ -197,11 +197,11 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   "stop_levels": {{"SYMBOL1": stop_price, "SYMBOL2": stop_price}},
   "targets": {{"SYMBOL1": target_price, "SYMBOL2": target_price}},
   "notes": {{"SYMBOL1": "reason in 10 words max", "SYMBOL2": "reason"}},
-  "rank": {{"SYMBOL1": 1, "SYMBOL2": 2}},
-  "conviction": {{"SYMBOL1": "high", "SYMBOL2": "medium"}}
+  "rank": {{"SYMBOL1": 1, "SYMBOL2": 2, "SYMBOL3": 3}},
+  "conviction": {{"SYMBOL1": "high", "SYMBOL2": "high", "SYMBOL3": "medium"}}
 }}
 
-rank: 1 = best setup today. conviction: high/medium/low based on RSI clarity, volume, trend alignment.
+IMPORTANT: rank and conviction are REQUIRED fields. rank 1 = strongest setup today (lowest rank = trade first). conviction must be exactly one of: high / medium / low.
 Use bare symbol names (no .NS suffix) as JSON keys."""
 
         resp = client.messages.create(
