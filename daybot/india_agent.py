@@ -124,6 +124,8 @@ def run_india_analysis(anthropic_api_key: str) -> dict:
         day_state.india_direction = result.get("direction", {})
         day_state.india_regime = result.get("regime", "")
         day_state.india_analysis_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day_state.india_rank = result.get("rank", {})
+        day_state.india_conviction = result.get("conviction", {})
 
     # Persist to Supabase
     _persist_india_results(result)
@@ -194,9 +196,12 @@ Respond ONLY with valid JSON, no markdown, no explanation:
   "entry_zones": {{"SYMBOL1": [low, high], "SYMBOL2": [low, high]}},
   "stop_levels": {{"SYMBOL1": stop_price, "SYMBOL2": stop_price}},
   "targets": {{"SYMBOL1": target_price, "SYMBOL2": target_price}},
-  "notes": {{"SYMBOL1": "reason in 10 words max", "SYMBOL2": "reason"}}
+  "notes": {{"SYMBOL1": "reason in 10 words max", "SYMBOL2": "reason"}},
+  "rank": {{"SYMBOL1": 1, "SYMBOL2": 2}},
+  "conviction": {{"SYMBOL1": "high", "SYMBOL2": "medium"}}
 }}
 
+rank: 1 = best setup today. conviction: high/medium/low based on RSI clarity, volume, trend alignment.
 Use bare symbol names (no .NS suffix) as JSON keys."""
 
         resp = client.messages.create(

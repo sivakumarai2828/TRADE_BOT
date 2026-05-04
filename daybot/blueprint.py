@@ -891,6 +891,8 @@ def india_suggestions():
                 "note": day_state.india_notes.get(sym, ""),
                 "regime": day_state.india_regime,
                 "analysis_date": day_state.india_analysis_date,
+                "rank": day_state.india_rank.get(sym, 99),
+                "conviction": day_state.india_conviction.get(sym, ""),
             })
     return jsonify({
         "suggestions": data,

@@ -100,6 +100,8 @@ class DayBotState:
         self.india_direction: dict[str, str] = {}
         self.india_regime: str = ""
         self.india_analysis_date: str = ""
+        self.india_rank: dict[str, int] = {}
+        self.india_conviction: dict[str, str] = {}
 
         # Shield thresholds (configurable at runtime via /daybot/settings)
         self.shield_loss_streak: int = 2      # activate after N consecutive losses

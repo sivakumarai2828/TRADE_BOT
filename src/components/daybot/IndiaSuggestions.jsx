@@ -33,7 +33,7 @@ export default function IndiaSuggestions() {
     }
   };
 
-  const suggestions = data?.suggestions ?? [];
+  const suggestions = [...(data?.suggestions ?? [])].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   const regime = data?.regime ?? "";
   const analysisDate = data?.analysis_date ?? "";
 
@@ -90,8 +90,10 @@ export default function IndiaSuggestions() {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-neutral-800 text-neutral-500">
+                <th className="pb-2 text-left font-normal w-6">#</th>
                 <th className="pb-2 text-left font-normal">Symbol</th>
                 <th className="pb-2 text-left font-normal">Dir</th>
+                <th className="pb-2 text-left font-normal">Conviction</th>
                 <th className="pb-2 text-right font-normal">Entry Zone (₹)</th>
                 <th className="pb-2 text-right font-normal">Stop (₹)</th>
                 <th className="pb-2 text-right font-normal">Target (₹)</th>
@@ -101,9 +103,19 @@ export default function IndiaSuggestions() {
             <tbody>
               {suggestions.map((s) => (
                 <tr key={s.symbol} className="border-b border-neutral-800/50 hover:bg-neutral-800/30">
+                  <td className="py-2 text-neutral-500 font-mono text-xs w-6">{s.rank ?? "—"}</td>
                   <td className="py-2 font-semibold text-white">{s.display || s.symbol}</td>
                   <td className={`py-2 font-semibold ${DIRECTION_COLOR[s.direction] ?? "text-neutral-300"}`}>
                     {s.direction}
+                  </td>
+                  <td className="py-2">
+                    <span className={`rounded px-1.5 py-0.5 text-xs ${
+                      s.conviction === "high" ? "bg-emerald-400/15 text-emerald-300" :
+                      s.conviction === "medium" ? "bg-yellow-400/15 text-yellow-300" :
+                      s.conviction === "low" ? "bg-neutral-700 text-neutral-400" : "text-neutral-600"
+                    }`}>
+                      {s.conviction || "—"}
+                    </span>
                   </td>
                   <td className="py-2 text-right text-neutral-300">
                     {s.entry_low != null && s.entry_high != null
