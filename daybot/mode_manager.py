@@ -3,9 +3,9 @@
 Switches between three modes every cycle based on live performance + SPY trend:
 
   SAFE       — default startup mode
-               position 15%, SL 1.0%, TP 2.5%, pullback setups only
+               position 10% ($100 on $1000), SL 1.5%, TP 3.0%, pullback setups only
   AGGRESSIVE — hot streak + bullish market
-               position 25%, SL 1.5%, TP 5.0%, breakouts allowed
+               position 15%, SL 1.5%, TP 5.0%, breakouts allowed
   SHIELD     — losing streak or daily loss too deep
                position 3%,  SL 1.0%, TP 2.0%, only A+ pullback setups
 
@@ -32,8 +32,8 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(0.15, 0.010, 0.025, False, "SAFE"),
-    "AGGRESSIVE": ModeParams(0.25, 0.015, 0.050, True,  "AGGRESSIVE"),
+    "SAFE":       ModeParams(0.10, 0.015, 0.030, False, "SAFE"),
+    "AGGRESSIVE": ModeParams(0.15, 0.015, 0.050, True,  "AGGRESSIVE"),
     "SHIELD":     ModeParams(0.03, 0.010, 0.020, False, "SHIELD"),
 }
 

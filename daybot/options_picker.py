@@ -88,8 +88,8 @@ def _analyze_symbol(
     if not chain_data:
         return None
 
-    import anthropic, json
-    client = anthropic.Anthropic(api_key=anthropic_api_key, timeout=25.0, max_retries=1)
+    import json
+    from .llm_router import deepseek_json
 
     prompt = f"""You are an options trading advisor. Analyze this setup and recommend one options trade.
 
@@ -119,25 +119,14 @@ Example output:
 {{"symbol":"{symbol}","option_type":"call","strike":880.0,"expiry":"2026-05-02","entry_price":8.50,"target_price":16.00,"underlying_stop":865.0,"open_interest":2840,"iv":0.42,"reason":"one sentence"}}"""
 
     try:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = resp.content[0].text.strip()
-        # Strip markdown fences robustly
-        if "```" in text:
-            import re
-            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-            text = m.group(1).strip() if m else re.sub(r"```[a-z]*", "", text).strip()
-        if not text or text.lower() in ("null", "skip") or "{" not in text:
-            logging.info("Options picker: Claude skipped %s — %s", symbol, text[:80])
+        pick = deepseek_json(prompt, max_tokens=300)
+        if not pick:
+            logging.info("Options picker: DeepSeek returned null for %s", symbol)
             return None
-        pick = json.loads(text)
         pick["asset_type"] = "option"
         return pick
     except Exception as exc:
-        logging.warning("Options Claude call failed for %s: %s", symbol, exc)
+        logging.warning("Options DeepSeek call failed for %s: %s", symbol, exc)
         return None
 
 

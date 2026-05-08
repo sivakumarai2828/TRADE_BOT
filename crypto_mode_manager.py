@@ -32,9 +32,9 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(1.0, 2.0, 6.0, False, "SAFE"),
-    "AGGRESSIVE": ModeParams(1.5, 2.0, 8.0, True,  "AGGRESSIVE"),
-    "SHIELD":     ModeParams(0.3, 1.5, 4.0, False, "SHIELD"),
+    "SAFE":       ModeParams(1.0, 2.0, 10.0, False, "SAFE"),
+    "AGGRESSIVE": ModeParams(1.5, 2.0, 15.0, True,  "AGGRESSIVE"),
+    "SHIELD":     ModeParams(0.3, 1.5,  6.0, False, "SHIELD"),
 }
 
 

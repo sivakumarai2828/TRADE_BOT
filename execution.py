@@ -276,10 +276,12 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             _tp_pct = bot_state.settings.take_profit_pct / 100
 
         tp_pct = Decimal(str(_tp_pct))
+        pct_stop = (current_price * (1 - Decimal(str(_sl_pct)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         if atr > 0:
-            stop_loss = (current_price - _d(str(round(atr * 2, 8)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            atr_stop = (current_price - _d(str(round(atr * 2, 8)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            stop_loss = min(atr_stop, pct_stop)  # wider stop wins (lower price = more breathing room)
         else:
-            stop_loss = (current_price * (1 - Decimal(str(_sl_pct)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+            stop_loss = pct_stop
         take_profit = (current_price * (1 + tp_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
         pos = PositionData(

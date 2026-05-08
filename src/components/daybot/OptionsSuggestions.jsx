@@ -1,7 +1,9 @@
+import { useAuth } from "../../AuthContext.jsx";
 import { useEffect, useState } from "react";
 import { fetchOptionsSuggestions, runOptionsPicker } from "../../api.js";
 
 export default function OptionsSuggestions() {
+  const { isOwner } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
@@ -53,7 +55,8 @@ export default function OptionsSuggestions() {
           )}
           <button
             onClick={handleRunNow}
-            disabled={running}
+            disabled={running || !isOwner}
+            title={!isOwner ? "View-only access" : undefined}
             className="rounded-lg border border-indigo-700 bg-indigo-900/40 px-3 py-1 text-xs font-medium text-indigo-300 hover:bg-indigo-800/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {running ? "Running…" : "▶ Run Now"}

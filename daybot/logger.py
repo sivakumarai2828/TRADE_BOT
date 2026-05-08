@@ -47,7 +47,7 @@ class TradeLogger:
             f"💰 Portfolio: <b>${m.portfolio_value:,.2f}</b>\n"
             f"📅 Daily P&L: <b>${m.daily_pnl:+.2f} ({m.daily_pnl_pct:+.2f}%)</b>\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"🎯 Trades: {m.trades_today} | ✅ {m.wins_today}W / ❌ {m.losses_today}L\n"
+            f"🎯 Trades: {m.wins_today + m.losses_today} | ✅ {m.wins_today}W / ❌ {m.losses_today}L\n"
             f"🤖 Status: {'🔴 Halted' if m.daily_loss_halted else '🟢 Active'}"
         )
         self._send_telegram(report)

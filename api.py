@@ -82,21 +82,14 @@ def _watchdog_auto_recover() -> None:
 
 
 def _watchdog_loop() -> None:
-    """Alert via Telegram if the bot loop hasn't run a cycle in > 10 minutes.
-    Auto-recovers by restarting the loop after 20 minutes of no activity.
-    """
+    """Auto-recover bot loop if stuck > 20 minutes. No alert for short API blips."""
     while True:
         _time_module.sleep(300)  # check every 5 minutes
         if bot_state.running:
             age = _time_module.time() - _last_cycle_time
-            if age > 600:
-                from telegram_notify import _send
-                _send(
-                    f"⚠️ <b>Bot heartbeat missed</b>\n"
-                    f"Last cycle was <b>{age / 60:.0f} min</b> ago — bot may be stuck or crashed."
-                )
+            logging.debug("Watchdog: last cycle %.0f s ago", age)
+            if age > 1200:  # 20 minutes — attempt auto-recovery + alert
                 logging.warning("Watchdog: bot loop stalled for %.0f minutes", age / 60)
-            if age > 1200:  # 20 minutes — attempt auto-recovery
                 try:
                     _watchdog_auto_recover()
                 except Exception as exc:
@@ -138,6 +131,75 @@ if _saved:
         logging.info("Restored %d open position(s) from Supabase", len(p))
     logging.info("State restored from Supabase — balance=%.2f", bot_state.metrics.balance)
 
+# Restore daybot evening analysis + India analysis from DB on startup.
+try:
+    from daybot.evening_db import load_evening_analysis
+    from daybot.state import day_state as _day_state
+    from datetime import date as _date
+    _today = _date.today().isoformat()
+    _tomorrow = (_date.today().replace(day=_date.today().day + 1)).isoformat() if _date.today().day < 28 else None
+    for _td in filter(None, [_tomorrow, _today]):
+        _row = load_evening_analysis(_td)
+        if _row:
+            import json as _json
+
+            def _load(val, default):
+                if isinstance(val, (list, dict)):
+                    return val
+                try:
+                    return _json.loads(val) if val else default
+                except Exception:
+                    return default
+
+            with _day_state._lock:
+                _day_state.evening_approved = _load(_row.get("approved"), [])
+                _day_state.evening_entry_zones = _load(_row.get("entry_zones"), {})
+                _day_state.evening_stop_levels = _load(_row.get("stop_levels"), {})
+                _day_state.evening_targets = _load(_row.get("targets"), {})
+                _day_state.evening_direction = _load(_row.get("direction"), {})
+                _day_state.evening_notes = _load(_row.get("notes"), {})
+                _day_state.evening_risk_flags = _load(_row.get("risk_flags"), {})
+                _day_state.evening_regime = _row.get("regime", "")
+                _day_state.evening_analysis_date = _td
+            logging.info("Evening analysis restored from DB for %s (%d stocks)", _td, len(_day_state.evening_approved))
+            break
+except Exception as _exc:
+    logging.warning("Evening analysis DB restore failed: %s", _exc)
+
+try:
+    from daybot.india_agent import load_india_results_from_db
+    load_india_results_from_db()
+except Exception as _exc:
+    logging.warning("India analysis DB restore failed: %s", _exc)
+
+# Restore today's day bot session metrics (wins, losses, pnl, portfolio) from DB.
+try:
+    from daybot.state import day_state as _day_state
+    from persistence import _get_client as _pgc
+    import datetime as _dt
+    _today_str = _dt.date.today().isoformat()
+    _pc = _pgc()
+    if _pc:
+        _sr = _pc.table("daybot_market_sessions").select("*").eq("trade_date", _today_str).limit(1).execute()
+        if _sr.data:
+            _row = _sr.data[0]
+            _daily_pnl = float(_row.get("daily_pnl", 0.0) or 0.0)
+            # Compute cumulative portfolio value: $1000 starting + sum of all sessions
+            _all = _pc.table("daybot_market_sessions").select("daily_pnl").execute()
+            _total_pnl = sum(float(r.get("daily_pnl") or 0) for r in _all.data)
+            _portfolio_value = 1000.0 + _total_pnl
+            with _day_state._lock:
+                _day_state.metrics.wins_today = _row.get("wins", 0) or 0
+                _day_state.metrics.losses_today = _row.get("losses", 0) or 0
+                _day_state.metrics.daily_pnl = _daily_pnl
+                _day_state.metrics.portfolio_value = _portfolio_value
+                _day_state.metrics.daily_start_value = _portfolio_value - _daily_pnl
+            logging.info("Day bot session restored: %s wins=%d losses=%d pnl=%.2f portfolio=%.2f",
+                         _today_str, _day_state.metrics.wins_today, _day_state.metrics.losses_today,
+                         _daily_pnl, _portfolio_value)
+except Exception as _exc:
+    logging.warning("Day bot session restore failed: %s", _exc)
+
 # --- Startup Telegram alert ---
 def _send_startup_alert() -> None:
     import os, requests as _req, platform
@@ -160,7 +222,7 @@ def _send_startup_alert() -> None:
         "🚀 <b>Trade Bot Service Started</b>",
         f"🕐 {now}",
         "━━━━━━━━━━━━━━━",
-        "✅ Crypto Bot: ready (start via dashboard)",
+        "✅ Crypto Bot: auto-starting…",
         "✅ Day Bot: auto-starts at 9:35 AM ET",
         "✅ Scheduler: running",
     ]
@@ -177,6 +239,41 @@ def _send_startup_alert() -> None:
 
 threading.Thread(target=_send_startup_alert, daemon=True, name="startup-alert").start()
 
+
+def _auto_start_bots() -> None:
+    """Auto-start crypto bot and day bot (if market hours) on service startup."""
+    import time as _t
+    _t.sleep(10)  # let Flask + scheduler fully initialise first
+
+    # --- Crypto bot: always start ---
+    try:
+        err = _start_crypto_bot_internal()
+        if err:
+            logging.warning("Crypto bot auto-start failed: %s", err)
+        else:
+            logging.info("Crypto bot auto-started on service startup")
+    except Exception as exc:
+        logging.warning("Crypto bot auto-start exception: %s", exc)
+
+    # --- Day bot: start only if mid-session restart (9:35–15:55 ET, Mon–Fri) ---
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        is_weekday = now_et.weekday() < 5
+        et_minutes = now_et.hour * 60 + now_et.minute
+        in_trading_hours = (9 * 60 + 35) <= et_minutes <= (15 * 60 + 55)
+        if is_weekday and in_trading_hours:
+            from daybot.scheduler import job_autostart
+            job_autostart()
+            logging.info("Day bot auto-started on mid-session service restart (%02d:%02d ET)",
+                         now_et.hour, now_et.minute)
+    except Exception as exc:
+        logging.warning("Day bot auto-start exception: %s", exc)
+
+
+threading.Thread(target=_auto_start_bots, daemon=True, name="bot-autostart").start()
+
 # ---------------------------------------------------------------------------
 # Bot thread management
 # ---------------------------------------------------------------------------
@@ -191,8 +288,6 @@ _harvester = None             # ProfitHarvester — created on /start
 # Per-symbol error backoff: tracks consecutive failures and cycles to skip
 _symbol_errors: dict[str, int] = {}      # symbol → consecutive error count
 _symbol_skip_cycles: dict[str, int] = {} # symbol → cycles remaining to skip
-_symbol_timeout_alerted: dict[str, bool] = {}  # symbol → alert already sent this session
-_TIMEOUT_ALERT_THRESHOLD = 3             # alert after this many consecutive timeouts
 
 
 def _run_symbol_cycle(symbol: str) -> None:
@@ -253,11 +348,7 @@ def _run_symbol_cycle(symbol: str) -> None:
                 tone="warning",
             )
 
-        # Telegram alert on threshold — send once per session per symbol
-        if err_count == _TIMEOUT_ALERT_THRESHOLD and not _symbol_timeout_alerted.get(symbol):
-            _symbol_timeout_alerted[symbol] = True
-            from telegram_notify import notify_api_timeout
-            notify_api_timeout("CryptoBot", symbol, err_count)
+        # API timeout alerts suppressed — backoff handles retries, watchdog alerts if truly stuck
 
 
 def _handle_crypto_mode_switch(new_mode: str, old_mode: str) -> None:
@@ -296,7 +387,7 @@ def _run_cycle() -> None:
     except Exception as exc:
         logging.warning("monitor_positions error (skipped): %s", exc)
 
-    if not _config.dry_run:
+    if _config is not None and not _config.dry_run:
         try:
             balance_info = _exchange.fetch_balance()
             usdt_free = float(balance_info.get("USDT", {}).get("free", 0) or 0)
@@ -457,29 +548,13 @@ def candles():
         return jsonify([])
 
 
-@app.post("/start")
-def start():
-    """Start the bot loop. Optional JSON body can override runtime settings."""
+def _start_crypto_bot_internal() -> str | None:
+    """Start the crypto bot loop. Returns error message string or None on success."""
     global _bot_thread, _stop_event, _exchange, _config, _crypto_mode_manager, _harvester
-
-    body = request.get_json(silent=True) or {}
-
-    # Apply any settings sent with the start request.
-    if body:
-        allowed = {
-            "trade_size_usdt", "trade_size_mode", "trade_size_pct",
-            "stop_loss_pct", "take_profit_pct", "polling_seconds", "auto_mode",
-            "rsi_oversold", "rsi_overbought",
-            "house_profit_threshold", "house_take_profit_pct", "house_stop_loss_pct",
-            "active_symbols",
-        }
-        filtered = {k: v for k, v in body.items() if k in allowed}
-        if filtered:
-            bot_state.update_settings(**filtered)
 
     with bot_state._lock:
         if bot_state.running:
-            return jsonify({"ok": False, "message": "Bot is already running"}), 409
+            return "Bot is already running"
 
     try:
         _config = load_config()
@@ -489,7 +564,7 @@ def start():
         msg = f"Failed to initialise exchange: {exc}"
         logging.error(msg)
         bot_state.add_log("Start error", msg[:120], tone="negative")
-        return jsonify({"ok": False, "message": msg}), 500
+        return msg
 
     from crypto_mode_manager import CryptoModeManager
     from harvest.manager import ProfitHarvester
@@ -508,6 +583,30 @@ def start():
     with bot_state._lock:
         bot_state.running = True
 
+    return None
+
+
+@app.post("/start")
+def start():
+    """Start the bot loop. Optional JSON body can override runtime settings."""
+    body = request.get_json(silent=True) or {}
+
+    # Apply any settings sent with the start request.
+    if body:
+        allowed = {
+            "trade_size_usdt", "trade_size_mode", "trade_size_pct",
+            "stop_loss_pct", "take_profit_pct", "polling_seconds", "auto_mode",
+            "rsi_oversold", "rsi_overbought",
+            "house_profit_threshold", "house_take_profit_pct", "house_stop_loss_pct",
+            "active_symbols",
+        }
+        filtered = {k: v for k, v in body.items() if k in allowed}
+        if filtered:
+            bot_state.update_settings(**filtered)
+
+    err = _start_crypto_bot_internal()
+    if err:
+        return jsonify({"ok": False, "message": err}), 409 if "already running" in err else 500
     return jsonify({"ok": True, "message": "Bot started"})
 
 

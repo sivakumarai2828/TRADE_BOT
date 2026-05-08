@@ -12,11 +12,8 @@ original Claude one-shot ranking from the full universe.
 from __future__ import annotations
 
 import functools
-import json
 import logging
 from datetime import datetime, timezone
-
-from anthropic import Anthropic
 
 from .scanner import STOCK_UNIVERSE
 from .state import day_state
@@ -229,24 +226,40 @@ def _ask_claude(api_key: str, summaries: list[dict]) -> list[str]:
     )
 
     try:
-        client = Anthropic(api_key=api_key, timeout=30.0, max_retries=1)
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
+        from .llm_router import llama_json
+        parsed = llama_json(prompt, system=_SYSTEM, max_tokens=300)
+        if parsed:
+            approved = [s for s in parsed.get("approved", []) if s in STOCK_UNIVERSE]
+            notes = parsed.get("notes", {})
+            for sym, note in list(notes.items())[:5]:
+                logging.info("Pre-market [%s]: %s", sym, note)
+            if approved:
+                return approved
+        logging.warning("Pre-market: Llama returned empty — falling back to Claude")
+    except Exception as exc:
+        logging.warning("Pre-market Llama call failed (%s) — falling back to Claude", exc)
+
+    # Claude fallback — more reliable, used when OpenRouter 429 or empty response
+    try:
+        import os, json as _json
+        from anthropic import Anthropic
+        client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""), timeout=30.0, max_retries=1)
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
             max_tokens=300,
             temperature=0,
-            system=[{"type": "text", "text": _SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-        parsed = json.loads(text)
+        text = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+        if "```" in text:
+            import re
+            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+            text = m.group(1) if m else re.sub(r"```[a-z]*", "", text).strip()
+        parsed = _json.loads(text)
         approved = [s for s in parsed.get("approved", []) if s in STOCK_UNIVERSE]
-
-        notes = parsed.get("notes", {})
-        for sym, note in list(notes.items())[:5]:
-            logging.info("Pre-market [%s]: %s", sym, note)
-
+        logging.info("Pre-market Claude fallback approved: %s", approved)
         return approved if approved else [s["symbol"] for s in summaries[:12]]
-
     except Exception as exc:
-        logging.warning("Pre-market Claude call failed: %s", exc)
+        logging.warning("Pre-market Claude fallback failed: %s", exc)
         return [s["symbol"] for s in summaries[:12]]

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pause, Play, SlidersHorizontal, TrendingUp } from "lucide-react";
 import { startBot, stopBot, updateSettings } from "../api.js";
+import { useAuth } from "../AuthContext.jsx";
 
 const BASE = import.meta.env.VITE_API_URL ?? "";
 
@@ -14,6 +15,7 @@ async function apiDeposit(amount) {
 }
 
 export default function BotControls({ running, settings, onRefresh }) {
+  const { isOwner } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -142,12 +144,14 @@ export default function BotControls({ running, settings, onRefresh }) {
 
       {/* Start / Stop */}
       <div className="mt-5 grid grid-cols-2 gap-3">
-        <button onClick={handleStart} disabled={busy || running}
+        <button onClick={handleStart} disabled={busy || running || !isOwner}
+          title={!isOwner ? "View-only access" : undefined}
           className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 py-3 text-sm font-semibold text-neutral-950 transition hover:bg-emerald-300 disabled:opacity-40">
           <Play className="h-4 w-4" />
           {busy && !running ? "Starting…" : "Start Bot"}
         </button>
-        <button onClick={handleStop} disabled={busy || !running}
+        <button onClick={handleStop} disabled={busy || !running || !isOwner}
+          title={!isOwner ? "View-only access" : undefined}
           className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-200 transition hover:bg-red-400/20 disabled:opacity-40">
           <Pause className="h-4 w-4" />
           {busy && running ? "Stopping…" : "Stop Bot"}
@@ -172,7 +176,7 @@ export default function BotControls({ running, settings, onRefresh }) {
           {ALL_SYMBOLS.map((sym) => {
             const on = activeSymbols.includes(sym);
             return (
-              <button key={sym} onClick={() => toggleSymbol(sym)}
+              <button key={sym} onClick={() => toggleSymbol(sym)} disabled={!isOwner} title={!isOwner ? "View-only access" : undefined}
                 className={`flex-1 rounded-lg border py-2 text-sm font-medium transition ${
                   on
                     ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
@@ -200,7 +204,7 @@ export default function BotControls({ running, settings, onRefresh }) {
           <input type="number" min={1} value={depositAmount}
             onChange={(e) => setDepositAmount(e.target.value)}
             className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400" />
-          <button onClick={handleDeposit} disabled={busy}
+          <button onClick={handleDeposit} disabled={busy || !isOwner} title={!isOwner ? "View-only access" : undefined}
             className="shrink-0 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-emerald-400 disabled:opacity-40">
             Set
           </button>

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchHealth, fetchStatus } from "./api.js";
+import { AuthContext, isOwnerEmail } from "./AuthContext.jsx";
 
 import BotControls from "./components/BotControls.jsx";
 import ChartPanel from "./components/ChartPanel.jsx";
+import LoginPage from "./components/LoginPage.jsx";
 import LogsPanel from "./components/LogsPanel.jsx";
 import MetricsCards from "./components/MetricsCards.jsx";
 import PositionsTable from "./components/PositionsTable.jsx";
@@ -13,7 +15,13 @@ import DayBotPage from "./DayBotPage.jsx";
 
 const POLL_MS = 3_000;
 
+function loadStoredUser() {
+  try { return JSON.parse(localStorage.getItem("auth_user")); }
+  catch { return null; }
+}
+
 export default function App() {
+  const [user, setUser] = useState(loadStoredUser);
   const [activePage, setActivePage] = useState("crypto");
   const [data, setData] = useState(null);
   const [apiError, setApiError] = useState(false);
@@ -58,7 +66,17 @@ export default function App() {
     ? Math.floor((Date.now() - lastUpdated) / 1000)
     : null;
 
+  const handleLogout = () => {
+    localStorage.removeItem("auth_user");
+    setUser(null);
+  };
+
+  if (!user) return <LoginPage onLogin={setUser} />;
+
+  const isOwner = user.isOwner ?? isOwnerEmail(user.email);
+
   return (
+    <AuthContext.Provider value={{ user, isOwner, onLogout: handleLogout }}>
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <Sidebar
         exchangeName={data?.exchange_name}
@@ -116,5 +134,6 @@ export default function App() {
         )}
       </div>
     </div>
+    </AuthContext.Provider>
   );
 }

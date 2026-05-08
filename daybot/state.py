@@ -40,14 +40,14 @@ class DayLogEntry:
 
 @dataclass
 class DayMetrics:
-    portfolio_value: float = 0.0
+    portfolio_value: float = 1000.0
     cash: float = 0.0
     daily_pnl: float = 0.0
     daily_pnl_pct: float = 0.0
     trades_today: int = 0
     wins_today: int = 0
     losses_today: int = 0
-    daily_start_value: float = 0.0
+    daily_start_value: float = 1000.0
     daily_loss_halted: bool = False
     market_open: bool = False
     # Compounding / house money
@@ -200,6 +200,11 @@ class DayBotState:
                 "signals": {s: asdict(sig) for s, sig in self.signals.items()},
                 "logs": [asdict(lg) for lg in self.logs[:30]],
                 "metrics": asdict(self.metrics),
+                "evening_approved": self.evening_approved,
+                "evening_analysis_date": self.evening_analysis_date,
+                "evening_regime": self.evening_regime,
+                "india_approved": self.india_approved,
+                "india_analysis_date": self.india_analysis_date,
             }
 
 

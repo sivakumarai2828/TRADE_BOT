@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { startDayBot, stopDayBot, updateDaySettings } from "../../api.js";
+import { useAuth } from "../../AuthContext.jsx";
 
 const MODES = [
   { value: "compound", label: "Compound %", desc: "Sizes off current portfolio — profits compound" },
@@ -8,6 +9,7 @@ const MODES = [
 ];
 
 export default function DayBotControls({ running, metrics, onRefresh }) {
+  const { isOwner } = useAuth();
   const m = metrics ?? {};
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -57,14 +59,16 @@ export default function DayBotControls({ running, metrics, onRefresh }) {
       <div className="flex gap-3">
         <button
           onClick={handleStart}
-          disabled={running || loading}
+          disabled={running || loading || !isOwner}
+          title={!isOwner ? "View-only access" : undefined}
           className="flex-1 rounded-lg bg-emerald-500 py-2.5 text-sm font-medium text-white hover:bg-emerald-400 disabled:opacity-40 transition"
         >
           {loading && !running ? "Starting…" : "▶ Start Bot"}
         </button>
         <button
           onClick={handleStop}
-          disabled={!running || loading}
+          disabled={!running || loading || !isOwner}
+          title={!isOwner ? "View-only access" : undefined}
           className="flex-1 rounded-lg bg-neutral-700 py-2.5 text-sm font-medium text-white hover:bg-neutral-600 disabled:opacity-40 transition"
         >
           {loading && running ? "Stopping…" : "■ Stop Bot"}
@@ -83,6 +87,8 @@ export default function DayBotControls({ running, metrics, onRefresh }) {
             <button
               key={value}
               onClick={() => handleMode(value)}
+              disabled={!isOwner}
+              title={!isOwner ? "View-only access" : undefined}
               className={`w-full rounded-lg border px-3 py-2.5 text-left transition ${
                 currentMode === value
                   ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-200"
@@ -108,7 +114,9 @@ export default function DayBotControls({ running, metrics, onRefresh }) {
           />
           <button
             onClick={applySize}
-            className="rounded-lg bg-neutral-700 px-3 py-1.5 text-xs text-white hover:bg-neutral-600 transition"
+            disabled={!isOwner}
+            title={!isOwner ? "View-only access" : undefined}
+            className="rounded-lg bg-neutral-700 px-3 py-1.5 text-xs text-white hover:bg-neutral-600 disabled:opacity-40 transition"
           >
             Apply
           </button>
@@ -123,11 +131,14 @@ export default function DayBotControls({ running, metrics, onRefresh }) {
             type="range" min="1" max="5" step="1"
             value={shieldStreak}
             onChange={e => setShieldStreak(Number(e.target.value))}
-            className="flex-1 accent-amber-400"
+            disabled={!isOwner}
+            className="flex-1 accent-amber-400 disabled:opacity-40"
           />
           <button
             onClick={applyShield}
-            className="rounded-lg bg-neutral-700 px-3 py-1.5 text-xs text-white hover:bg-neutral-600 transition"
+            disabled={!isOwner}
+            title={!isOwner ? "View-only access" : undefined}
+            className="rounded-lg bg-neutral-700 px-3 py-1.5 text-xs text-white hover:bg-neutral-600 disabled:opacity-40 transition"
           >
             Apply
           </button>

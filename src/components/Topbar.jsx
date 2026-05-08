@@ -1,4 +1,5 @@
-import { Bell, CircleUserRound, Menu, Power, Server, WifiOff } from "lucide-react";
+import { Bell, CircleUserRound, LogOut, Menu, Power, Server, WifiOff } from "lucide-react";
+import { useAuth } from "../AuthContext.jsx";
 
 function formatUptime(seconds) {
   if (seconds == null) return null;
@@ -11,6 +12,7 @@ function formatUptime(seconds) {
 }
 
 export default function Topbar({ running, apiError, paperMode, secondsAgo, health }) {
+  const { user, isOwner, onLogout } = useAuth();
   const serverUp = health?.ok === true;
   const uptime = formatUptime(health?.uptime_s);
   const schedulerOn = health?.scheduler === true;
@@ -90,9 +92,33 @@ export default function Topbar({ running, apiError, paperMode, secondsAgo, healt
           <button className="flex h-10 w-10 items-center justify-center rounded-lg border border-neutral-800 bg-neutral-900 text-neutral-300">
             <Bell className="h-5 w-5" />
           </button>
-          <div className="flex items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2">
-            <CircleUserRound className="h-5 w-5 text-neutral-300" />
-            <span className="hidden text-sm text-neutral-200 sm:inline">Trader</span>
+
+          {/* Viewer badge */}
+          {!isOwner && (
+            <div className="hidden items-center gap-1 rounded-lg border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-xs text-amber-300 sm:flex">
+              👁 View only
+            </div>
+          )}
+
+          {/* User avatar + logout */}
+          <div className="flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2">
+            {user?.picture ? (
+              <img src={user.picture} alt={user.name} className="h-6 w-6 rounded-full" />
+            ) : (
+              <CircleUserRound className="h-5 w-5 text-neutral-300" />
+            )}
+            <span className="hidden text-sm text-neutral-200 sm:inline">
+              {user?.name ?? "Trader"}
+            </span>
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                title="Sign out"
+                className="ml-1 text-neutral-500 hover:text-red-400 transition"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 

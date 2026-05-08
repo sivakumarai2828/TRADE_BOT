@@ -32,7 +32,39 @@ import time
 from collections import deque
 
 import requests
-from anthropic import Anthropic
+from anthropic import Anthropic, BadRequestError as AnthropicBadRequest
+
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+_credits_exhausted = False
+
+
+def _openrouter_chat(system: str, user: str, max_tokens: int = 300) -> str:
+    """Call OpenRouter Llama for simple text response (no tool calling)."""
+    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return "OpenRouter not configured."
+    try:
+        resp = requests.post(
+            _OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": _OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            },
+            timeout=30,
+        )
+        body = resp.json()
+        text = body["choices"][0]["message"]["content"].strip()
+        return text
+    except Exception as exc:
+        logging.warning("OpenRouter chat failed: %s", exc)
+        return "AI unavailable — try again shortly."
 
 # ---------------------------------------------------------------------------
 # Telegram helpers
@@ -226,29 +258,47 @@ def tool_analyze_symbol(args: dict) -> dict:
     if not symbol:
         return {"error": "No symbol provided"}
 
-    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-
-    # --- Sub-agent 1: Technical analysis (Haiku — cheap) ---
-    tech_prompt = f"""Analyze {symbol} for a potential intraday BUY trade.
-Use these indicators: RSI(14), EMA(50), VWAP, volume vs avg volume.
-Respond in JSON: {{"rsi_signal": "oversold|neutral|overbought", "trend": "up|down|neutral",
-"vwap_position": "above|below", "volume_signal": "high|normal|low",
-"technical_score": 0-10, "summary": "one sentence"}}"""
-
-    tech_result = {}
-    try:
-        r = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=200,
-            messages=[{"role": "user", "content": tech_prompt}],
-        )
-        tech_result = json.loads(r.content[0].text)
-    except Exception as exc:
-        tech_result = {"error": str(exc)}
-
-    # --- Sub-agent 2: Risk check (pure Python — free) ---
+    # --- Sub-agent 1: Pull REAL live signals from bot state (free, no LLM) ---
     from state import bot_state
     from daybot.state import day_state
+
+    tech_result = {}
+    # Check day bot signals
+    day_sig = {}
+    with day_state._lock:
+        raw_sig = day_state.signals.get(symbol.upper())
+        if raw_sig:
+            day_sig = {
+                "price": raw_sig.price,
+                "rsi": raw_sig.rsi,
+                "ema": raw_sig.ema,
+                "trend": raw_sig.trend,
+                "action": raw_sig.action,
+                "reason": raw_sig.reason,
+                "volume": raw_sig.volume,
+                "avg_volume": raw_sig.avg_volume,
+            }
+        # Also check evening watchlist
+        in_watchlist = symbol.upper() in day_state.evening_approved
+        entry_zone = day_state.evening_entry_zones.get(symbol.upper())
+        stop_level = day_state.evening_stop_levels.get(symbol.upper())
+        target = day_state.evening_targets.get(symbol.upper())
+        direction = day_state.evening_direction.get(symbol.upper())
+        notes = day_state.evening_notes.get(symbol.upper())
+        risk_flags = day_state.evening_risk_flags.get(symbol.upper())
+
+    tech_result = {
+        "live_signal": day_sig or "no live signal (market closed or not in scan)",
+        "in_evening_watchlist": in_watchlist,
+        "entry_zone": entry_zone,
+        "stop_level": stop_level,
+        "target": target,
+        "direction": direction,
+        "notes": notes,
+        "risk_flags": risk_flags,
+    }
+
+    # --- Sub-agent 2: Risk check (pure Python — free) ---
     open_crypto = sum(1 for p in bot_state.positions.values() if p is not None)
     open_day = len(day_state.positions)
     risk_result = {
@@ -256,27 +306,25 @@ Respond in JSON: {{"rsi_signal": "oversold|neutral|overbought", "trend": "up|dow
         "day_slots_free": max(0, 3 - open_day),
         "shield_active": bot_state.metrics.shield_active,
         "daily_halted": day_state.metrics.daily_loss_halted,
-        "tradeable": open_crypto < 2 and not bot_state.metrics.shield_active,
+        "crypto_win_rate": bot_state.metrics.win_rate,
+        "day_pnl_today": day_state.metrics.daily_pnl,
+        "tradeable": open_day < 8 and not day_state.metrics.daily_loss_halted,
     }
 
-    # --- Orchestrator: Sonnet combines both and gives final answer ---
-    orch_prompt = f"""You are a trading advisor. A user asked about {symbol}.
-
-Technical analysis: {json.dumps(tech_result)}
-Risk check: {json.dumps(risk_result)}
-
-Give a concise trading opinion in 2-3 sentences. Be direct — say buy, wait, or avoid.
-Mention the key reason. Format as plain text (no JSON)."""
-
-    try:
-        r = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=150,
-            messages=[{"role": "user", "content": orch_prompt}],
-        )
-        opinion = r.content[0].text.strip()
-    except Exception as exc:
-        opinion = f"Analysis failed: {exc}"
+    # --- Orchestrator: OpenRouter Llama with REAL data (free) ---
+    orch_prompt = (
+        f"User asked about {symbol} for a potential trade.\n"
+        f"Live bot data for {symbol}: {json.dumps(tech_result)}\n"
+        f"Current risk/capacity: {json.dumps(risk_result)}\n\n"
+        "Give a direct trading opinion in 2-3 sentences. "
+        "Use the actual entry_zone, stop_level, target if available. "
+        "Say buy/wait/avoid and why. Plain text, no JSON."
+    )
+    opinion = _openrouter_chat(
+        system="You are a concise trading advisor. Use the real bot data provided. Give direct buy/wait/avoid opinions.",
+        user=orch_prompt,
+        max_tokens=200,
+    )
 
     return {
         "symbol": symbol,
@@ -510,9 +558,33 @@ Trade logging rules:
 - For "show my positions" or "what do I have open": call get_user_positions and format as a clean list."""
 
 
+def _dispatch_openrouter_fallback(user_text: str) -> str:
+    """Fallback when Anthropic credits exhausted — fetch live data then summarise with OpenRouter."""
+    # Auto-fetch status so user gets real data even without tool calling
+    try:
+        status = tool_get_status({})
+        pnl = tool_get_pnl({})
+        context = f"Bot status: {json.dumps(status)}\nPnL data: {json.dumps(pnl)}"
+    except Exception:
+        context = "Could not fetch live bot data."
+
+    return _openrouter_chat(
+        system=(
+            "You are a trading bot assistant. Answer the user's question using the live data below. "
+            "Be concise (3-5 lines). Format for Telegram: use *bold* for labels. No HTML."
+            f"\n\nLive data:\n{context}"
+        ),
+        user=user_text,
+        max_tokens=350,
+    )
+
+
 def _dispatch(user_text: str) -> str:
     """Send user message to Claude with tool dispatch. Returns response string."""
-    global _history
+    global _history, _credits_exhausted
+
+    if _credits_exhausted:
+        return _dispatch_openrouter_fallback(user_text)
 
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
 
@@ -522,51 +594,59 @@ def _dispatch(user_text: str) -> str:
 
     messages = list(_history)
 
-    while True:
-        response = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=400,
-            system=[{"type": "text", "text": SYSTEM_PROMPT,
-                     "cache_control": {"type": "ephemeral"}}],
-            tools=TOOLS,
-            messages=messages,
-        )
+    try:
+        while True:
+            response = client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=400,
+                system=[{"type": "text", "text": SYSTEM_PROMPT,
+                         "cache_control": {"type": "ephemeral"}}],
+                tools=TOOLS,
+                messages=messages,
+            )
 
-        if response.stop_reason == "end_turn":
-            text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-            _history.append({"role": "assistant", "content": response.content})
-            return text or "Done."
+            if response.stop_reason == "end_turn":
+                text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
+                _history.append({"role": "assistant", "content": response.content})
+                return text or "Done."
 
-        if response.stop_reason != "tool_use":
-            return "Unexpected response from Claude."
+            if response.stop_reason != "tool_use":
+                return "Unexpected response from Claude."
 
-        # Process tool calls
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
+            # Process tool calls
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
 
-            tool_name = block.name
-            tool_args = block.input or {}
+                tool_name = block.name
+                tool_args = block.input or {}
 
-            try:
-                fn = TOOL_FN.get(tool_name)
-                if fn is None:
-                    result = {"error": f"Unknown tool: {tool_name}"}
-                else:
-                    result = fn(tool_args)
-            except Exception as exc:
-                logging.exception("Tool %s failed: %s", tool_name, exc)
-                result = {"error": str(exc)}
+                try:
+                    fn = TOOL_FN.get(tool_name)
+                    if fn is None:
+                        result = {"error": f"Unknown tool: {tool_name}"}
+                    else:
+                        result = fn(tool_args)
+                except Exception as exc:
+                    logging.exception("Tool %s failed: %s", tool_name, exc)
+                    result = {"error": str(exc)}
 
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": json.dumps(result),
-            })
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result),
+                })
 
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+    except AnthropicBadRequest as exc:
+        if "credit balance" in str(exc).lower():
+            _credits_exhausted = True
+            logging.error("Telegram bot: Anthropic credits exhausted — switching to OpenRouter")
+            return _dispatch_openrouter_fallback(user_text)
+        return f"API error: {exc}"
 
 
 # ---------------------------------------------------------------------------

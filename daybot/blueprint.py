@@ -463,11 +463,12 @@ def _run_cycle() -> None:
         _handle_mode_switch(new_mode, old_mode)
     mode_params = _mode_manager.params()
 
-    # --- Per-symbol cycle (only pre-market approved stocks if list is available) ---
-    approved = day_state.premarket_approved
+    # --- Per-symbol cycle (use evening/premarket picks, scanner as priority hint) ---
+    approved = day_state.premarket_approved or day_state.evening_approved
     if approved:
-        filtered = [s for s in day_state.watchlist if s in approved]
-        universe = filtered if filtered else list(day_state.watchlist)
+        hot = set(day_state.watchlist)
+        # Scanner-confirmed picks first, then remaining evening picks
+        universe = sorted(approved, key=lambda s: (0 if s in hot else 1))
     else:
         universe = list(day_state.watchlist)
     for i, symbol in enumerate(universe):
@@ -491,6 +492,7 @@ def _run_cycle() -> None:
         ))
 
         if sig.action == "HOLD":
+            logging.info("%s: HOLD — %s (RSI %.1f, %.1f%% from EMA)", symbol, sig.reason, sig.rsi, (sig.price - sig.ema) / sig.ema * 100 if sig.ema else 0)
             continue
 
         # Fetch 4-week historical context for Claude
@@ -633,29 +635,14 @@ def _bot_loop() -> None:
             day_state.add_log("Error", str(exc)[:120], "negative")
         _stop_event.wait(timeout=_config.loop_interval_seconds)
 
-    # Send EOD summary to Telegram whenever the bot stops
-    try:
-        from telegram_notify import notify_daybot_summary
-        from datetime import datetime, timezone
-        m = day_state.metrics
-        start = m.daily_start_value or m.portfolio_value
-        daily_pnl = m.portfolio_value - start
-        daily_pnl_pct = (daily_pnl / start * 100) if start > 0 else 0.0
-        notify_daybot_summary(
-            date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            portfolio_value=m.portfolio_value,
-            daily_pnl=daily_pnl,
-            daily_pnl_pct=daily_pnl_pct,
-            trades=m.trades_today,
-            wins=m.wins_today,
-            losses=m.losses_today,
-            halted=m.daily_loss_halted,
-        )
-    except Exception:
-        pass
+    # EOD summary already sent by generate_eod_report() during close-only window.
+    # Do NOT send another summary here — fires on every restart, causing duplicates.
 
     # Profit extraction: if daily profit ≥ threshold, open a long-term harvest position
     try:
+        m = day_state.metrics
+        start = m.daily_start_value or m.portfolio_value
+        daily_pnl = m.portfolio_value - start
         if _harvester and daily_pnl > 0:
             from telegram_notify import notify_harvest_extraction
             spy_ret = _get_spy_return()

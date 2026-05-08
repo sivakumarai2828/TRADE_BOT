@@ -151,11 +151,9 @@ def run_india_analysis(anthropic_api_key: str) -> dict:
 
 
 def _run_claude_analysis(anthropic_api_key: str, nifty: dict, stocks: list[dict]) -> dict | None:
-    """Call Claude Opus with stock data. Returns structured picks."""
+    """Call DeepSeek R1 (NVIDIA free) for India stock analysis. Returns structured picks."""
     try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        from .llm_router import deepseek_json
 
         stock_lines = []
         for s in stocks:
@@ -204,19 +202,10 @@ Respond ONLY with valid JSON, no markdown, no explanation:
 IMPORTANT: rank and conviction are REQUIRED fields. rank 1 = strongest setup today (lowest rank = trade first). conviction must be exactly one of: high / medium / low.
 Use bare symbol names (no .NS suffix) as JSON keys."""
 
-        resp = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-            timeout=60,
-        )
-        raw = resp.content[0].text.strip()
-        # Strip markdown fences if Claude wrapped response
-        if "```" in raw:
-            import re
-            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-            raw = m.group(1).strip() if m else re.sub(r"```[a-z]*", "", raw).strip()
-        result = json.loads(raw)
+        result = deepseek_json(prompt, max_tokens=1500)
+        if result is None:
+            logging.error("India analysis: DeepSeek returned no valid JSON")
+            return None
 
         # Re-add .NS suffix to approved list for internal use
         ns_approved = [s + ".NS" if not s.endswith(".NS") else s for s in result.get("approved", [])]

@@ -17,7 +17,6 @@ import logging
 import os
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any
 
 import anthropic
 
@@ -189,7 +188,7 @@ def tool_get_news_sentiment(api_key: str, secret_key: str, symbols: list[str]) -
         end = datetime.now(timezone.utc)
         start = end - timedelta(hours=24)
         req = NewsRequest(
-            symbols=symbols,
+            symbols=",".join(symbols) if isinstance(symbols, list) else symbols,
             start=start,
             end=end,
             limit=50,
@@ -358,12 +357,14 @@ Output ONLY a JSON object in this exact format — no markdown, no explanation:
   "approved": ["NVDA", "MSFT", "AAPL"],
   "skip": ["TSLA", "BABA"],
   "risk_flags": {"TSLA": "earnings tomorrow", "BABA": "negative news"},
-  "entry_zones": {"NVDA": [480.0, 495.0], "MSFT": [415.0, 422.0]},
-  "stop_levels": {"NVDA": 476.0, "MSFT": 412.0},
-  "targets": {"NVDA": 508.0, "MSFT": 430.0},
-  "direction": {"NVDA": "BUY", "MSFT": "BUY"},
-  "notes": {"NVDA": "strong momentum, RSI cooling to 42, volume 1.4x avg"}
+  "entry_zones": {"NVDA": [480.0, 495.0], "MSFT": [415.0, 422.0], "AAPL": [172.0, 175.0]},
+  "stop_levels": {"NVDA": 476.0, "MSFT": 412.0, "AAPL": 170.0},
+  "targets": {"NVDA": 508.0, "MSFT": 430.0, "AAPL": 181.0},
+  "direction": {"NVDA": "BUY", "MSFT": "BUY", "AAPL": "BUY"},
+  "notes": {"NVDA": "strong momentum, RSI cooling to 42, volume 1.4x avg", "MSFT": "pullback to EMA support", "AAPL": "oversold bounce setup"}
 }
+
+IMPORTANT: Every symbol in approved MUST have a corresponding entry in entry_zones, stop_levels, targets, direction, and notes. Do NOT add a symbol to approved unless you can provide all five fields for it.
 
 stop_levels: 1-1.5% below entry zone low (intraday stop).
 targets: 2.5-4% above entry zone high (intraday target).
@@ -400,14 +401,82 @@ def run_evening_analysis(
         }
     ]
 
-    result = {}
     max_iterations = 10
 
+    try:
+        _run_result = _run_claude_loop(client, messages, max_iterations, trade_date,
+                                       alpaca_api_key, alpaca_secret_key)
+    except anthropic.BadRequestError as exc:
+        if "credit balance" in str(exc).lower():
+            logging.error("Evening analysis: Anthropic credits exhausted — loading previous watchlist from DB")
+            day_state.add_log("Evening", "Credits exhausted — using previous watchlist from DB", "warning")
+            _send_credit_alert_once()
+            return _load_fallback_watchlist(trade_date)
+        raise
+    return _run_result
+
+
+def _send_credit_alert_once() -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
+    try:
+        import urllib.request, urllib.parse
+        msg = (
+            "🚨 Anthropic credits exhausted!\n"
+            "Evening analysis skipped — using yesterday's watchlist.\n"
+            "Top up: console.anthropic.com/settings/billing"
+        )
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": msg}).encode()
+        urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data, timeout=10)
+    except Exception as exc:
+        logging.warning("Credit alert send failed: %s", exc)
+
+
+def _load_fallback_watchlist(trade_date: str) -> dict:
+    """Load most recent valid watchlist from DB as fallback."""
+    try:
+        from .evening_db import load_evening_analysis
+        from datetime import date, timedelta as td
+        for days_back in range(1, 8):
+            check_date = (date.fromisoformat(trade_date) - td(days=days_back)).isoformat()
+            row = load_evening_analysis(check_date)
+            if row and row.get("approved"):
+                import json as _json
+                def _load(val, default):
+                    if isinstance(val, (list, dict)):
+                        return val
+                    try:
+                        return _json.loads(val) if val else default
+                    except Exception:
+                        return default
+                result = {
+                    "approved": _load(row.get("approved"), []),
+                    "entry_zones": _load(row.get("entry_zones"), {}),
+                    "stop_levels": _load(row.get("stop_levels"), {}),
+                    "targets": _load(row.get("targets"), {}),
+                    "direction": _load(row.get("direction"), {}),
+                    "notes": _load(row.get("notes"), {}),
+                    "risk_flags": _load(row.get("risk_flags"), {}),
+                    "regime": row.get("regime", ""),
+                }
+                logging.info("Evening fallback: loaded watchlist from %s (%d stocks)",
+                             check_date, len(result["approved"]))
+                day_state.add_log("Evening",
+                    f"Fallback watchlist from {check_date}: {len(result['approved'])} stocks", "neutral")
+                return result
+    except Exception as exc:
+        logging.error("Evening fallback load failed: %s", exc)
+    return {}
+
+
+def _run_claude_loop(client, messages, max_iterations, trade_date, alpaca_api_key, alpaca_secret_key):
+    result = {}
     for iteration in range(max_iterations):
         response = client.messages.create(
-            model="claude-opus-4-7",
+            model="claude-sonnet-4-6",
             max_tokens=4096,
-            thinking={"type": "adaptive"},
             system=_SYSTEM,
             tools=TOOLS,
             messages=messages,
@@ -419,22 +488,38 @@ def run_evening_analysis(
         if response.stop_reason == "end_turn":
             # Extract final JSON from text blocks
             for block in response.content:
-                if hasattr(block, "text") and block.text.strip().startswith("{"):
-                    try:
-                        result = json.loads(block.text.strip())
-                    except json.JSONDecodeError:
-                        # Try to extract JSON from within text
+                if hasattr(block, "text"):
+                    text_preview = block.text.strip()[:200].replace("\n", " ")
+                    logging.info("Evening agent end_turn text block: %s", text_preview)
+                    if block.text.strip().startswith("{"):
+                        try:
+                            result = json.loads(block.text.strip())
+                        except json.JSONDecodeError:
+                            # Try to extract JSON from within text
+                            text = block.text.strip()
+                            start = text.find("{")
+                            end = text.rfind("}") + 1
+                            if start >= 0 and end > start:
+                                try:
+                                    result = json.loads(text[start:end])
+                                except Exception:
+                                    pass
+                    else:
+                        # JSON might be embedded in text
                         text = block.text.strip()
                         start = text.find("{")
                         end = text.rfind("}") + 1
                         if start >= 0 and end > start:
                             try:
                                 result = json.loads(text[start:end])
+                                logging.info("Evening agent: extracted embedded JSON (%d chars)", end - start)
                             except Exception:
                                 pass
+            logging.info("Evening agent end_turn iteration=%d approved=%s", iteration, result.get("approved", []))
             break
 
         if response.stop_reason != "tool_use":
+            logging.warning("Evening agent unexpected stop_reason=%s iteration=%d", response.stop_reason, iteration)
             break
 
         # Execute tool calls
@@ -481,6 +566,11 @@ def run_evening_analysis(
     # Validate and store result
     approved = result.get("approved", [])
     approved = [s for s in approved if s in STOCK_UNIVERSE]
+    # Drop symbols missing price data — no entry zone = useless row in UI
+    entry_zones = result.get("entry_zones", {})
+    stop_levels = result.get("stop_levels", {})
+    targets = result.get("targets", {})
+    approved = [s for s in approved if s in entry_zones and s in stop_levels and s in targets]
     if not approved:
         logging.warning("Evening analysis returned no approved stocks — using scanner fallback")
         day_state.add_log("Evening", "No approved stocks from agent — watchlist empty", "warning")
