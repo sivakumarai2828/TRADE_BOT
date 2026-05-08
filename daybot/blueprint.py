@@ -477,6 +477,7 @@ def _run_cycle() -> None:
         has_pos = symbol in day_state.positions
         data = _fetch_bars(symbol)
         if data is None:
+            logging.warning("%s: bar fetch returned None — skipping", symbol)
             continue
 
         # Rule-based signal
@@ -492,7 +493,7 @@ def _run_cycle() -> None:
         ))
 
         if sig.action == "HOLD":
-            logging.info("%s: HOLD — %s (RSI %.1f, %.1f%% from EMA)", symbol, sig.reason, sig.rsi, (sig.price - sig.ema) / sig.ema * 100 if sig.ema else 0)
+            logging.warning("%s: HOLD — %s (RSI %.1f, %.1f%% from EMA)", symbol, sig.reason, sig.rsi, (sig.price - sig.ema) / sig.ema * 100 if sig.ema else 0)
             continue
 
         # Fetch 4-week historical context for Claude
