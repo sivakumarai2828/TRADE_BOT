@@ -130,21 +130,7 @@ def run_india_analysis(anthropic_api_key: str) -> dict:
     # Persist to Supabase
     _persist_india_results(result)
 
-    # Send Telegram alert
-    try:
-        from telegram_notify import notify_india_suggestions
-        notify_india_suggestions(
-            approved=result.get("approved", []),
-            entry_zones=result.get("entry_zones", {}),
-            stop_levels=result.get("stop_levels", {}),
-            targets=result.get("targets", {}),
-            notes=result.get("notes", {}),
-            regime=result.get("regime", ""),
-            nifty_level=nifty["level"],
-            nifty_trend=nifty["trend"],
-        )
-    except Exception as exc:
-        logging.warning("India Telegram notify failed: %s", exc)
+    # Telegram alert sent by scheduler's job_india_premarket_briefing at 8:30 AM IST
 
     logging.info("India analysis complete — %d picks, regime: %s", len(result.get("approved", [])), result.get("regime", ""))
     return result
