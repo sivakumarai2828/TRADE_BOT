@@ -161,12 +161,12 @@ def _get_data_client():
     return _data_client
 
 
-def _fetch_bars(symbol: str, limit: int = 100) -> dict | None:
+def _fetch_bars(symbol: str) -> dict | None:
     """Fetch intraday bars and compute indicators. Returns dict or None on error."""
     if not _alpaca_ok():
         return None
     try:
-        result, timed_out = _run_with_timeout(_fetch_bars_impl, symbol, limit)
+        result, timed_out = _run_with_timeout(_fetch_bars_impl, symbol)
         if timed_out:
             logging.warning("Bar fetch timed out [%s]", symbol)
             _alpaca_record_failure()
@@ -178,21 +178,19 @@ def _fetch_bars(symbol: str, limit: int = 100) -> dict | None:
         return None
 
 
-def _fetch_bars_impl(symbol: str, limit: int = 100) -> dict | None:
+def _fetch_bars_impl(symbol: str) -> dict | None:
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
     from datetime import timedelta
     import pandas as pd
 
-    from alpaca.data.enums import DataFeed
     client = _get_data_client()
     end = datetime.now(timezone.utc)
-    start = end - timedelta(days=5)  # fetch last 5 days to get enough bars
+    start = end - timedelta(days=2)  # 2 days ensures enough bars without IEX sparsity issues
     req = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Minute,
-        start=start, end=end, limit=limit,
-        feed=DataFeed.IEX,
+        start=start, end=end,
     )
     bars = client.get_stock_bars(req)
     df = bars.df
