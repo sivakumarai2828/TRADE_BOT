@@ -39,6 +39,7 @@ _bot_thread: threading.Thread | None = None
 _stop_event = threading.Event()
 _mode_manager = None   # DayModeManager — created on /start
 _harvester = None      # ProfitHarvester — created on /start
+_orb_fired: set[str] = set()  # symbols that already had ORB entry today (reset each morning)
 
 # Trading windows (ET): active 9:50–11:30, 14:00–15:30; close-only 15:30–15:50
 # 9:35–9:50 is the opening range — most chaotic, institutions are still positioning.
@@ -211,6 +212,25 @@ def _fetch_bars_impl(symbol: str) -> dict | None:
     prev_close = float(df["close"].iloc[-2]) if len(df) >= 2 else float(latest["close"])
 
     vwap = float(latest["vwap"]) if "vwap" in latest and not pd.isna(latest["vwap"]) else 0.0
+
+    # Opening range: today's bars 9:30–9:44 ET (used by ORB strategy)
+    orb_high = orb_low = None
+    try:
+        from zoneinfo import ZoneInfo
+        et_tz = ZoneInfo("America/New_York")
+        today_et = datetime.now(et_tz).date()
+        idx_et = df.index.tz_convert(et_tz)
+        orb_mask = [
+            t.date() == today_et and dtime(9, 30) <= t.time() <= dtime(9, 44)
+            for t in idx_et
+        ]
+        orb_df = df.iloc[[i for i, m in enumerate(orb_mask) if m]]
+        if not orb_df.empty:
+            orb_high = float(orb_df["high"].max())
+            orb_low = float(orb_df["low"].min())
+    except Exception:
+        pass
+
     return {
         "symbol": symbol,
         "price": float(latest["close"]),
@@ -220,6 +240,8 @@ def _fetch_bars_impl(symbol: str) -> dict | None:
         "avg_volume": float(latest["vol_avg"]) if latest["vol_avg"] > 0 else 1,
         "day_change_pct": (float(latest["close"]) - prev_close) / prev_close * 100,
         "vwap": vwap,
+        "orb_high": orb_high,
+        "orb_low": orb_low,
     }
 
 
@@ -478,20 +500,40 @@ def _run_cycle() -> None:
             logging.warning("%s: bar fetch returned None — skipping", symbol)
             continue
 
-        # Rule-based signal
-        sig = generate_signal(
-            symbol=symbol,
-            price=data["price"], ema=data["ema"], rsi=data["rsi"],
-            volume=data["volume"], avg_volume=data["avg_volume"],
-            has_position=has_pos,
+        # Signal strategy: ORB in morning window, RSI/EMA in afternoon
+        orb_high = data.get("orb_high")
+        orb_low = data.get("orb_low")
+        now_et = _et_now()
+        use_orb = (
+            orb_high is not None
+            and orb_low is not None
+            and now_et <= dtime(11, 30)
+            and symbol not in _orb_fired
         )
+
+        if use_orb:
+            from .strategy import generate_orb_signal
+            sig = generate_orb_signal(
+                symbol=symbol, price=data["price"],
+                orb_high=orb_high, orb_low=orb_low,
+                volume=data["volume"], avg_volume=data["avg_volume"],
+                has_position=has_pos,
+            )
+        else:
+            sig = generate_signal(
+                symbol=symbol,
+                price=data["price"], ema=data["ema"], rsi=data["rsi"],
+                volume=data["volume"], avg_volume=data["avg_volume"],
+                has_position=has_pos,
+            )
+
         day_state.set_signal(DaySignal(
             symbol=symbol, action=sig.action,
             rsi=sig.rsi, price=sig.price, ema=sig.ema,
         ))
 
         if sig.action == "HOLD":
-            logging.warning("%s: HOLD — %s (RSI %.1f, %.1f%% from EMA)", symbol, sig.reason, sig.rsi, (sig.price - sig.ema) / sig.ema * 100 if sig.ema else 0)
+            logging.warning("%s: HOLD — %s", symbol, sig.reason)
             continue
 
         # Fetch 4-week historical context for Claude
@@ -562,9 +604,14 @@ def _run_cycle() -> None:
             qty = _risk.calculate_position_size(portfolio_value, sig.price, state=day_state)
             try:
                 _executor.place_buy_order(symbol, qty)
-                # Use mode-specific SL/TP instead of fixed config values
-                sl = round(sig.price * (1 - mode_params.stop_loss_pct), 2)
-                tp = round(sig.price * (1 + mode_params.take_profit_pct), 2)
+                # ORB: use range-based SL/TP (natural levels); RSI/EMA: use mode % params
+                if use_orb and orb_high and orb_low:
+                    sl = round(orb_low, 2)
+                    tp = round(orb_high + 2 * (orb_high - orb_low), 2)
+                    _orb_fired.add(symbol)
+                else:
+                    sl = round(sig.price * (1 - mode_params.stop_loss_pct), 2)
+                    tp = round(sig.price * (1 + mode_params.take_profit_pct), 2)
                 pos = DayPosition(
                     symbol=symbol, qty=qty, entry_price=sig.price,
                     current_price=sig.price, stop_loss=sl, take_profit=tp,
@@ -606,9 +653,10 @@ def _run_cycle() -> None:
 
 
 def _bot_loop() -> None:
-    global _risk
+    global _risk, _orb_fired
     _run_cycle._eod_done = False          # reset EOD guard for new trading day
     _run_cycle._no_trade_alerted = False  # reset no-trade alert for new day
+    _orb_fired = set()                    # reset ORB entries for new trading day
     if hasattr(_run_cycle, "_window_entry_time"):
         del _run_cycle._window_entry_time
     logging.info("Day bot loop started")

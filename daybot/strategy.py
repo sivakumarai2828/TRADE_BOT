@@ -80,3 +80,43 @@ def generate_signal(
 
     return SignalResult(symbol, "HOLD", price, ema, rsi, volume, avg_volume,
                         trend, "No setup — conditions not met")
+
+
+def generate_orb_signal(
+    symbol: str,
+    price: float,
+    orb_high: float,
+    orb_low: float,
+    volume: float,
+    avg_volume: float,
+    has_position: bool = False,
+) -> SignalResult:
+    """Opening Range Breakout — range = first 15 min (9:30–9:44 ET).
+
+    BUY  : price breaks above range_high with volume ≥ 1.5× avg
+    SELL : position stop — price drops back below range_low
+    HOLD : no breakout yet, range too wide, or already fired
+    Skip : range width > 2% of price (volatile open — no edge)
+    """
+    range_width_pct = (orb_high - orb_low) / orb_high * 100 if orb_high > 0 else 99.0
+    vol_ok = avg_volume <= 1 or volume >= avg_volume * 1.5
+
+    if has_position:
+        if price < orb_low:
+            return SignalResult(symbol, "SELL", price, orb_high, 50.0, volume, avg_volume,
+                                "downtrend", f"ORB stop: price below range low ${orb_low:.2f}")
+        return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
+                            "uptrend", "ORB: position open")
+
+    if range_width_pct > 2.0:
+        return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
+                            "neutral", f"ORB range {range_width_pct:.1f}% too wide — skip")
+
+    if price > orb_high and vol_ok:
+        return SignalResult(
+            symbol, "BUY", price, orb_high, 60.0, volume, avg_volume, "uptrend",
+            f"ORB breakout above ${orb_high:.2f} (range {range_width_pct:.1f}%, vol {volume/max(avg_volume,1):.1f}x)",
+        )
+
+    return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
+                        "neutral", f"ORB: waiting for breakout above ${orb_high:.2f}")
