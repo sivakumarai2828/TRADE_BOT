@@ -185,13 +185,15 @@ def _fetch_bars_impl(symbol: str) -> dict | None:
     from datetime import timedelta
     import pandas as pd
 
+    from alpaca.data.enums import DataFeed
     client = _get_data_client()
     end = datetime.now(timezone.utc)
-    start = end - timedelta(days=2)  # 2 days ensures enough bars without IEX sparsity issues
+    start = end - timedelta(days=2)  # 2-day window without limit keeps IEX bars fresh
     req = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TimeFrame.Minute,
         start=start, end=end,
+        feed=DataFeed.IEX,
     )
     bars = client.get_stock_bars(req)
     df = bars.df
