@@ -234,9 +234,15 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         with bot_state._lock:
             daily_count = bot_state.metrics.daily_trades_count
             daily_limit = bot_state.metrics.daily_trades_limit
+            already_notified = bot_state.metrics.daily_limit_notified
         if daily_count >= daily_limit:
             logging.info("BUY skipped — daily trade limit reached (%d/%d)", daily_count, daily_limit)
             bot_state.add_log("Trade skipped", f"Daily limit: {daily_count}/{daily_limit} trades today", tone="neutral")
+            if not already_notified:
+                with bot_state._lock:
+                    bot_state.metrics.daily_limit_notified = True
+                from telegram_notify import notify_daily_trade_limit
+                notify_daily_trade_limit("Crypto Bot", daily_count, daily_limit, symbol)
             return
 
         if bot_state.settings.trade_size_mode == "percent":

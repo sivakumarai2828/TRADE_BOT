@@ -89,6 +89,7 @@ class Metrics:
     # Daily trade limit
     daily_trades_count: int = 0
     daily_trades_limit: int = 5
+    daily_limit_notified: bool = False
 
 
 @dataclass
@@ -278,6 +279,7 @@ class BotState:
                 self.metrics.daily_start_balance = self.metrics.balance
                 self.metrics.daily_loss_halted = False
                 self.metrics.daily_trades_count = 0
+                self.metrics.daily_limit_notified = False
                 return True
         return False
 

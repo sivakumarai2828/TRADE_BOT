@@ -197,6 +197,14 @@ def notify_daily_loss_halted(bot: str, loss_pct: float) -> None:
     )
 
 
+def notify_daily_trade_limit(bot: str, count: int, limit: int, symbol: str) -> None:
+    _send(
+        f"🚫 <b>{bot} — Daily Trade Limit Reached</b>\n"
+        f"Attempted: <b>{symbol}</b>\n"
+        f"Trades today: <b>{count}/{limit}</b> — no more BUYs until midnight reset."
+    )
+
+
 def notify_options_suggestions(picks: list, vix: float, regime: str) -> None:
     if not picks:
         return
