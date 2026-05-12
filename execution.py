@@ -231,6 +231,14 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             bot_state.add_log("Trade skipped", f"Portfolio limit: already {open_count} open positions (max 2)", tone="neutral")
             return
 
+        with bot_state._lock:
+            daily_count = bot_state.metrics.daily_trades_count
+            daily_limit = bot_state.metrics.daily_trades_limit
+        if daily_count >= daily_limit:
+            logging.info("BUY skipped — daily trade limit reached (%d/%d)", daily_count, daily_limit)
+            bot_state.add_log("Trade skipped", f"Daily limit: {daily_count}/{daily_limit} trades today", tone="neutral")
+            return
+
         if bot_state.settings.trade_size_mode == "percent":
             available = bot_state.metrics.paper_usdt if config.dry_run else bot_state.metrics.balance
             trade_size = Decimal(str(round(available * bot_state.settings.trade_size_pct / 100, 2)))
@@ -256,9 +264,14 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
                 bot_state.metrics.paper_usdt = round(bot_state.metrics.paper_usdt - float(trade_size), 2)
                 held = bot_state.metrics.paper_holdings.get(base, 0.0)
                 bot_state.metrics.paper_holdings[base] = round(held + float(amount), 8)
-            logging.info("PAPER BUY %s: -$%.2f USDT, +%.6f %s | paper_usdt=%.2f", symbol, float(trade_size), float(amount), base, bot_state.metrics.paper_usdt)
+                bot_state.metrics.daily_trades_count += 1
+            logging.info("PAPER BUY %s: -$%.2f USDT, +%.6f %s | paper_usdt=%.2f | daily=%d/%d",
+                         symbol, float(trade_size), float(amount), base, bot_state.metrics.paper_usdt,
+                         bot_state.metrics.daily_trades_count, bot_state.metrics.daily_trades_limit)
         else:
             exchange.create_market_buy_order(symbol, float(amount))
+            with bot_state._lock:
+                bot_state.metrics.daily_trades_count += 1
 
         # Use adaptive mode SL/TP if mode manager is active, else fall back to settings
         try:

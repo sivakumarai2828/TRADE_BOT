@@ -86,6 +86,9 @@ class Metrics:
     daily_start_balance: float = PAPER_INITIAL_USDT
     daily_date: str = ""          # YYYY-MM-DD; resets tracking when date changes
     daily_loss_halted: bool = False
+    # Daily trade limit
+    daily_trades_count: int = 0
+    daily_trades_limit: int = 5
 
 
 @dataclass
@@ -274,6 +277,7 @@ class BotState:
                 self.metrics.daily_date = today
                 self.metrics.daily_start_balance = self.metrics.balance
                 self.metrics.daily_loss_halted = False
+                self.metrics.daily_trades_count = 0
                 return True
         return False
 
