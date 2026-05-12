@@ -94,6 +94,18 @@ def _d(value) -> Decimal:
     return Decimal(str(value))
 
 
+def _dynamic_trade_pct(balance: float, principal: float) -> float:
+    """Return trade size % based on profit tier. Scales up on gains, down on drawback."""
+    if principal <= 0:
+        return 10.0
+    ratio = balance / principal  # 1.0 = breakeven, 2.0 = 100% gain
+    if ratio >= 3.0:   return 20.0  # 200%+ gain
+    if ratio >= 2.0:   return 18.0  # 100–200% gain
+    if ratio >= 1.5:   return 15.0  # 50–100% gain
+    if ratio >= 1.25:  return 12.0  # 25–50% gain
+    return 10.0                     # < 25% gain (or any drawdown)
+
+
 def _round_amount(exchange, symbol: str, amount: Decimal) -> Decimal:
     try:
         rounded = exchange.amount_to_precision(symbol, float(amount))
@@ -247,8 +259,13 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
 
         if bot_state.settings.trade_size_mode == "percent":
             available = bot_state.metrics.paper_usdt if config.dry_run else bot_state.metrics.balance
-            trade_size = Decimal(str(round(available * bot_state.settings.trade_size_pct / 100, 2)))
-            logging.info("Compound mode: %.1f%% of $%.2f = $%.2f", bot_state.settings.trade_size_pct, available, float(trade_size))
+            dynamic_pct = _dynamic_trade_pct(bot_state.metrics.balance, bot_state.metrics.principal)
+            if dynamic_pct != bot_state.settings.trade_size_pct:
+                logging.info("Dynamic sizing: balance/principal ratio=%.2f → %.0f%% (was %.0f%%)",
+                             bot_state.metrics.balance / max(bot_state.metrics.principal, 1),
+                             dynamic_pct, bot_state.settings.trade_size_pct)
+            trade_size = Decimal(str(round(available * dynamic_pct / 100, 2)))
+            logging.info("Compound mode: %.1f%% of $%.2f = $%.2f", dynamic_pct, available, float(trade_size))
         else:
             trade_size = Decimal(str(bot_state.settings.trade_size_usdt))
 
