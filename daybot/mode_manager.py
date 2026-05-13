@@ -32,9 +32,9 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(0.10, 0.015, 0.030, False, "SAFE"),
+    "SAFE":       ModeParams(0.10, 0.015, 0.030, True,  "SAFE"),       # allow breakouts — pullback-only was causing 0 trades
     "AGGRESSIVE": ModeParams(0.15, 0.015, 0.050, True,  "AGGRESSIVE"),
-    "SHIELD":     ModeParams(0.03, 0.010, 0.020, False, "SHIELD"),
+    "SHIELD":     ModeParams(0.03, 0.010, 0.020, False, "SHIELD"),     # SHIELD still blocks breakouts (capital protection)
 }
 
 
