@@ -594,7 +594,7 @@ def _run_cycle() -> None:
             vwap = data.get("vwap", 0.0)
             if vwap > 0:
                 vwap_pct = (sig.price - vwap) / vwap * 100
-                if vwap_pct < -1.5:
+                if vwap_pct < -3.0:  # loosened: was -1.5% (too tight, IEX VWAP lags)
                     day_state.add_log("Skipped", f"{symbol}: price {vwap_pct:.1f}% below VWAP ${vwap:.2f} — too bearish", "neutral")
                     continue
 

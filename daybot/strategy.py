@@ -99,7 +99,7 @@ def generate_orb_signal(
     Skip : range width > 2% of price (volatile open — no edge)
     """
     range_width_pct = (orb_high - orb_low) / orb_high * 100 if orb_high > 0 else 99.0
-    vol_ok = avg_volume <= 1 or volume >= avg_volume * 1.5
+    vol_ok = avg_volume <= 1 or volume >= avg_volume * 1.1  # lowered: IEX undercounts vs SIP
 
     if has_position:
         if price < orb_low:
@@ -108,7 +108,7 @@ def generate_orb_signal(
         return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
                             "uptrend", "ORB: position open")
 
-    if range_width_pct > 2.0:
+    if range_width_pct > 4.0:  # raised: large caps regularly open 2-4% wide
         return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
                             "neutral", f"ORB range {range_width_pct:.1f}% too wide — skip")
 
