@@ -12,6 +12,7 @@
     { "source": "/candles",       "destination": "http://34.171.182.46:8000/candles" },
     { "source": "/settings",      "destination": "http://34.171.182.46:8000/settings" },
     { "source": "/close",         "destination": "http://34.171.182.46:8000/close" },
-    { "source": "/health",        "destination": "http://34.171.182.46:8000/health" }
+    { "source": "/health",        "destination": "http://34.171.182.46:8000/health" },
+    { "source": "/profit-report", "destination": "http://34.171.182.46:8000/profit-report" }
   ]
 }
