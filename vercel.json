@@ -3,16 +3,16 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/daybot/:path*", "destination": "http://34.171.182.46:8000/daybot/:path*" },
-    { "source": "/status",        "destination": "http://34.171.182.46:8000/status" },
-    { "source": "/start",         "destination": "http://34.171.182.46:8000/start" },
-    { "source": "/stop",          "destination": "http://34.171.182.46:8000/stop" },
-    { "source": "/signals",       "destination": "http://34.171.182.46:8000/signals" },
-    { "source": "/positions",     "destination": "http://34.171.182.46:8000/positions" },
-    { "source": "/logs",          "destination": "http://34.171.182.46:8000/logs" },
-    { "source": "/candles",       "destination": "http://34.171.182.46:8000/candles" },
-    { "source": "/settings",      "destination": "http://34.171.182.46:8000/settings" },
-    { "source": "/close",         "destination": "http://34.171.182.46:8000/close" },
-    { "source": "/health",        "destination": "http://34.171.182.46:8000/health" },
-    { "source": "/profit-report", "destination": "http://34.171.182.46:8000/profit-report" }
+    { "source": "/status",        "destination": "http://34.67.95.221:8000/status" },
+    { "source": "/start",         "destination": "http://34.67.95.221:8000/start" },
+    { "source": "/stop",          "destination": "http://34.67.95.221:8000/stop" },
+    { "source": "/signals",       "destination": "http://34.67.95.221:8000/signals" },
+    { "source": "/positions",     "destination": "http://34.67.95.221:8000/positions" },
+    { "source": "/logs",          "destination": "http://34.67.95.221:8000/logs" },
+    { "source": "/candles",       "destination": "http://34.67.95.221:8000/candles" },
+    { "source": "/settings",      "destination": "http://34.67.95.221:8000/settings" },
+    { "source": "/close",         "destination": "http://34.67.95.221:8000/close" },
+    { "source": "/health",        "destination": "http://34.67.95.221:8000/health" },
+    { "source": "/profit-report", "destination": "http://34.67.95.221:8000/profit-report" }
   ]
 }
