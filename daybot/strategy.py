@@ -35,13 +35,12 @@ def generate_signal(
     vol_rising = not vol_data_available or volume >= avg_volume * 1.2
 
     # --- SELL logic (only when position is open) ---
+    # EMA-break exit removed — was firing at -0.5% and preventing TP/SL from being reached.
+    # Exits now handled by executor TP/SL only, plus RSI overbought.
     if has_position:
         if rsi > 72:
             return SignalResult(symbol, "SELL", price, ema, rsi, volume, avg_volume,
                                 trend, f"RSI {rsi:.1f} overbought (>72)")
-        if price < ema * 0.995:
-            return SignalResult(symbol, "SELL", price, ema, rsi, volume, avg_volume,
-                                trend, "Price broke below EMA — trend reversal")
 
     # --- HOLD conditions ---
     if 49.0 <= rsi <= 51.0:
@@ -57,7 +56,7 @@ def generate_signal(
     ema_low = -0.5 if rsi < 38.0 else 0.0
     if (
         ema_low <= pct_from_ema <= 3.0
-        and 30.0 <= rsi <= 62.0
+        and 28.0 <= rsi <= 66.0
         and not has_position
     ):
         return SignalResult(

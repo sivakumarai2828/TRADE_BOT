@@ -41,12 +41,12 @@ _mode_manager = None   # DayModeManager — created on /start
 _harvester = None      # ProfitHarvester — created on /start
 _orb_fired: set[str] = set()  # symbols that already had ORB entry today (reset each morning)
 
-# Trading windows (ET): active 9:50–11:30, 14:00–15:30; close-only 15:30–15:50
+# Trading windows (ET): active 9:50–12:00, 13:30–15:30; close-only 15:30–15:50
 # 9:35–9:50 is the opening range — most chaotic, institutions are still positioning.
 # No new entries until 9:50 when price action stabilises.
 _WINDOWS = [
-    (dtime(9, 50), dtime(11, 30)),
-    (dtime(14, 0), dtime(15, 30)),
+    (dtime(9, 50), dtime(12, 0)),
+    (dtime(13, 30), dtime(15, 30)),
 ]
 _CLOSE_ONLY_START = dtime(15, 30)
 _CLOSE_ONLY_END = dtime(15, 50)
@@ -447,22 +447,24 @@ def _run_cycle() -> None:
         day_state.add_log("Risk", "Daily loss limit hit — no new trades today", "negative")
         return
 
-    # --- Refresh watchlist every N minutes (runs regardless of trading window) ---
-    scan_interval = _config.scan_interval_minutes * 60
-    now_ts = datetime.now(timezone.utc).timestamp()
-    if not hasattr(_run_cycle, "_last_scan") or (now_ts - _run_cycle._last_scan) >= scan_interval:
+    # --- Build fixed daily watchlist once per trading day ---
+    # Replaces periodic random scanner — bot now specialises on 5 known symbols.
+    # Core ETFs always included; volatile stocks health-checked at open.
+    from zoneinfo import ZoneInfo
+    today_str = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    if getattr(_run_cycle, "_watchlist_date", None) != today_str:
         try:
-            symbols, timed_out = _run_with_timeout(_scanner.run_scan)
-            if timed_out:
-                logging.warning("Scanner timed out — keeping previous watchlist")
-                symbols = list(day_state.watchlist) or []
+            symbols, timed_out = _run_with_timeout(_scanner.build_daily_watchlist)
+            if timed_out or not symbols:
+                logging.warning("Watchlist build timed out — using default fixed list")
+                symbols = ["SPY", "QQQ", "NVDA", "AMD", "TSLA"]
         except Exception as exc:
-            logging.warning("Scanner error: %s", exc)
-            symbols = list(day_state.watchlist) or []
+            logging.warning("Watchlist build failed: %s — using default", exc)
+            symbols = ["SPY", "QQQ", "NVDA", "AMD", "TSLA"]
+        _run_cycle._watchlist_date = today_str
         _logger.log_scan(symbols)
         with day_state._lock:
             day_state.watchlist = symbols
-        _run_cycle._last_scan = now_ts
 
     # --- Skip new entries outside trading windows ---
     if not _in_trading_window():
@@ -485,14 +487,9 @@ def _run_cycle() -> None:
         _handle_mode_switch(new_mode, old_mode)
     mode_params = _mode_manager.params()
 
-    # --- Per-symbol cycle (use evening/premarket picks, scanner as priority hint) ---
-    approved = day_state.premarket_approved or day_state.evening_approved
-    if approved:
-        hot = set(day_state.watchlist)
-        # Scanner-confirmed picks first, then remaining evening picks
-        universe = sorted(approved, key=lambda s: (0 if s in hot else 1))
-    else:
-        universe = list(day_state.watchlist)
+    # --- Per-symbol cycle (fixed daily watchlist only) ---
+    # evening_approved/premarket_approved bypassed — fixed watchlist is the universe.
+    universe = list(day_state.watchlist)
     for i, symbol in enumerate(universe):
         if i > 0:
             import time as _time; _time.sleep(2)  # stagger fetches to reduce I/O on e2-micro
@@ -509,7 +506,7 @@ def _run_cycle() -> None:
         use_orb = (
             orb_high is not None
             and orb_low is not None
-            and now_et <= dtime(11, 30)
+            and now_et <= dtime(12, 0)
             and symbol not in _orb_fired
         )
 
@@ -580,6 +577,12 @@ def _run_cycle() -> None:
 
         # --- BUY ---
         if sig.action == "BUY":
+            # Per-symbol max 2 trades/day — prevents overtrading same declining stock
+            sym_trades = getattr(_run_cycle, "_symbol_trades", {})
+            if sym_trades.get(symbol, 0) >= 2:
+                day_state.add_log("Skipped", f"{symbol}: max 2 trades/day reached — skipping", "neutral")
+                continue
+
             # SHIELD / SAFE block momentum breakouts — only take pullback setups
             if not mode_params.allow_breakout and "breakout" in sig.reason.lower():
                 day_state.add_log(
@@ -604,6 +607,9 @@ def _run_cycle() -> None:
                 continue
 
             qty = _risk.calculate_position_size(portfolio_value, sig.price, state=day_state)
+            if qty < 1:
+                day_state.add_log("Skipped", f"{symbol}: price ${sig.price:.0f} too high for position size (qty=0)", "neutral")
+                continue
             try:
                 _executor.place_buy_order(symbol, qty)
                 # ORB: use range-based SL/TP (natural levels); RSI/EMA: use mode % params
@@ -625,6 +631,9 @@ def _run_cycle() -> None:
                     day_state.positions[symbol] = pos
                 _risk.register_trade(symbol)
                 _logger.log_trade(symbol, "BUY", sig.price, qty, sig.reason)
+                sym_trades = getattr(_run_cycle, "_symbol_trades", {})
+                sym_trades[symbol] = sym_trades.get(symbol, 0) + 1
+                _run_cycle._symbol_trades = sym_trades
             except Exception as exc:
                 day_state.add_log("Error", f"BUY {symbol} failed: {exc}", "negative")
 
@@ -658,6 +667,8 @@ def _bot_loop() -> None:
     global _risk, _orb_fired
     _run_cycle._eod_done = False          # reset EOD guard for new trading day
     _run_cycle._no_trade_alerted = False  # reset no-trade alert for new day
+    _run_cycle._watchlist_date = None     # force fresh watchlist build each day
+    _run_cycle._symbol_trades = {}        # per-symbol trade count reset each day
     _orb_fired = set()                    # reset ORB entries for new trading day
     if hasattr(_run_cycle, "_window_entry_time"):
         del _run_cycle._window_entry_time
@@ -670,6 +681,10 @@ def _bot_loop() -> None:
     except Exception:
         portfolio_value = 0.0
     _risk.reset_daily(portfolio_value)
+    # Re-register any positions that survived a mid-day restart so concurrent limit stays accurate
+    with day_state._lock:
+        for sym in day_state.positions:
+            _risk.register_trade(sym)
     with day_state._lock:
         day_state.metrics.daily_start_value = portfolio_value
         # Sync position size from config into state (so dashboard shows correct %)
