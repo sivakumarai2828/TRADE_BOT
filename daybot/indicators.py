@@ -40,11 +40,22 @@ def calculate_vwap(df: pd.DataFrame) -> pd.Series:
     return cum_tp_vol / cum_vol.replace(0, float("nan"))
 
 
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high, low, prev_close = df["high"], df["low"], df["close"].shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return tr.ewm(com=period - 1, min_periods=period).mean()
+
+
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ema_50, rsi, vol_avg, vwap columns to an OHLCV DataFrame."""
+    """Add ema_50, rsi, vol_avg, vwap, atr columns to an OHLCV DataFrame."""
     result = df.copy()
     result["ema_50"] = calculate_ema(result["close"])
     result["rsi"] = calculate_rsi(result["close"])
     result["vol_avg"] = result["volume"].rolling(20).mean()
     result["vwap"] = calculate_vwap(result)
+    result["atr"] = calculate_atr(result)
     return result

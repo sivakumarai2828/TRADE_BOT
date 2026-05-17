@@ -15,6 +15,11 @@ class DayPosition:
     take_profit: float
     pnl: float = 0.0
     pnl_pct: float = 0.0
+    # Partial profit tracking
+    tp1: float = 0.0           # price to close 50% — entry + 1.5x risk
+    tp1_hit: bool = False      # True once 50% sold at TP1
+    highest_price: float = 0.0 # tracks peak since TP1 hit (for trailing stop)
+    atr: float = 0.0           # ATR at entry — used for dynamic SL/TP
 
 
 @dataclass

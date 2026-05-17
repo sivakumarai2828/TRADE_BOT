@@ -98,7 +98,7 @@ def generate_orb_signal(
     Skip : range width > 2% of price (volatile open — no edge)
     """
     range_width_pct = (orb_high - orb_low) / orb_high * 100 if orb_high > 0 else 99.0
-    vol_ok = avg_volume <= 1 or volume >= avg_volume * 1.1  # lowered: IEX undercounts vs SIP
+    vol_ok = avg_volume <= 1 or volume >= avg_volume * 1.5
 
     if has_position:
         if price < orb_low:

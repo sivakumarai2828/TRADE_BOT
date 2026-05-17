@@ -32,9 +32,9 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(0.10, 0.015, 0.030, True,  "SAFE"),       # allow breakouts — pullback-only was causing 0 trades
-    "AGGRESSIVE": ModeParams(0.15, 0.015, 0.050, True,  "AGGRESSIVE"),
-    "SHIELD":     ModeParams(0.03, 0.010, 0.020, False, "SHIELD"),     # SHIELD still blocks breakouts (capital protection)
+    "SAFE":       ModeParams(0.20, 0.015, 0.030, True,  "SAFE"),       # 20% = $200 budget → buys 1 share of NVDA/AMD/TSLA
+    "AGGRESSIVE": ModeParams(0.25, 0.015, 0.050, True,  "AGGRESSIVE"), # 25% = $250 budget
+    "SHIELD":     ModeParams(0.05, 0.010, 0.020, False, "SHIELD"),     # 5% = $50 — capital protection, breakouts blocked
 }
 
 
@@ -47,7 +47,7 @@ class DayModeManager:
         self._min_trades   = int(os.getenv("MODE_MIN_TRADES_BEFORE_SWITCH", "2"))
         self._agg_streak   = int(os.getenv("MODE_AGGRESSIVE_WIN_STREAK", "3"))
         self._agg_spy_min  = float(os.getenv("MODE_AGGRESSIVE_SPY_MIN_PCT", "0.3"))
-        self._shield_loss  = int(os.getenv("MODE_SHIELD_LOSS_STREAK", "3"))
+        self._shield_loss  = int(os.getenv("MODE_SHIELD_LOSS_STREAK", "2"))
         self._shield_day   = float(os.getenv("MODE_SHIELD_DAILY_LOSS_PCT", "3.0"))
         self._safe_loss    = int(os.getenv("MODE_SAFE_LOSS_STREAK", "1"))
 

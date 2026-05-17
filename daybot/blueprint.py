@@ -233,6 +233,7 @@ def _fetch_bars_impl(symbol: str) -> dict | None:
     except Exception:
         pass
 
+    atr_val = float(latest["atr"]) if "atr" in latest and not pd.isna(latest["atr"]) else 0.0
     return {
         "symbol": symbol,
         "price": float(latest["close"]),
@@ -244,6 +245,7 @@ def _fetch_bars_impl(symbol: str) -> dict | None:
         "vwap": vwap,
         "orb_high": orb_high,
         "orb_low": orb_low,
+        "atr": atr_val,
     }
 
 
@@ -490,6 +492,11 @@ def _run_cycle() -> None:
     # --- Per-symbol cycle (fixed daily watchlist only) ---
     # evening_approved/premarket_approved bypassed — fixed watchlist is the universe.
     universe = list(day_state.watchlist)
+
+    # SPY intraday regime — fetch once per cycle to gate all long entries
+    _spy_fetch = _fetch_bars("SPY")
+    spy_day_change = _spy_fetch.get("day_change_pct", 0.0) if _spy_fetch else 0.0
+
     for i, symbol in enumerate(universe):
         if i > 0:
             import time as _time; _time.sleep(2)  # stagger fetches to reduce I/O on e2-micro
@@ -499,6 +506,39 @@ def _run_cycle() -> None:
             logging.warning("%s: bar fetch returned None — skipping", symbol)
             continue
 
+        # TP1 partial close and ATR trailing stop — uses fresh price from this cycle's fetch
+        if has_pos:
+            with day_state._lock:
+                _pos = day_state.positions.get(symbol)
+            if _pos and _pos.tp1 > 0:
+                _price = data["price"]
+                if not _pos.tp1_hit and _price >= _pos.tp1:
+                    _half = max(1, _pos.qty // 2)
+                    try:
+                        _executor.place_sell_order(symbol, _half)
+                        _ppnl = round((_price - _pos.entry_price) * _half, 2)
+                        with day_state._lock:
+                            if symbol in day_state.positions:
+                                _p = day_state.positions[symbol]
+                                _p.tp1_hit = True
+                                _p.qty -= _half
+                                _p.stop_loss = round(_p.entry_price, 2)
+                                _p.highest_price = _price
+                        day_state.add_log(
+                            "TP1", f"{symbol}: sold {_half}sh @ ${_price:.2f}, SL→BE, pnl=${_ppnl:.2f}", "positive"
+                        )
+                    except Exception as _exc:
+                        day_state.add_log("Error", f"TP1 sell {symbol} failed: {_exc}", "negative")
+                elif _pos.tp1_hit and _pos.atr > 0:
+                    _price = data["price"]
+                    with day_state._lock:
+                        if symbol in day_state.positions:
+                            _p = day_state.positions[symbol]
+                            _p.highest_price = max(_p.highest_price, _price)
+                            _new_sl = round(_p.highest_price - 1.5 * _p.atr, 2)
+                            if _new_sl > _p.stop_loss:
+                                _p.stop_loss = _new_sl
+
         # Signal strategy: ORB in morning window, RSI/EMA in afternoon
         orb_high = data.get("orb_high")
         orb_low = data.get("orb_low")
@@ -506,7 +546,7 @@ def _run_cycle() -> None:
         use_orb = (
             orb_high is not None
             and orb_low is not None
-            and now_et <= dtime(12, 0)
+            and now_et <= dtime(11, 0)
             and symbol not in _orb_fired
         )
 
@@ -583,6 +623,14 @@ def _run_cycle() -> None:
                 day_state.add_log("Skipped", f"{symbol}: max 2 trades/day reached — skipping", "neutral")
                 continue
 
+            if sum(sym_trades.values()) >= 5:
+                day_state.add_log("Skipped", f"{symbol}: max 5 trades/day reached", "neutral")
+                continue
+
+            if spy_day_change < -0.5:
+                day_state.add_log("Skipped", f"{symbol}: SPY {spy_day_change:.1f}% today — skip longs in down market", "neutral")
+                continue
+
             # SHIELD / SAFE block momentum breakouts — only take pullback setups
             if not mode_params.allow_breakout and "breakout" in sig.reason.lower():
                 day_state.add_log(
@@ -616,13 +664,19 @@ def _run_cycle() -> None:
                 if use_orb and orb_high and orb_low:
                     sl = round(orb_low, 2)
                     tp = round(orb_high + 2 * (orb_high - orb_low), 2)
+                    tp1_price = 0.0
+                    entry_atr = 0.0
                     _orb_fired.add(symbol)
                 else:
-                    sl = round(sig.price * (1 - mode_params.stop_loss_pct), 2)
-                    tp = round(sig.price * (1 + mode_params.take_profit_pct), 2)
+                    entry_atr = data.get("atr", 0.0)
+                    risk = entry_atr if entry_atr > 0 else sig.price * 0.01
+                    sl = round(sig.price - 1.0 * risk, 2)
+                    tp1_price = round(sig.price + 1.5 * risk, 2)
+                    tp = round(sig.price + 3.0 * risk, 2)
                 pos = DayPosition(
                     symbol=symbol, qty=qty, entry_price=sig.price,
                     current_price=sig.price, stop_loss=sl, take_profit=tp,
+                    tp1=tp1_price, atr=entry_atr,
                 )
                 pos._ai_confidence = ai_dec.confidence
                 pos._ai_reason = ai_dec.reason
