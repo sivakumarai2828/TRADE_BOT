@@ -149,7 +149,14 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
             bot_state.metrics.paper_holdings[base] = max(0.0, round(held - float(amount), 8))
         logging.info("PAPER SELL %s: +$%.2f USDT | paper_usdt=%.2f", symbol, proceeds, bot_state.metrics.paper_usdt)
     else:
-        exchange.create_market_sell_order(symbol, float(amount))
+        # Use TradingClient.close_position for Alpaca — avoids qty rounding mismatches
+        try:
+            from alpaca.trading.client import TradingClient
+            tc = TradingClient(config.api_key, config.api_secret, paper=False)
+            alpaca_sym = symbol.replace("/", "")  # "ETH/USD" → "ETHUSD"
+            tc.close_position(alpaca_sym)
+        except Exception:
+            exchange.create_market_sell_order(symbol, float(amount))
 
     pnl = (price - entry) * amount
     pnl_pct = float((price - entry) / entry * 100)
@@ -423,27 +430,41 @@ def _try_house_money_trade(exchange, config: BotConfig, symbol: str, current_pri
 
 
 def reconcile_positions(exchange, config: BotConfig) -> None:
-    """On startup compare bot_state positions with actual exchange balances.
+    """On startup compare bot_state positions with actual Alpaca positions.
 
-    Clears ghost positions (bot thinks open, exchange already closed them while
-    the server was offline). Skipped in paper mode — virtual state is authoritative.
+    Uses TradingClient (not ccxt fetch_balance) — ccxt Alpaca fetch_balance can
+    silently return 0 on auth errors, causing real positions to be wrongly cleared.
+    Also imports positions Alpaca has that bot_state doesn't know about.
+    Skipped in paper mode — virtual state is authoritative.
     """
     if config.dry_run:
         return
 
     try:
-        balance = exchange.fetch_balance()
+        from alpaca.trading.client import TradingClient
+        from state import PositionData
+        tc = TradingClient(config.api_key, config.api_secret, paper=False)
+        alpaca_positions = tc.get_all_positions()
+
+        # Build lookup: ccxt symbol (e.g. "ETH/USD") → Alpaca position
+        alpaca_map = {}
+        for ap in alpaca_positions:
+            # Alpaca symbol "ETHUSD" → ccxt "ETH/USD"
+            raw = ap.symbol  # e.g. "ETHUSD"
+            ccxt_sym = raw[:-3] + "/USD" if raw.endswith("USD") else raw
+            alpaca_map[ccxt_sym] = ap
+
         open_symbols = [s for s, p in bot_state.positions.items() if p is not None]
 
+        # Check existing bot positions against Alpaca
         for symbol in open_symbols:
-            base = symbol.split("/")[0]
-            actual = float(balance.get(base, {}).get("total", 0) or 0)
             pos = bot_state.get_position(symbol)
             if pos is None:
                 continue
-
-            if actual < 1e-6:
-                logging.warning("Reconcile: ghost position %s cleared (exchange balance=0)", symbol)
+            ap = alpaca_map.get(symbol)
+            if ap is None:
+                # Alpaca confirmed closed — real ghost
+                logging.warning("Reconcile: ghost position %s cleared (not on Alpaca)", symbol)
                 bot_state.set_position(symbol, None)
                 bot_state.add_log(
                     "Position reconciled",
@@ -452,21 +473,48 @@ def reconcile_positions(exchange, config: BotConfig) -> None:
                 )
                 from telegram_notify import _send
                 _send(f"⚠️ <b>Position reconciled</b>\n{symbol} ghost position cleared — closed while bot was offline.")
-            elif abs(actual - pos.amount) / max(pos.amount, 1e-9) > 0.05:
-                logging.warning("Reconcile: %s amount mismatch bot=%.6f exchange=%.6f — updating", symbol, pos.amount, actual)
-                with bot_state._lock:
-                    p = bot_state.positions.get(symbol)
-                    if p:
-                        p.amount = actual
-                bot_state.add_log(
-                    "Position reconciled",
-                    f"{symbol} amount corrected: {pos.amount:.6f} → {actual:.6f}",
-                    tone="warning",
-                )
+            else:
+                actual = float(ap.qty)
+                if abs(actual - pos.amount) > 1e-8:
+                    logging.warning("Reconcile: %s amount synced bot=%.8f → alpaca=%.8f", symbol, pos.amount, actual)
+                    with bot_state._lock:
+                        p = bot_state.positions.get(symbol)
+                        if p:
+                            p.amount = actual
 
-        logging.info("Position reconciliation complete — %d symbol(s) checked", len(open_symbols))
+        # Import positions Alpaca has that bot_state doesn't know about
+        for ccxt_sym, ap in alpaca_map.items():
+            if bot_state.get_position(ccxt_sym) is not None:
+                continue
+            entry = float(ap.avg_entry_price)
+            current = float(ap.current_price or entry)
+            pnl = float(ap.unrealized_pl or 0)
+            pnl_pct = (current - entry) / entry * 100 if entry > 0 else 0.0
+            sl = round(entry * (1 - float(config.stop_loss_pct)), 2)
+            tp = round(entry * (1 + float(config.take_profit_pct)), 2)
+            imported = PositionData(
+                symbol=ccxt_sym,
+                amount=float(ap.qty),
+                entry=entry,
+                current=current,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                stop_loss=sl,
+                take_profit=tp,
+                highest_price=max(entry, current),
+                is_house_trade=False,
+            )
+            bot_state.set_position(ccxt_sym, imported)
+            logging.info("Reconcile: imported %s from Alpaca (entry=%.2f sl=%.2f tp=%.2f)", ccxt_sym, entry, sl, tp)
+            bot_state.add_log(
+                "Position reconciled",
+                f"{ccxt_sym} imported from Alpaca — entry=${entry:.2f} SL=${sl:.2f} TP=${tp:.2f}",
+                tone="positive",
+            )
+
+        logging.info("Position reconciliation complete — %d bot / %d alpaca position(s)", len(open_symbols), len(alpaca_positions))
     except Exception as exc:
-        logging.warning("Position reconciliation failed: %s", exc)
+        logging.warning("Position reconciliation failed (skipping — bot state preserved): %s", exc)
 
 
 def close_open_position(exchange, config: BotConfig, symbol: str = None) -> bool:
