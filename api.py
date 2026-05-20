@@ -145,6 +145,23 @@ if _saved:
                 logging.warning("Could not restore position %s: %s", sym, exc)
         logging.info("Restored %d open position(s) from Supabase", len(p))
     logging.info("State restored from Supabase — balance=%.2f", bot_state.metrics.balance)
+    # Immediately sync real Alpaca balance on startup (don't wait for first 5-min cycle)
+    try:
+        import os as _os
+        _key = _os.getenv("EXCHANGE_API_KEY"); _secret = _os.getenv("EXCHANGE_API_SECRET")
+        if _key and _secret:
+            from alpaca.trading.client import TradingClient as _TC_startup
+            _tc_s = _TC_startup(_key, _secret, paper=False)
+            _acct_s = _tc_s.get_account()
+            _real_bal = round(float(_acct_s.equity), 2)
+            if _real_bal > 0:
+                bot_state.metrics.balance = _real_bal
+                bot_state.metrics.balance_detail = f"Live (Alpaca): USD {_real_bal:,.2f}"
+                if bot_state.metrics.peak_balance >= 9_000:
+                    bot_state.metrics.peak_balance = _real_bal
+                logging.info("Startup: real Alpaca equity synced — $%.2f", _real_bal)
+    except Exception as _e:
+        logging.warning("Startup balance sync failed: %s", _e)
 
 # Restore daybot evening analysis + India analysis from DB on startup.
 try:
@@ -408,12 +425,21 @@ def _run_cycle() -> None:
 
     if _config is not None and not _config.dry_run:
         try:
-            balance_info = _exchange.fetch_balance()
-            usdt_free = float(balance_info.get("USDT", {}).get("free", 0) or 0)
-            if usdt_free > 0:
-                new_bal = round(usdt_free, 2)
-                bot_state.update_metrics(balance=new_bal)
-                # Fix peak_balance — defaults to $10k paper value; sync to real balance on first live fetch
+            # Alpaca uses USD equity — use TradingClient for accurate balance
+            try:
+                from alpaca.trading.client import TradingClient as _TC
+                _tc = _TC(_config.api_key, _config.api_secret, paper=False)
+                _acct = _tc.get_account()
+                new_bal = round(float(_acct.equity), 2)
+            except Exception:
+                # Fallback: ccxt fetch_balance, check USD or USDT
+                balance_info = _exchange.fetch_balance()
+                usdt_free = float(balance_info.get("USDT", {}).get("free", 0) or 0)
+                usd_free = float(balance_info.get("USD", {}).get("free", 0) or 0)
+                new_bal = round(usdt_free or usd_free, 2)
+            if new_bal > 0:
+                bot_state.update_metrics(balance=new_bal, balance_detail=f"Live (Alpaca): USD {_real_bal:,.2f}")
+                # Fix peak_balance - defaults to 0k paper value; sync to real balance on first live fetch
                 if bot_state.metrics.peak_balance >= 9_000:
                     bot_state.metrics.peak_balance = new_bal
         except Exception:
