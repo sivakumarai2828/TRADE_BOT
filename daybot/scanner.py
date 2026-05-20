@@ -24,6 +24,15 @@ STOCK_UNIVERSE = [
     "JPM", "BAC", "GS", "V", "MA", "XLF", "SPY", "QQQ", "IWM",
 ]
 
+# Fixed daily universe — stocks chosen to fit $200 budget (20% of $1000 portfolio)
+# Core: affordable + liquid (<$100/share), always included, never excluded
+# Volatile: high ATR (2-4%/day), each ~$100-185 → 1 share at 20% budget
+# Backup: affordable (<$30/share) when volatile excluded on gap-down days
+_CORE     = ["BAC", "SOFI"]           # $50 and $12 — always fit budget, always trade
+_VOLATILE = ["NVDA", "AMD", "TSLA"]  # $135/$105/$185 — high ATR, excluded if gap down
+_BACKUP   = ["HOOD", "SNAP", "PLTR"] # $30/$10/$25 — affordable backups
+_GAP_EXCLUDE_PCT = -3.0              # gap below this → skip for the day
+
 
 class MarketScanner:
     def __init__(self, api_key: str, secret_key: str) -> None:
@@ -75,6 +84,48 @@ class MarketScanner:
             except Exception:
                 pass
         return result
+
+    def build_daily_watchlist(self) -> list[str]:
+        """Build today's fixed trading universe with morning health check.
+
+        Core ETFs (SPY, QQQ) always included. Volatile stocks (NVDA, AMD, TSLA)
+        excluded if gapping down > 3% — replaced by backup (AAPL, MSFT, META).
+        Result: always exactly 5 symbols, known patterns, no random scanner picks.
+        """
+        all_syms = _CORE + _VOLATILE + _BACKUP
+        snapshots = self._get_snapshots(all_syms)
+
+        watchlist = list(_CORE)
+        backups = list(_BACKUP)
+        excluded = []
+
+        for sym in _VOLATILE:
+            gap_pct = 0.0
+            snap = snapshots.get(sym)
+            if snap:
+                try:
+                    prev = float(snap.prev_daily_bar.close)
+                    curr = float(snap.daily_bar.open)
+                    gap_pct = (curr - prev) / prev * 100 if prev > 0 else 0.0
+                except Exception:
+                    pass
+
+            if gap_pct < _GAP_EXCLUDE_PCT:
+                logging.info("Watchlist: %s excluded — gap %.1f%% (threshold %.1f%%)",
+                             sym, gap_pct, _GAP_EXCLUDE_PCT)
+                excluded.append(sym)
+                for backup in backups:
+                    if backup not in watchlist:
+                        watchlist.append(backup)
+                        backups.remove(backup)
+                        break
+            else:
+                watchlist.append(sym)
+
+        if excluded:
+            logging.info("Watchlist: excluded=%s replaced by backups", excluded)
+        logging.info("Daily watchlist built: %s", watchlist)
+        return watchlist
 
     def run_scan(self) -> list[str]:
         """Return up to 15 candidate symbols from the universe."""

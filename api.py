@@ -72,13 +72,17 @@ def _watchdog_auto_recover() -> None:
 
     _stop_event.set()
     if _bot_thread and _bot_thread.is_alive():
-        _bot_thread.join(timeout=15)  # give stuck thread a chance to exit
+        _bot_thread.join(timeout=15)
 
-    _stop_event = threading.Event()
+    # Reset running so _start_crypto_bot_internal creates a fresh exchange + loop.
+    with bot_state._lock:
+        bot_state.running = False
     _last_cycle_time = _time_module.time()
-    _bot_thread = threading.Thread(target=_bot_loop, daemon=True, name="bot")
-    _bot_thread.start()
-    logging.info("Watchdog: bot loop restarted successfully")
+    err = _start_crypto_bot_internal()
+    if err:
+        logging.error("Watchdog: recovery failed — %s", err)
+    else:
+        logging.info("Watchdog: bot loop restarted successfully")
 
 
 def _watchdog_loop() -> None:
@@ -108,6 +112,17 @@ from telegram_bot import start_telegram_bot
 app.register_blueprint(daybot_bp, url_prefix="/daybot")
 start_scheduler()
 start_telegram_bot()
+
+# Options bot — paper trading on same VM as day bot (not on crypto-bot-vm)
+if os.getenv("DISABLE_OPTIONS_BOT", "").lower() not in ("1", "true", "yes"):
+    try:
+        from optionsbot.blueprint import start_options_bot as _start_opts
+        _opts_api_key = os.getenv("ALPACA_API_KEY") or os.getenv("EXCHANGE_API_KEY", "")
+        _opts_secret  = os.getenv("ALPACA_SECRET_KEY") or os.getenv("EXCHANGE_API_SECRET", "")
+        if _opts_api_key:
+            _start_opts(_opts_api_key, _opts_secret, paper=True)
+    except ModuleNotFoundError:
+        pass  # optionsbot not deployed on this VM
 
 # Restore persisted state from Supabase on startup.
 _saved = load_state()
@@ -246,6 +261,9 @@ def _auto_start_bots() -> None:
     _t.sleep(10)  # let Flask + scheduler fully initialise first
 
     # --- Crypto bot: always start ---
+    # On fresh service start no thread can be running — reset flag so start proceeds.
+    with bot_state._lock:
+        bot_state.running = False
     try:
         err = _start_crypto_bot_internal()
         if err:
@@ -256,20 +274,21 @@ def _auto_start_bots() -> None:
         logging.warning("Crypto bot auto-start exception: %s", exc)
 
     # --- Day bot: start only if mid-session restart (9:35–15:55 ET, Mon–Fri) ---
-    try:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        now_et = datetime.now(ZoneInfo("America/New_York"))
-        is_weekday = now_et.weekday() < 5
-        et_minutes = now_et.hour * 60 + now_et.minute
-        in_trading_hours = (9 * 60 + 35) <= et_minutes <= (15 * 60 + 55)
-        if is_weekday and in_trading_hours:
-            from daybot.scheduler import job_autostart
-            job_autostart()
-            logging.info("Day bot auto-started on mid-session service restart (%02d:%02d ET)",
-                         now_et.hour, now_et.minute)
-    except Exception as exc:
-        logging.warning("Day bot auto-start exception: %s", exc)
+    if os.getenv("DISABLE_DAY_BOT", "").lower() not in ("1", "true", "yes"):
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            is_weekday = now_et.weekday() < 5
+            et_minutes = now_et.hour * 60 + now_et.minute
+            in_trading_hours = (9 * 60 + 35) <= et_minutes <= (15 * 60 + 55)
+            if is_weekday and in_trading_hours:
+                from daybot.scheduler import job_autostart
+                job_autostart()
+                logging.info("Day bot auto-started on mid-session service restart (%02d:%02d ET)",
+                             now_et.hour, now_et.minute)
+        except Exception as exc:
+            logging.warning("Day bot auto-start exception: %s", exc)
 
 
 threading.Thread(target=_auto_start_bots, daemon=True, name="bot-autostart").start()
@@ -392,7 +411,11 @@ def _run_cycle() -> None:
             balance_info = _exchange.fetch_balance()
             usdt_free = float(balance_info.get("USDT", {}).get("free", 0) or 0)
             if usdt_free > 0:
-                bot_state.update_metrics(balance=round(usdt_free, 2))
+                new_bal = round(usdt_free, 2)
+                bot_state.update_metrics(balance=new_bal)
+                # Fix peak_balance — defaults to $10k paper value; sync to real balance on first live fetch
+                if bot_state.metrics.peak_balance >= 9_000:
+                    bot_state.metrics.peak_balance = new_bal
         except Exception:
             pass
 
@@ -560,6 +583,10 @@ def _start_crypto_bot_internal() -> str | None:
         _config = load_config()
         _exchange = create_exchange(_config)
         reconcile_positions(_exchange, _config)
+        # Fix peak_balance — default is $10k paper value; reset to real balance on live startup
+        if not _config.dry_run and bot_state.metrics.peak_balance >= 9_000:
+            bot_state.metrics.peak_balance = bot_state.metrics.balance
+            logging.info("peak_balance reset to real balance: $%.2f", bot_state.metrics.balance)
     except Exception as exc:
         msg = f"Failed to initialise exchange: {exc}"
         logging.error(msg)
@@ -680,6 +707,89 @@ def deposit():
     return jsonify({"ok": True, "balance": float(amount)})
 
 
+# ---------------------------------------------------------------------------
+# Options Bot endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/optionsbot/status")
+def optionsbot_status():
+    try:
+        from optionsbot.state import options_state
+    except ModuleNotFoundError:
+        return jsonify({"running": False, "positions": {}, "metrics": {}, "logs": []})
+    with options_state._lock:
+        positions = {
+            cs: {
+                "symbol": p.symbol,
+                "contract_symbol": p.contract_symbol,
+                "option_type": p.option_type,
+                "strike": p.strike,
+                "expiry": p.expiry,
+                "qty": p.qty,
+                "entry_premium": p.entry_premium,
+                "current_premium": p.current_premium,
+                "sl_price": p.sl_price,
+                "tp_price": p.tp_price,
+                "entry_time": p.entry_time,
+                "pnl": p.pnl,
+                "pnl_pct": p.pnl_pct,
+            }
+            for cs, p in options_state.positions.items()
+        }
+        m = options_state.metrics
+        metrics = {
+            "wins_today": m.wins_today,
+            "losses_today": m.losses_today,
+            "daily_pnl": m.daily_pnl,
+            "total_trades": m.total_trades,
+            "win_rate": m.win_rate,
+            "mode": m.mode,
+            "balance": m.balance,
+            "daily_loss_halted": m.daily_loss_halted,
+        }
+    return jsonify({
+        "running": options_state.running,
+        "positions": positions,
+        "metrics": metrics,
+        "logs": options_state.logs[:30],
+    })
+
+
+@app.post("/optionsbot/start")
+def optionsbot_start():
+    try:
+        from optionsbot.state import options_state
+        from optionsbot.blueprint import start_options_bot
+    except ModuleNotFoundError:
+        return jsonify({"ok": False, "message": "optionsbot not available on this VM"}), 404
+    if options_state.running:
+        return jsonify({"ok": False, "message": "Already running"})
+    api_key = os.getenv("ALPACA_API_KEY") or os.getenv("EXCHANGE_API_KEY", "")
+    secret  = os.getenv("ALPACA_SECRET_KEY") or os.getenv("EXCHANGE_API_SECRET", "")
+    start_options_bot(api_key, secret, paper=True)
+    return jsonify({"ok": True, "message": "Options bot started (paper)"})
+
+
+@app.post("/optionsbot/stop")
+def optionsbot_stop():
+    try:
+        from optionsbot.blueprint import stop_options_bot
+    except ModuleNotFoundError:
+        return jsonify({"ok": False, "message": "optionsbot not available on this VM"}), 404
+    stop_options_bot()
+    return jsonify({"ok": True, "message": "Options bot stopped"})
+
+
+@app.post("/reset-halt")
+def reset_halt():
+    """Clear daily loss halt so trading resumes immediately."""
+    with bot_state._lock:
+        bot_state.metrics.daily_loss_halted = False
+        bot_state.metrics.daily_start_balance = bot_state.metrics.balance
+    bot_state.add_log("Reset", "Daily loss halt cleared — trading resumed", tone="neutral")
+    return jsonify({"ok": True})
+
+
 @app.post("/settings")
 def settings():
     """Update runtime settings without restarting the bot."""
@@ -717,6 +827,44 @@ def settings():
 # ---------------------------------------------------------------------------
 
 DIST_DIR = os.path.join(os.path.dirname(__file__), "dist")
+
+
+@app.route("/profit-report", methods=["GET", "POST"])
+def profit_report():
+    import requests as _req
+    from telegram_notify import notify_profit_status
+    from daybot.state import day_state
+    dm = day_state.metrics
+
+    # Fetch real crypto data from crypto-bot-vm
+    crypto_url = os.getenv("CRYPTO_BOT_URL", "")
+    cm_balance, cm_wr, cm_trades, cm_running = 500.0, 0.0, 0, False
+    if crypto_url:
+        try:
+            cr = _req.get(f"{crypto_url}/status", timeout=5)
+            if cr.ok:
+                cd = cr.json()
+                cmet = cd.get("metrics", {})
+                cm_balance = cmet.get("balance", 500.0)
+                cm_wr = cmet.get("win_rate", 0.0)
+                cm_trades = cmet.get("daily_trades_count", 0)
+                cm_running = cd.get("running", False)
+        except Exception:
+            pass
+
+    notify_profit_status(
+        crypto_balance=cm_balance,
+        crypto_principal=500.0,
+        crypto_wr=cm_wr,
+        crypto_trades_today=cm_trades,
+        crypto_running=cm_running,
+        day_portfolio=dm.portfolio_value,
+        day_daily_pnl=dm.daily_pnl or 0.0,
+        day_wins=dm.wins_today,
+        day_losses=dm.losses_today,
+        day_running=day_state.running,
+    )
+    return jsonify({"ok": True, "message": "Profit status sent to Telegram"})
 
 
 @app.get("/", defaults={"path": ""})

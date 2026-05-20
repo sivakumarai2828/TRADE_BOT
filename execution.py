@@ -15,6 +15,7 @@ Live mode (DRY_RUN=false):
 from __future__ import annotations
 
 import logging
+import os
 from decimal import ROUND_DOWN, Decimal
 
 import ccxt
@@ -77,6 +78,8 @@ def create_exchange(config: BotConfig):
     mode = "paper" if config.dry_run else ("testnet" if config.testnet else "live")
     bot_state.exchange_name = f"{config.exchange_id} ({mode})"
     bot_state.paper_mode = config.dry_run
+    if not config.dry_run:
+        bot_state.metrics.balance_detail = "Live trading (Alpaca)"
     bot_state.add_log(
         "Exchange ready",
         f"{config.exchange_id} connected — mode={mode}",
@@ -141,13 +144,17 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
     base = symbol.split("/")[0]
     entry = _d(pos.entry)
 
+    sell_value = float(price * amount)
+    sell_fee = sell_value * 0.0015
     if config.dry_run:
-        proceeds = float(price * amount)
+        proceeds = sell_value
         with bot_state._lock:
             bot_state.metrics.paper_usdt = round(bot_state.metrics.paper_usdt + proceeds, 2)
             held = bot_state.metrics.paper_holdings.get(base, 0.0)
             bot_state.metrics.paper_holdings[base] = max(0.0, round(held - float(amount), 8))
-        logging.info("PAPER SELL %s: +$%.2f USDT | paper_usdt=%.2f", symbol, proceeds, bot_state.metrics.paper_usdt)
+            bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + sell_fee, 4)
+            bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + sell_fee, 4)
+        logging.info("PAPER SELL %s: +$%.2f USDT | paper_usdt=%.2f | fee~$%.4f", symbol, proceeds, bot_state.metrics.paper_usdt, sell_fee)
     else:
         # Use TradingClient.close_position for Alpaca — avoids qty rounding mismatches
         try:
@@ -157,6 +164,9 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
             tc.close_position(alpaca_sym)
         except Exception:
             exchange.create_market_sell_order(symbol, float(amount))
+        with bot_state._lock:
+            bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + sell_fee, 4)
+            bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + sell_fee, 4)
 
     pnl = (price - entry) * amount
     pnl_pct = float((price - entry) / entry * 100)
@@ -244,10 +254,11 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             logging.info("BUY skipped — %s position already open", symbol)
             return
 
+        max_positions = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
         open_count = sum(1 for p in bot_state.positions.values() if p is not None)
-        if open_count >= 2:
-            logging.info("BUY skipped — portfolio limit reached (%d/2 open positions)", open_count)
-            bot_state.add_log("Trade skipped", f"Portfolio limit: already {open_count} open positions (max 2)", tone="neutral")
+        if open_count >= max_positions:
+            logging.info("BUY skipped — portfolio limit reached (%d/%d open positions)", open_count, max_positions)
+            bot_state.add_log("Trade skipped", f"Portfolio limit: already {open_count} open positions (max {max_positions})", tone="neutral")
             return
 
         with bot_state._lock:
@@ -289,19 +300,24 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             logging.error("BUY skipped — calculated amount is zero")
             return
 
+        estimated_fee = float(trade_size) * 0.0015
         if config.dry_run:
             with bot_state._lock:
                 bot_state.metrics.paper_usdt = round(bot_state.metrics.paper_usdt - float(trade_size), 2)
                 held = bot_state.metrics.paper_holdings.get(base, 0.0)
                 bot_state.metrics.paper_holdings[base] = round(held + float(amount), 8)
                 bot_state.metrics.daily_trades_count += 1
-            logging.info("PAPER BUY %s: -$%.2f USDT, +%.6f %s | paper_usdt=%.2f | daily=%d/%d",
+                bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + estimated_fee, 4)
+                bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + estimated_fee, 4)
+            logging.info("PAPER BUY %s: -$%.2f USDT, +%.6f %s | paper_usdt=%.2f | daily=%d/%d | fee~$%.4f",
                          symbol, float(trade_size), float(amount), base, bot_state.metrics.paper_usdt,
-                         bot_state.metrics.daily_trades_count, bot_state.metrics.daily_trades_limit)
+                         bot_state.metrics.daily_trades_count, bot_state.metrics.daily_trades_limit, estimated_fee)
         else:
             exchange.create_market_buy_order(symbol, float(amount))
             with bot_state._lock:
                 bot_state.metrics.daily_trades_count += 1
+                bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + estimated_fee, 4)
+                bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + estimated_fee, 4)
 
         # Use adaptive mode SL/TP if mode manager is active, else fall back to settings
         try:
@@ -327,6 +343,7 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             stop_loss = pct_stop
         take_profit = (current_price * (1 + tp_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
+        from datetime import datetime, timezone as _tz
         pos = PositionData(
             symbol=symbol,
             amount=float(amount),
@@ -337,6 +354,7 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             stop_loss=float(stop_loss),
             take_profit=float(take_profit),
             highest_price=float(current_price),
+            entry_time=datetime.now(_tz.utc).isoformat(),
         )
         bot_state.set_position(symbol, pos)
 
@@ -575,3 +593,13 @@ def monitor_positions(exchange, config: BotConfig) -> None:
             _close_position(exchange, config, symbol, current_price, reason="stop_loss")
         elif float(current_price) >= pos.take_profit:
             _close_position(exchange, config, symbol, current_price, reason="take_profit")
+        elif pos.entry_time and pnl < 0:
+            try:
+                from datetime import datetime, timezone as _tz
+                entry_dt = datetime.fromisoformat(pos.entry_time)
+                hours_open = (datetime.now(_tz.utc) - entry_dt).total_seconds() / 3600
+                if hours_open >= 6:
+                    logging.info("Time-based exit %s — %.1fh open, pnl=%.2f", symbol, hours_open, pnl)
+                    _close_position(exchange, config, symbol, current_price, reason="time_exit")
+            except Exception:
+                pass

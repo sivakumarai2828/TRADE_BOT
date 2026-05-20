@@ -735,10 +735,37 @@ def _bot_loop() -> None:
     except Exception:
         portfolio_value = 0.0
     _risk.reset_daily(portfolio_value)
-    # Re-register any positions that survived a mid-day restart so concurrent limit stays accurate
+
+    # Reconcile with Alpaca — import any real positions bot lost track of
+    try:
+        alpaca_positions = _executor.get_open_positions() or []
+        with day_state._lock:
+            for ap in alpaca_positions:
+                sym = ap.symbol  # Alpaca uses "BAC" not "BAC/USD"
+                if sym not in day_state.positions or day_state.positions[sym].qty == 0:
+                    entry = float(ap.avg_entry_price)
+                    current = float(ap.current_price or entry)
+                    qty = int(float(ap.qty))
+                    if qty <= 0:
+                        continue
+                    from .state import DayPosition
+                    sl = round(entry * (1 - _config.stop_loss_pct), 2)
+                    tp = round(entry * (1 + _config.take_profit_pct), 2)
+                    day_state.positions[sym] = DayPosition(
+                        symbol=sym, qty=qty, entry_price=entry,
+                        current_price=current, stop_loss=sl, take_profit=tp,
+                        pnl=float(ap.unrealized_pl or 0),
+                    )
+                    logging.info("Reconcile: imported %s qty=%d entry=%.2f from Alpaca", sym, qty, entry)
+                    day_state.add_log("Reconciled", f"{sym} qty={qty} @ ${entry:.2f} imported from Alpaca", "neutral")
+    except Exception as exc:
+        logging.warning("Day bot reconcile failed (skipping): %s", exc)
+
+    # Re-register positions with actual qty (skip qty=0 ghosts)
     with day_state._lock:
-        for sym in day_state.positions:
-            _risk.register_trade(sym)
+        for sym, pos in day_state.positions.items():
+            if pos.qty > 0:
+                _risk.register_trade(sym)
     with day_state._lock:
         day_state.metrics.daily_start_value = portfolio_value
         # Sync position size from config into state (so dashboard shows correct %)

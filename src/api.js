@@ -107,6 +107,11 @@ export const runEveningAnalysis = () => request("/daybot/run-evening-analysis", 
 /** Trigger options picker on demand. */
 export const runOptionsPicker = () => request("/daybot/run-options-picker", { method: "POST" });
 
+/** Options bot — automated SPY/QQQ options trading. */
+export const fetchOptionsBotStatus = () => request("/optionsbot/status");
+export const startOptionsBot = () => request("/optionsbot/start", { method: "POST" });
+export const stopOptionsBot = () => request("/optionsbot/stop", { method: "POST" });
+
 /** Open user-logged manual positions (Robinhood stocks + options). */
 export const fetchUserPositions = () => request("/daybot/user-positions");
 

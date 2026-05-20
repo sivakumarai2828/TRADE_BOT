@@ -344,6 +344,48 @@ def notify_market_close_reminder(open_positions: list) -> None:
     _send("\n".join(lines))
 
 
+def notify_profit_status(
+    crypto_balance: float,
+    crypto_principal: float,
+    crypto_wr: float,
+    crypto_trades_today: int,
+    crypto_running: bool,
+    day_portfolio: float,
+    day_daily_pnl: float,
+    day_wins: int,
+    day_losses: int,
+    day_running: bool,
+) -> None:
+    """On-demand status snapshot for both bots — total profit + today summary."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    crypto_profit = crypto_balance - crypto_principal
+    crypto_pct = crypto_profit / crypto_principal * 100 if crypto_principal > 0 else 0.0
+    crypto_icon = "✅" if crypto_running else "⏸"
+    day_icon = "✅" if day_running else "⏸"
+    pnl_icon = "📈" if day_daily_pnl >= 0 else "📉"
+    day_trades = day_wins + day_losses
+    day_wr = day_wins / day_trades * 100 if day_trades > 0 else 0.0
+
+    _send(
+        f"📊 <b>Bot Profit Status</b>\n"
+        f"🕐 {now}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🪙 <b>Crypto Bot</b> {crypto_icon}\n"
+        f"  💰 Balance: <b>${crypto_balance:,.2f}</b> (started ${crypto_principal:,.0f})\n"
+        f"  📈 Total Profit: <b>${crypto_profit:+,.2f} ({crypto_pct:+.1f}%)</b>\n"
+        f"  🎯 WR: {crypto_wr:.0f}% | Today: {crypto_trades_today} trades\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📅 <b>Day Bot</b> {day_icon}\n"
+        f"  💰 Portfolio: <b>${day_portfolio:,.2f}</b>\n"
+        f"  {pnl_icon} Today PnL: <b>${day_daily_pnl:+.2f}</b>\n"
+        f"  🎯 WR: {day_wr:.0f}% | {day_wins}W / {day_losses}L ({day_trades} trades)\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"💵 <b>Combined Profit: ${crypto_profit + day_daily_pnl:+,.2f}</b>"
+    )
+
+
 def notify_morning_briefing(approved: list, entry_zones: dict, stop_levels: dict,
                              targets: dict, notes: dict, regime: str) -> None:
     if not approved:

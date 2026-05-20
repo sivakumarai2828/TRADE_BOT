@@ -6,11 +6,13 @@ import {
   Settings,
   TrendingUp,
   WalletCards,
+  Zap,
 } from "lucide-react";
 
 const navItems = [
   { label: "Crypto Bot", icon: Gauge, page: "crypto" },
   { label: "Day Bot", icon: TrendingUp, page: "daybot" },
+  { label: "Options Bot", icon: Zap, page: "optionsbot", badge: "NEW" },
   { label: "Trading Bot", icon: Bot, page: null },
   { label: "Signals", icon: Activity, page: null },
   { label: "Positions", icon: WalletCards, page: null },
@@ -56,9 +58,9 @@ export default function Sidebar({ exchangeName, paperMode, activePage, onNavigat
             >
               <Icon className="h-5 w-5" />
               <span>{item.label}</span>
-              {item.page === "daybot" && (
+              {item.badge && (
                 <span className="ml-auto rounded-full border border-blue-400/30 bg-blue-400/10 px-1.5 py-0.5 text-[10px] text-blue-300">
-                  NEW
+                  {item.badge}
                 </span>
               )}
             </button>

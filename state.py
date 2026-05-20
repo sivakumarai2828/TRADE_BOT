@@ -47,6 +47,7 @@ class PositionData:
     take_profit: float
     highest_price: float
     is_house_trade: bool = False
+    entry_time: str = ""  # ISO UTC timestamp — used for time-based exit
 
 
 @dataclass
@@ -90,6 +91,9 @@ class Metrics:
     daily_trades_count: int = 0
     daily_trades_limit: int = 5
     daily_limit_notified: bool = False
+    # Fee tracking (Alpaca charges ~0.15% per side)
+    total_fees_paid: float = 0.0
+    daily_fees_paid: float = 0.0
 
 
 @dataclass
@@ -280,6 +284,7 @@ class BotState:
                 self.metrics.daily_loss_halted = False
                 self.metrics.daily_trades_count = 0
                 self.metrics.daily_limit_notified = False
+                self.metrics.daily_fees_paid = 0.0
                 return True
         return False
 
@@ -291,7 +296,10 @@ class BotState:
             start = self.metrics.daily_start_balance
             if start <= 0:
                 return
-            drop_pct = (start - self.metrics.balance) / start * 100
+            # Include unrealized PnL from open positions — cash alone drops when capital deployed
+            open_pnl = sum(p.pnl for p in self.positions.values() if p is not None)
+            current = self.metrics.balance + open_pnl
+            drop_pct = (start - current) / start * 100
             if drop_pct >= DAILY_LOSS_LIMIT_PCT:
                 self.metrics.daily_loss_halted = True
         if self.metrics.daily_loss_halted:

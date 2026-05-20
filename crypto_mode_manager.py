@@ -47,7 +47,7 @@ class CryptoModeManager:
         self._agg_streak  = int(os.getenv("MODE_AGGRESSIVE_WIN_STREAK", "3"))
         self._shield_loss = int(os.getenv("MODE_SHIELD_LOSS_STREAK", "3"))
         self._shield_day  = float(os.getenv("MODE_SHIELD_DAILY_LOSS_PCT", "5.0"))
-        self._safe_loss   = int(os.getenv("MODE_SAFE_LOSS_STREAK", "1"))
+        self._safe_loss   = int(os.getenv("MODE_SAFE_LOSS_STREAK", "2"))
 
     # ------------------------------------------------------------------
     # Public API

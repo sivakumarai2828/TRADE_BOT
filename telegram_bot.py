@@ -141,33 +141,46 @@ def _log_audit(action: str, detail: str) -> None:
 # ---------------------------------------------------------------------------
 
 def tool_get_status(_args: dict) -> dict:
-    from state import bot_state
     from daybot.state import day_state
-
-    with bot_state._lock:
-        positions = [
-            {"symbol": s, "pnl": p.pnl, "pnl_pct": p.pnl_pct,
-             "entry": p.entry, "current": p.current}
-            for s, p in bot_state.positions.items() if p is not None
-        ]
 
     with day_state._lock:
         day_positions = [
             {"symbol": s, "entry": p.entry_price, "current": p.current_price,
              "qty": p.qty}
             for s, p in day_state.positions.items()
+            if p.qty > 0
         ]
+
+    # Fetch crypto data from crypto-bot-vm
+    crypto_url = os.getenv("CRYPTO_BOT_URL", "")
+    crypto_data: dict = {}
+    if crypto_url:
+        try:
+            import requests as _req
+            resp = _req.get(f"{crypto_url}/status", timeout=5)
+            if resp.ok:
+                crypto_data = resp.json()
+        except Exception as _exc:
+            logging.warning("tool_get_status: crypto fetch failed: %s", _exc)
+
+    cm = crypto_data.get("metrics", {})
+    cpos = [
+        {"symbol": s, "pnl": p.get("pnl", 0), "pnl_pct": p.get("pnl_pct", 0),
+         "entry": p.get("entry", 0), "current": p.get("current_price", 0)}
+        for s, p in crypto_data.get("positions", {}).items()
+        if p is not None
+    ]
 
     return {
         "crypto_bot": {
-            "running": bot_state.running,
-            "balance": bot_state.metrics.balance,
-            "pnl": bot_state.metrics.pnl,
-            "pnl_pct": bot_state.metrics.pnl_pct,
-            "win_rate": bot_state.metrics.win_rate,
-            "total_trades": bot_state.metrics.total_trades,
-            "shield_active": bot_state.metrics.shield_active,
-            "open_positions": positions,
+            "running": crypto_data.get("running", False),
+            "balance": cm.get("balance", 0),
+            "pnl": cm.get("pnl", 0),
+            "pnl_pct": cm.get("pnl_pct", 0),
+            "win_rate": cm.get("win_rate", 0),
+            "total_trades": cm.get("total_trades", 0),
+            "shield_active": cm.get("shield_active", False),
+            "open_positions": cpos,
         },
         "day_bot": {
             "running": day_state.running,
@@ -725,6 +738,9 @@ def _poll_loop() -> None:
 
 def start_telegram_bot() -> None:
     """Start the polling loop as a background daemon thread."""
+    if os.getenv("DISABLE_TELEGRAM_BOT", "").lower() in ("1", "true", "yes"):
+        logging.info("Telegram bot disabled via DISABLE_TELEGRAM_BOT")
+        return
     threading.Thread(target=_poll_loop, daemon=True, name="telegram-bot").start()
 
 

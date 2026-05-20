@@ -12,6 +12,7 @@ import Sidebar from "./components/Sidebar.jsx";
 import SignalPanel from "./components/SignalPanel.jsx";
 import Topbar from "./components/Topbar.jsx";
 import DayBotPage from "./DayBotPage.jsx";
+import OptionsBotPage from "./OptionsBotPage.jsx";
 
 const POLL_MS = 3_000;
 
@@ -96,6 +97,8 @@ export default function App() {
 
         {activePage === "daybot" ? (
           <DayBotPage />
+        ) : activePage === "optionsbot" ? (
+          <OptionsBotPage />
         ) : (
           <>
             {apiError && (

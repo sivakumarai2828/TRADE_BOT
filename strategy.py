@@ -188,7 +188,8 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 def _rule_based_signal(rsi: float, price: float, sma: float,
                        oversold: float = 43.0, overbought: float = 70.0,
-                       volume: float = 0.0, avg_volume: float = 0.0) -> Signal:
+                       volume: float = 0.0, avg_volume: float = 0.0,
+                       allow_breakout: bool = True) -> Signal:
     # Volume confirmation: require at least 1.2x average volume for dip buys and sells.
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
 
@@ -196,14 +197,12 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
     if rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
 
-    # Setup C: Recovery — RSI emerging from oversold zone (38–50), price holding near SMA.
-    # Fills the dead zone between Setup A and B. Classic bounce-recovery entry.
+    # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA.
     if oversold <= rsi <= 50.0 and price > sma * 0.98:
         return "BUY"
 
-    # Setup B: Momentum breakout — RSI rising in bullish zone, price above SMA.
-    # No volume gate here — momentum moves often start before volume confirms.
-    if 50.0 <= rsi <= 65.0 and price > sma * 1.001:
+    # Setup B: Momentum breakout — gated by allow_breakout (disabled in SAFE/SHIELD mode).
+    if allow_breakout and 50.0 <= rsi <= 65.0 and price > sma * 1.001:
         return "BUY"
 
     if rsi > overbought and vol_confirmed:
@@ -231,8 +230,11 @@ def _claude_signal(config: BotConfig, rsi: float, price: float, sma: float,
     prompt = (
         f"{symbol} RSI is {rsi:.2f}, current price is ${price:,.2f}, "
         f"50-period SMA is ${sma:,.2f}. "
-        f"Our strategy buys when RSI < {oversold} and price is near or above SMA (within 1%), "
-        f"sells when RSI > {overbought}. "
+        f"Our strategy has three BUY setups: "
+        f"(A) dip-buy: RSI < {oversold} and price > SMA×0.99; "
+        f"(B) momentum breakout: RSI 50–65 and price > SMA×1.001; "
+        f"(C) recovery bounce: RSI {oversold}–50 and price > SMA×0.98. "
+        f"SELL when RSI > {overbought}. "
         "Respond with a JSON object only — no markdown, no extra text."
     )
 
@@ -358,9 +360,19 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     oversold = bot_state.settings.rsi_oversold
     overbought = bot_state.settings.rsi_overbought
 
+    # Check mode manager for breakout permission (SAFE/SHIELD block Setup B).
+    _allow_breakout = True
+    try:
+        from api import _crypto_mode_manager
+        if _crypto_mode_manager is not None:
+            _allow_breakout = _crypto_mode_manager.params().allow_breakout
+    except Exception:
+        pass
+
     rule_signal = _rule_based_signal(rsi=rsi, price=price, sma=sma,
                                      oversold=oversold, overbought=overbought,
-                                     volume=volume, avg_volume=avg_volume)
+                                     volume=volume, avg_volume=avg_volume,
+                                     allow_breakout=_allow_breakout)
 
     # Multi-timeframe filter: block BUY when 1h trend is bearish.
     # SELL signals are not blocked — exits should always be allowed.

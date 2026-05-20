@@ -110,8 +110,15 @@ export default function MetricsCards({ metrics, analytics }) {
       })}
     </section>
 
-    {(expectancy !== null || sharpe !== null) && (
+    {(expectancy !== null || sharpe !== null || metrics?.total_fees_paid != null) && (
       <div className="flex flex-wrap gap-3">
+        {metrics?.total_fees_paid != null && (
+          <div className="flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 px-4 py-2 text-sm">
+            <span className="text-neutral-400">Fees Paid</span>
+            <span className="font-semibold text-neutral-300">${fmt(metrics.total_fees_paid, 2)} total</span>
+            <span className="text-xs text-neutral-500">today ${fmt(metrics.daily_fees_paid, 2)}</span>
+          </div>
+        )}
         {expectancy !== null && (
           <div className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm ${
             expectancy > 0
