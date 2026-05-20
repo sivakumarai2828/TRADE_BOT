@@ -2,8 +2,8 @@
 
 Signal  → RSI + EMA on underlying (same as crypto/day bot)
 Confirm → OpenRouter Llama (free, same as day bot BUY gate)
-Entry   → buy call (bullish) or put (bearish) within $150 budget
-Exit    → SL 50% of premium | TP 100% gain | expiry guard 30min before close
+Entry   → buy call (bullish) or put (bearish) within $250 budget
+Exit    → SL 40% of premium | TP 80% gain | expiry guard 30min before close
 Limits  → max 2 contracts open | SHIELD on 2 consecutive losses
 """
 from __future__ import annotations
@@ -22,9 +22,9 @@ _bot_thread: Optional[threading.Thread] = None
 SYMBOLS = ["SPY", "QQQ"]
 POLL_SECONDS = int(os.getenv("OPTIONS_POLL_SECONDS", "300"))   # 5 min
 MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "2"))
-BUDGET = float(os.getenv("OPTIONS_BUDGET", "150"))             # $ per contract
-SL_PCT = 0.50     # stop loss: lose 50% of premium
-TP_PCT = 1.00     # take profit: gain 100% of premium
+BUDGET = float(os.getenv("OPTIONS_BUDGET", "250"))             # $ per contract
+SL_PCT = 0.40     # stop loss: lose 40% of premium
+TP_PCT = 0.80     # take profit: gain 80% of premium
 DAILY_LOSS_HALT_PCT = 10.0
 EXPIRY_GUARD_MIN = 30
 MIN_CONFIDENCE = 0.55
@@ -59,11 +59,11 @@ def _signal(symbol: str) -> tuple[str, float, str]:
         day_open = float(df["Open"].squeeze().iloc[0])
         day_change = (price - day_open) / day_open * 100
 
-        if rsi < 35 and price > ema50 and day_change > -0.5:
-            conf = min(0.50 + (35 - rsi) / 50, 0.85)
+        if rsi < 40 and price > ema50 and day_change > -0.5:
+            conf = min(0.50 + (40 - rsi) / 50, 0.85)
             return "BUY", conf, f"RSI {rsi:.0f} oversold, above EMA50, day {day_change:+.1f}%"
-        if rsi > 65 and price < ema50 and day_change < 0.5:
-            conf = min(0.50 + (rsi - 65) / 50, 0.85)
+        if rsi > 62 and price < ema50 and day_change < 0.5:
+            conf = min(0.50 + (rsi - 62) / 50, 0.85)
             return "SELL", conf, f"RSI {rsi:.0f} overbought, below EMA50, day {day_change:+.1f}%"
 
         return "HOLD", 0.0, f"RSI {rsi:.0f} neutral"
