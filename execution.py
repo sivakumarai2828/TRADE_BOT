@@ -508,8 +508,8 @@ def reconcile_positions(exchange, config: BotConfig) -> None:
             current = float(ap.current_price or entry)
             pnl = float(ap.unrealized_pl or 0)
             pnl_pct = (current - entry) / entry * 100 if entry > 0 else 0.0
-            sl = round(entry * (1 - float(config.stop_loss_pct)), 2)
-            tp = round(entry * (1 + float(config.take_profit_pct)), 2)
+            sl = round(entry * (1 - float(config.stop_loss_pct) / 100), 2)
+            tp = round(entry * (1 + float(config.take_profit_pct) / 100), 2)
             imported = PositionData(
                 symbol=ccxt_sym,
                 amount=float(ap.qty),

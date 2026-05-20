@@ -194,7 +194,8 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
 
     # Setup A: Dip buy — RSI oversold with price near SMA support
-    if rsi < oversold and price > sma * 0.99 and vol_confirmed:
+    # vol_confirmed removed: 24/7 crypto has low overnight volume which blocks valid dip entries
+    if rsi < oversold and price > sma * 0.99:
         return "BUY"
 
     # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA.
