@@ -57,7 +57,7 @@ class DayMetrics:
     market_open: bool = False
     # Compounding / house money
     trade_mode: str = "compound"        # "fixed" | "compound" | "house_money"
-    position_size_pct: float = 0.05     # runtime size (may shrink during shield)
+    position_size_pct: float = 0.25     # runtime size (may shrink during shield)
     profit_pool: float = 0.0            # cumulative realised profit (house money source)
     # Shield
     consecutive_losses: int = 0
@@ -112,7 +112,7 @@ class DayBotState:
         self.shield_loss_streak: int = 2      # activate after N consecutive losses
         self.shield_recovery_wins: int = 2    # deactivate after N consecutive wins
         self.shield_size_pct: float = 0.01    # shrunken position size during shield
-        self.normal_size_pct: float = 0.05    # normal position size
+        self.normal_size_pct: float = 0.25    # normal position size (25% per trade)
 
     # ------------------------------------------------------------------
     # Trade result recording — updates streak counters and shield state
@@ -153,8 +153,20 @@ class DayBotState:
     # Position sizing
     # ------------------------------------------------------------------
 
-    def calculate_position_size(self, portfolio_value: float, price: float) -> int:
-        """Return share qty based on current trade mode."""
+    @staticmethod
+    def _dynamic_pct(portfolio_value: float, starting_value: float) -> float:
+        """25% base, scales up as portfolio grows (same logic as crypto bot)."""
+        if starting_value <= 0:
+            return 0.25
+        ratio = portfolio_value / starting_value
+        if ratio >= 3.0:   return 0.35
+        if ratio >= 2.0:   return 0.30
+        if ratio >= 1.5:   return 0.28
+        if ratio >= 1.25:  return 0.26
+        return 0.25
+
+    def calculate_position_size(self, portfolio_value: float, price: float) -> float:
+        """Return fractional share qty based on current trade mode."""
         with self._lock:
             m = self.metrics
             mode = m.trade_mode
@@ -164,14 +176,16 @@ class DayBotState:
                 available = m.profit_pool if m.profit_pool > 0 else portfolio_value * 0.01
                 dollar_size = available * m.position_size_pct
             elif mode == "compound":
-                # Re-invest: size off current portfolio value
-                dollar_size = portfolio_value * m.position_size_pct
+                # Dynamic 25% base — scales up as portfolio grows with profits
+                pct = self._dynamic_pct(portfolio_value, m.daily_start_value or 1000.0)
+                dollar_size = portfolio_value * pct
             else:
                 # Fixed: always use the stored size_pct against starting portfolio
                 dollar_size = m.daily_start_value * m.position_size_pct
 
-            qty = int(dollar_size / price) if price > 0 else 1
-            return max(1, qty)
+            # Fractional shares — no forced integer minimum
+            qty = round(dollar_size / price, 6) if price > 0 else 0.0
+            return max(0.001, qty)
 
     # ------------------------------------------------------------------
     # Logging helpers

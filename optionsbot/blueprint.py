@@ -22,7 +22,8 @@ _bot_thread: Optional[threading.Thread] = None
 SYMBOLS = ["SPY", "QQQ"]
 POLL_SECONDS = int(os.getenv("OPTIONS_POLL_SECONDS", "300"))   # 5 min
 MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "2"))
-BUDGET = float(os.getenv("OPTIONS_BUDGET", "250"))             # $ per contract
+_OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% of balance per contract
+BUDGET = float(os.getenv("OPTIONS_BUDGET", "0"))               # 0 = use dynamic pct of balance
 SL_PCT = 0.40     # stop loss: lose 40% of premium
 TP_PCT = 0.80     # take profit: gain 80% of premium
 DAILY_LOSS_HALT_PCT = 10.0
@@ -255,11 +256,12 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
         if action == "HOLD" or confidence < MIN_CONFIDENCE:
             continue
 
-        # Pick contract
+        # Pick contract — dynamic 25% of balance, or fixed BUDGET if set
         from .chain import pick_contract
-        contract = pick_contract(symbol, action, BUDGET)
+        _budget = BUDGET if BUDGET > 0 else round(state.metrics.balance * _OPTIONS_BUDGET_PCT, 2)
+        contract = pick_contract(symbol, action, _budget)
         if not contract:
-            state.add_log("Skipped", f"{symbol}: no contract within ${BUDGET:.0f} budget", "neutral")
+            state.add_log("Skipped", f"{symbol}: no contract within ${_budget:.0f} budget", "neutral")
             continue
 
         # LLM confirm

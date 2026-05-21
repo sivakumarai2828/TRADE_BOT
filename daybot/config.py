@@ -30,7 +30,7 @@ def load_config() -> DayBotConfig:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         max_trades_per_day=int(os.getenv("DAY_MAX_TRADES", "6")),
         max_concurrent_trades=int(os.getenv("DAY_MAX_CONCURRENT", "3")),
-        position_size_pct=float(os.getenv("DAY_POSITION_SIZE_PCT", "0.20")),
+        position_size_pct=float(os.getenv("DAY_POSITION_SIZE_PCT", "0.25")),
         max_daily_loss_pct=float(os.getenv("DAY_MAX_DAILY_LOSS_PCT", "0.05")),
         scan_interval_minutes=int(os.getenv("DAY_SCAN_INTERVAL_MINUTES", "15")),
         loop_interval_seconds=int(os.getenv("DAY_LOOP_INTERVAL_SECONDS", "60")),
