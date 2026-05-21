@@ -172,9 +172,10 @@ class DayBotState:
             mode = m.trade_mode
 
             if mode == "house_money":
-                # Only risk profit already earned; if no profit yet, use 1% safety size
-                available = m.profit_pool if m.profit_pool > 0 else portfolio_value * 0.01
-                dollar_size = available * m.position_size_pct
+                # Shield mode: block new trades entirely if no profit to risk
+                if m.profit_pool <= 0:
+                    return 0.0   # caller checks qty < 0.001 → skips trade
+                dollar_size = m.profit_pool * m.position_size_pct
             elif mode == "compound":
                 # Dynamic 25% base — scales up as portfolio grows with profits
                 pct = self._dynamic_pct(portfolio_value, m.daily_start_value or 1000.0)
@@ -182,6 +183,9 @@ class DayBotState:
             else:
                 # Fixed: always use the stored size_pct against starting portfolio
                 dollar_size = m.daily_start_value * m.position_size_pct
+
+            # Alpaca minimum order = $1 — enforce before calculating qty
+            dollar_size = max(dollar_size, 1.0)
 
             # Fractional shares — no forced integer minimum
             qty = round(dollar_size / price, 6) if price > 0 else 0.0

@@ -60,11 +60,11 @@ def _signal(symbol: str) -> tuple[str, float, str]:
         day_open = float(df["Open"].squeeze().iloc[0])
         day_change = (price - day_open) / day_open * 100
 
-        if rsi < 40 and price > ema50 and day_change > -0.5:
-            conf = min(0.50 + (40 - rsi) / 50, 0.85)
+        if rsi < 45 and price > ema50 and day_change > -1.0:
+            conf = min(0.50 + (45 - rsi) / 50, 0.85)
             return "BUY", conf, f"RSI {rsi:.0f} oversold, above EMA50, day {day_change:+.1f}%"
-        if rsi > 62 and price < ema50 and day_change < 0.5:
-            conf = min(0.50 + (rsi - 62) / 50, 0.85)
+        if rsi > 58 and price < ema50 and day_change < 1.0:
+            conf = min(0.50 + (rsi - 58) / 50, 0.85)
             return "SELL", conf, f"RSI {rsi:.0f} overbought, below EMA50, day {day_change:+.1f}%"
 
         return "HOLD", 0.0, f"RSI {rsi:.0f} neutral"
