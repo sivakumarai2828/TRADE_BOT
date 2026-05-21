@@ -45,6 +45,13 @@ class PositionMonitor:
         return float(trades[symbol].price)
 
     def _close(self, symbol: str, pos: DayPosition, reason: str) -> None:
+        # Guard: if qty is zero (stale entry after partial close), just remove
+        if pos.qty <= 0:
+            logging.warning("Stale zero-qty position %s (%s) — removing from state", symbol, reason)
+            with self._state._lock:
+                self._state.positions.pop(symbol, None)
+            self._risk.deregister_trade(symbol)
+            return
         try:
             self._executor.place_sell_order(symbol, pos.qty)
             pnl = (pos.current_price - pos.entry_price) * pos.qty

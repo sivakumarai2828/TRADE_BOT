@@ -518,7 +518,8 @@ def _run_cycle() -> None:
             if _pos and _pos.tp1 > 0:
                 _price = data["price"]
                 if not _pos.tp1_hit and _price >= _pos.tp1:
-                    _half = max(1, _pos.qty // 2)
+                    # Fractional-safe half: sell 50% of remaining qty
+                    _half = round(_pos.qty * 0.5, 6) if _pos.qty > 0.001 else _pos.qty
                     try:
                         _executor.place_sell_order(symbol, _half)
                         _ppnl = round((_price - _pos.entry_price) * _half, 2)
@@ -526,7 +527,7 @@ def _run_cycle() -> None:
                             if symbol in day_state.positions:
                                 _p = day_state.positions[symbol]
                                 _p.tp1_hit = True
-                                _p.qty -= _half
+                                _p.qty = round(_p.qty - _half, 6)
                                 _p.stop_loss = round(_p.entry_price, 2)
                                 _p.highest_price = _price
                         day_state.add_log(
