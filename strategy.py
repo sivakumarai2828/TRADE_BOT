@@ -375,13 +375,22 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                                      volume=volume, avg_volume=avg_volume,
                                      allow_breakout=_allow_breakout)
 
-    # Multi-timeframe filter: block BUY when 1h trend is bearish.
-    # SELL signals are not blocked — exits should always be allowed.
+    # Multi-timeframe filter: selectively block BUYs when 1h trend is bearish.
+    # Rules:
+    #   Setup B (breakout, RSI 50-65) — ALWAYS blocked in downtrend (fighting trend = bad)
+    #   Setup A (deep dip, RSI < oversold) — ALLOWED in downtrend (bounce trades off extreme lows)
+    #   Setup C (recovery, RSI 40-50) — ALLOWED in downtrend (RSI emerging = potential reversal)
+    # SELL signals never blocked — exits always allowed.
     if rule_signal == "BUY" and exchange is not None:
         htf = _get_htf_trend(exchange, symbol)
         if htf == "down":
-            logging.info("MTF filter [%s]: 1h trend=down — BUY overridden to HOLD", symbol)
-            rule_signal = "HOLD"
+            if 50.0 <= rsi <= 65.0:
+                # Setup B — block: momentum breakout in downtrend has low edge
+                logging.info("MTF filter [%s]: 1h down + RSI=%.1f (breakout zone) — BUY blocked", symbol, rsi)
+                rule_signal = "HOLD"
+            else:
+                # Setup A or C — allow: deep dips and recoveries can bounce even in downtrend
+                logging.info("MTF filter [%s]: 1h down but RSI=%.1f (dip/recovery) — BUY allowed", symbol, rsi)
 
     claude_confidence = 0.0
     claude_reason = ""
