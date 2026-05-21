@@ -37,25 +37,25 @@ class TradeExecutor:
                     time.sleep(wait)
         raise RuntimeError(f"All {retries} attempts failed")
 
-    def place_buy_order(self, symbol: str, qty: int) -> dict:
+    def place_buy_order(self, symbol: str, qty: float) -> dict:
         def _do():
             req = MarketOrderRequest(
                 symbol=symbol, qty=qty,
                 side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
             )
             order = self._client.submit_order(req)
-            logging.info("BUY submitted: %s qty=%d id=%s", symbol, qty, order.id)
+            logging.info("BUY submitted: %s qty=%.4f id=%s", symbol, qty, order.id)
             return {"id": str(order.id), "symbol": symbol, "qty": qty, "side": "buy"}
         return self._with_retry(_do)
 
-    def place_sell_order(self, symbol: str, qty: int) -> dict:
+    def place_sell_order(self, symbol: str, qty: float) -> dict:
         def _do():
             req = MarketOrderRequest(
                 symbol=symbol, qty=qty,
                 side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
             )
             order = self._client.submit_order(req)
-            logging.info("SELL submitted: %s qty=%d id=%s", symbol, qty, order.id)
+            logging.info("SELL submitted: %s qty=%.4f id=%s", symbol, qty, order.id)
             return {"id": str(order.id), "symbol": symbol, "qty": qty, "side": "sell"}
         return self._with_retry(_do)
 

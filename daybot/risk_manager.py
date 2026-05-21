@@ -64,8 +64,9 @@ class RiskManager:
             return state.calculate_position_size(portfolio_value, price)
         if price <= 0:
             return 1
-        qty = int(portfolio_value * self.position_size_pct / price)
-        return max(1, qty)
+        # Fractional shares: buy exact dollar amount, no forced minimum of 1 share
+        qty = round(portfolio_value * self.position_size_pct / price, 6)
+        return qty
 
     def register_trade(self, symbol: str) -> None:
         self._trades_today += 1

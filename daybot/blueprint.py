@@ -491,7 +491,12 @@ def _run_cycle() -> None:
 
     # --- Per-symbol cycle (fixed daily watchlist only) ---
     # evening_approved/premarket_approved bypassed — fixed watchlist is the universe.
-    universe = list(day_state.watchlist)
+    # Blacklist: chronic losers from historical performance (WR < 30%)
+    _BLACKLIST = frozenset({'META', 'MA', 'NVDA'})  # META 25% WR -85, MA 17% WR -0, NVDA 20% WR -8
+    universe = [s for s in day_state.watchlist if s not in _BLACKLIST]
+    if len(universe) < len(day_state.watchlist):
+        _removed = [s for s in day_state.watchlist if s in _BLACKLIST]
+        import logging as _lg; _lg.info('Blacklist filtered: %s', _removed)
 
     # SPY intraday regime — fetch once per cycle to gate all long entries
     _spy_fetch = _fetch_bars("SPY")
@@ -655,8 +660,8 @@ def _run_cycle() -> None:
                 continue
 
             qty = _risk.calculate_position_size(portfolio_value, sig.price, state=day_state)
-            if qty < 1:
-                day_state.add_log("Skipped", f"{symbol}: price ${sig.price:.0f} too high for position size (qty=0)", "neutral")
+            if qty < 0.001:
+                day_state.add_log("Skipped", f"{symbol}: position too small (qty={qty:.4f})", "neutral")
                 continue
             try:
                 _executor.place_buy_order(symbol, qty)
@@ -745,7 +750,7 @@ def _bot_loop() -> None:
                 if sym not in day_state.positions or day_state.positions[sym].qty == 0:
                     entry = float(ap.avg_entry_price)
                     current = float(ap.current_price or entry)
-                    qty = int(float(ap.qty))
+                    qty = float(ap.qty)  # fractional shares
                     if qty <= 0:
                         continue
                     from .state import DayPosition

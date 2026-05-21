@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 @dataclass
 class DayPosition:
     symbol: str
-    qty: int
+    qty: float  # fractional shares supported by Alpaca
     entry_price: float
     current_price: float
     stop_loss: float
