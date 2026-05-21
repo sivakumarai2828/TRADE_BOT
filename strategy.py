@@ -261,6 +261,10 @@ def _claude_signal(config: BotConfig, rsi: float, price: float, sma: float,
     )
 
     text = "".join(block.text for block in response.content if hasattr(block, "text")).strip()
+    # Strip markdown code fences Claude sometimes adds despite instructions
+    if text.startswith("```"):
+        text = text.split("```")[-2] if text.count("```") >= 2 else text
+        text = text.lstrip("json").strip()
 
     try:
         parsed = json.loads(text)
