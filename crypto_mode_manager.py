@@ -3,11 +3,11 @@
 Switches between three modes every cycle based on live performance + BTC 4h trend:
 
   SAFE       — default startup mode
-               trade_size ×1.0, SL 2.0%, TP 6.0%, dip-buy only
+               trade_size ×1.0, SL 2.0%, TP 25.0%, dip-buy only
   AGGRESSIVE — hot streak + BTC trending up
-               trade_size ×1.5, SL 2.0%, TP 8.0%, breakouts allowed
+               trade_size ×1.5, SL 2.0%, TP 25.0%, breakouts allowed
   SHIELD     — losing streak or daily loss too deep
-               trade_size ×0.3, SL 1.5%, TP 4.0%, dip-buy only
+               trade_size ×0.3, SL 1.5%, TP 6.0%, dip-buy only
 
 Anti-flip guard: minimum 2 completed trades before any mode switch.
 All thresholds configurable via env vars.
@@ -32,8 +32,8 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(1.0, 2.0, 10.0, False, "SAFE"),
-    "AGGRESSIVE": ModeParams(1.5, 2.0, 15.0, True,  "AGGRESSIVE"),
+    "SAFE":       ModeParams(1.0, 2.0, 25.0, False, "SAFE"),
+    "AGGRESSIVE": ModeParams(1.5, 2.0, 25.0, True,  "AGGRESSIVE"),
     "SHIELD":     ModeParams(0.3, 1.5,  6.0, False, "SHIELD"),
 }
 
