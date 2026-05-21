@@ -43,7 +43,7 @@ class CryptoModeManager:
         self._mode: Mode = "SAFE"
         self._trades_at_switch: int = 0
 
-        self._min_trades  = int(os.getenv("MODE_MIN_TRADES_BEFORE_SWITCH", "2"))
+        self._min_trades  = int(os.getenv("MODE_MIN_TRADES_BEFORE_SWITCH", "4"))
         self._agg_streak  = int(os.getenv("MODE_AGGRESSIVE_WIN_STREAK", "3"))
         self._shield_loss = int(os.getenv("MODE_SHIELD_LOSS_STREAK", "3"))
         self._shield_day  = float(os.getenv("MODE_SHIELD_DAILY_LOSS_PCT", "5.0"))
@@ -113,11 +113,15 @@ class CryptoModeManager:
             if wr < 50:
                 return "SAFE"
 
-        # ---- AGGRESSIVE (hot streak + BTC trending up) -----------------
-        if (
-            metrics.consecutive_wins >= self._agg_streak
-            and btc_trend == "up"
-        ):
+        # ---- AGGRESSIVE (hot streak OR strong win rate + BTC not down) --
+        # Path 1: consecutive streak + BTC trending up
+        streak_ok = metrics.consecutive_wins >= self._agg_streak and btc_trend == "up"
+        # Path 2: win rate >= 65% over last 10 trades + BTC not in downtrend
+        rate_ok = False
+        if len(metrics.trade_history) >= 10:
+            recent_wr = sum(metrics.trade_history[-10:]) / 10 * 100
+            rate_ok = recent_wr >= 65.0 and btc_trend != "down"
+        if streak_ok or rate_ok:
             return "AGGRESSIVE"
 
         return "SAFE"

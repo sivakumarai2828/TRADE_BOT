@@ -622,6 +622,15 @@ def _start_crypto_bot_internal() -> str | None:
     from crypto_mode_manager import CryptoModeManager
     from harvest.manager import ProfitHarvester
     _crypto_mode_manager = CryptoModeManager()
+    # Restore persisted mode on restart — don't reset to SAFE every restart
+    _persisted_mode = bot_state.settings.current_mode
+    if _persisted_mode in ("SAFE", "AGGRESSIVE", "SHIELD"):
+        _crypto_mode_manager._mode = _persisted_mode
+        # Restore _trades_at_switch so anti-flip guard requires NEW trades before re-evaluating
+        # (without this, mode re-evaluates immediately and drops AGGRESSIVE with 0 streak)
+        _crypto_mode_manager._trades_at_switch = bot_state.metrics.total_trades
+        logging.info("Mode manager restored: %s | trades_at_switch=%d",
+                     _persisted_mode, bot_state.metrics.total_trades)
     _harvester = ProfitHarvester(
         anthropic_api_key=_config.anthropic_api_key,
         alpaca_api_key=_config.api_key,
