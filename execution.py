@@ -100,13 +100,13 @@ def _d(value) -> Decimal:
 def _dynamic_trade_pct(balance: float, principal: float) -> float:
     """Return trade size % based on profit tier. Scales up on gains, down on drawback."""
     if principal <= 0:
-        return 10.0
+        return 25.0
     ratio = balance / principal  # 1.0 = breakeven, 2.0 = 100% gain
-    if ratio >= 3.0:   return 20.0  # 200%+ gain
-    if ratio >= 2.0:   return 18.0  # 100–200% gain
-    if ratio >= 1.5:   return 15.0  # 50–100% gain
-    if ratio >= 1.25:  return 12.0  # 25–50% gain
-    return 10.0                     # < 25% gain (or any drawdown)
+    if ratio >= 3.0:   return 35.0  # 200%+ gain
+    if ratio >= 2.0:   return 30.0  # 100–200% gain
+    if ratio >= 1.5:   return 28.0  # 50–100% gain
+    if ratio >= 1.25:  return 26.0  # 25–50% gain
+    return 25.0                     # base 25% (< 25% gain or any drawdown)
 
 
 def _round_amount(exchange, symbol: str, amount: Decimal) -> Decimal:
@@ -278,14 +278,27 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         if bot_state.settings.trade_size_mode == "percent":
             available = bot_state.metrics.paper_usdt if config.dry_run else bot_state.metrics.balance
             dynamic_pct = _dynamic_trade_pct(bot_state.metrics.balance, bot_state.metrics.principal)
-            if dynamic_pct != bot_state.settings.trade_size_pct:
-                logging.info("Dynamic sizing: balance/principal ratio=%.2f → %.0f%% (was %.0f%%)",
-                             bot_state.metrics.balance / max(bot_state.metrics.principal, 1),
-                             dynamic_pct, bot_state.settings.trade_size_pct)
             trade_size = Decimal(str(round(available * dynamic_pct / 100, 2)))
-            logging.info("Compound mode: %.1f%% of $%.2f = $%.2f", dynamic_pct, available, float(trade_size))
+            logging.info("Base sizing: %.1f%% of $%.2f = $%.2f", dynamic_pct, available, float(trade_size))
         else:
             trade_size = Decimal(str(bot_state.settings.trade_size_usdt))
+
+        # Apply mode multiplier + resolve SL/TP BEFORE calculating order amount
+        try:
+            from api import _crypto_mode_manager
+            if _crypto_mode_manager is not None:
+                mp = _crypto_mode_manager.params()
+                trade_size = Decimal(str(round(float(trade_size) * mp.size_multiplier, 2)))
+                _sl_pct = mp.stop_loss_pct / 100
+                _tp_pct = mp.take_profit_pct / 100
+                logging.info("Mode [%s]: size×%.1f → $%.2f | SL=%.1f%% TP=%.1f%%",
+                             _crypto_mode_manager.mode, mp.size_multiplier, float(trade_size),
+                             mp.stop_loss_pct, mp.take_profit_pct)
+            else:
+                raise ImportError
+        except (ImportError, Exception):
+            _sl_pct = bot_state.settings.stop_loss_pct / 100
+            _tp_pct = bot_state.settings.take_profit_pct / 100
 
         if config.dry_run:
             with bot_state._lock:
@@ -318,21 +331,6 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
                 bot_state.metrics.daily_trades_count += 1
                 bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + estimated_fee, 4)
                 bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + estimated_fee, 4)
-
-        # Use adaptive mode SL/TP if mode manager is active, else fall back to settings
-        try:
-            from api import _crypto_mode_manager
-            if _crypto_mode_manager is not None:
-                mp = _crypto_mode_manager.params()
-                _sl_pct = mp.stop_loss_pct / 100
-                _tp_pct = mp.take_profit_pct / 100
-                # Also scale trade size by mode multiplier
-                trade_size = Decimal(str(round(float(trade_size) * mp.size_multiplier, 2)))
-            else:
-                raise ImportError
-        except (ImportError, Exception):
-            _sl_pct = bot_state.settings.stop_loss_pct / 100
-            _tp_pct = bot_state.settings.take_profit_pct / 100
 
         tp_pct = Decimal(str(_tp_pct))
         pct_stop = (current_price * (1 - Decimal(str(_sl_pct)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
