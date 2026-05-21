@@ -7,6 +7,7 @@ any race conditions.
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -89,7 +90,7 @@ class Metrics:
     daily_loss_halted: bool = False
     # Daily trade limit
     daily_trades_count: int = 0
-    daily_trades_limit: int = 5
+    daily_trades_limit: int = int(os.getenv("CRYPTO_DAILY_TRADE_LIMIT", "10"))
     daily_limit_notified: bool = False
     # Fee tracking (Alpaca charges ~0.15% per side)
     total_fees_paid: float = 0.0

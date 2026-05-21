@@ -840,10 +840,18 @@ def settings():
     }
     filtered = {k: v for k, v in body.items() if k in allowed}
 
-    if not filtered:
+    if not filtered and "daily_trades_limit" not in body and "pre_shield_mode" not in body:
         return jsonify({"ok": False, "message": "No valid settings provided"}), 400
 
     bot_state.update_settings(**filtered)
+
+    # daily_trades_limit lives in Metrics — update live without restart
+    if "daily_trades_limit" in body:
+        try:
+            with bot_state._lock:
+                bot_state.metrics.daily_trades_limit = int(body["daily_trades_limit"])
+        except (ValueError, TypeError):
+            pass
 
     # pre_shield_mode lives in Metrics (it's what shield restores on recovery).
     # Allow setting it here so switching to "percent" sticks after shield lifts.
