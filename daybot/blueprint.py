@@ -831,7 +831,7 @@ def start():
 
     _scanner = MarketScanner(_config.alpaca_api_key, _config.alpaca_secret_key)
     _ai = AIValidator(_config.anthropic_api_key, _config.claude_model)
-    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=True, budget=_config.paper_budget)
+    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=False, budget=_config.paper_budget)
     _risk = RiskManager(
         max_trades_per_day=_config.max_trades_per_day,
         max_concurrent=_config.max_concurrent_trades,
@@ -881,7 +881,7 @@ def _start_bot_internal() -> None:
 
     _scanner = MarketScanner(_config.alpaca_api_key, _config.alpaca_secret_key)
     _ai = AIValidator(_config.anthropic_api_key, _config.claude_model)
-    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=True, budget=_config.paper_budget)
+    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=False, budget=_config.paper_budget)
     _risk = RiskManager(
         max_trades_per_day=_config.max_trades_per_day,
         max_concurrent=_config.max_concurrent_trades,
