@@ -145,6 +145,14 @@ if _saved:
                 logging.warning("Could not restore position %s: %s", sym, exc)
         logging.info("Restored %d open position(s) from Supabase", len(p))
     logging.info("State restored from Supabase — balance=%.2f", bot_state.metrics.balance)
+    # Sanity check: if restored balance equals peak (Supabase snapshotted at historical peak)
+    # and daily_start_balance is lower, the balance is stale — reset to daily_start.
+    _ds = bot_state.metrics.daily_start_balance
+    _bal = bot_state.metrics.balance
+    _peak = bot_state.metrics.peak_balance
+    if _ds > 0 and _bal > 0 and _bal == _peak and _bal > _ds * 1.5:
+        bot_state.metrics.balance = _ds
+        logging.warning("Supabase balance=%.2f equals peak (stale) — reset to daily_start=%.2f", _bal, _ds)
     # Immediately sync real Alpaca balance on startup (don't wait for first 5-min cycle)
     try:
         import os as _os
