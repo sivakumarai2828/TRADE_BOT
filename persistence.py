@@ -27,6 +27,9 @@ def _get_client() -> Optional[Client]:
     return _client
 
 
+_BOT_STATE_KEY = os.getenv("BOT_STATE_KEY", "main")
+
+
 def save_state(metrics, settings, positions: Optional[dict] = None) -> None:
     """Upsert full bot state snapshot to Supabase (includes open positions)."""
     client = _get_client()
@@ -38,7 +41,7 @@ def save_state(metrics, settings, positions: Optional[dict] = None) -> None:
             "settings": asdict(settings),
             "positions": positions or {},
         }
-        client.table("bot_state").upsert({"key": "main", "data": data}).execute()
+        client.table("bot_state").upsert({"key": _BOT_STATE_KEY, "data": data}).execute()
     except Exception as exc:
         logging.warning("Supabase save_state failed: %s", exc)
 
@@ -49,7 +52,7 @@ def load_state() -> Optional[dict]:
     if client is None:
         return None
     try:
-        result = client.table("bot_state").select("data").eq("key", "main").execute()
+        result = client.table("bot_state").select("data").eq("key", _BOT_STATE_KEY).execute()
         if result.data:
             return result.data[0]["data"]
     except Exception as exc:
