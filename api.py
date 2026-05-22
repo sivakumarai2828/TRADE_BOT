@@ -178,11 +178,25 @@ if _saved:
     try:
         import os as _os
         _key = _os.getenv("EXCHANGE_API_KEY"); _secret = _os.getenv("EXCHANGE_API_SECRET")
+        _real_bal = 0.0
         if _key and _secret:
-            from alpaca.trading.client import TradingClient as _TC_startup
-            _tc_s = _TC_startup(_key, _secret, paper=True)
-            _acct_s = _tc_s.get_account()
-            _real_bal = round(float(_acct_s.equity), 2)
+            # Try Alpaca SDK first
+            try:
+                from alpaca.trading.client import TradingClient as _TC_startup
+                _tc_s = _TC_startup(_key, _secret, paper=True)
+                _acct_s = _tc_s.get_account()
+                _real_bal = round(float(_acct_s.equity), 2)
+            except Exception:
+                # Fallback: CCXT fetch_balance — use TOTAL to include open crypto positions
+                try:
+                    import ccxt as _ccxt
+                    _ex = _ccxt.alpaca({"apiKey": _key, "secret": _secret, "options": {"defaultType": "crypto"}})
+                    _bal_info = _ex.fetch_balance()
+                    _usdt = float(_bal_info.get("USDT", {}).get("total", 0) or 0)
+                    _usd  = float(_bal_info.get("USD",  {}).get("total", 0) or 0)
+                    _real_bal = round(_usdt or _usd, 2)
+                except Exception as _ccxt_e:
+                    logging.warning("Startup CCXT balance fallback failed: %s", _ccxt_e)
             if _real_bal > 0:
                 bot_state.metrics.balance = _real_bal
                 bot_state.metrics.balance_detail = f"Live (Alpaca): USD {_real_bal:,.2f}"
@@ -461,11 +475,12 @@ def _run_cycle() -> None:
                 _acct = _tc.get_account()
                 new_bal = round(float(_acct.equity), 2)
             except Exception:
-                # Fallback: ccxt fetch_balance, check USD or USDT
+                # Fallback: ccxt fetch_balance — use TOTAL (free+used) to include
+                # open crypto position value, not just free cash (which omits holdings).
                 balance_info = _exchange.fetch_balance()
-                usdt_free = float(balance_info.get("USDT", {}).get("free", 0) or 0)
-                usd_free = float(balance_info.get("USD", {}).get("free", 0) or 0)
-                new_bal = round(usdt_free or usd_free, 2)
+                usdt_total = float(balance_info.get("USDT", {}).get("total", 0) or 0)
+                usd_total  = float(balance_info.get("USD",  {}).get("total", 0) or 0)
+                new_bal = round(usdt_total or usd_total, 2)
             if new_bal > 0:
                 bot_state.update_metrics(balance=new_bal, balance_detail=f"Live (Alpaca): USD {new_bal:,.2f}")
                 # Fix peak_balance - defaults to 0k paper value; sync to real balance on first live fetch
