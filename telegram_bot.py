@@ -151,7 +151,7 @@ def tool_get_status(_args: dict) -> dict:
             if p.qty > 0
         ]
 
-    # Fetch crypto data from crypto-bot-vm
+    # Fetch crypto data — remote URL if set, else read local bot_state directly
     crypto_url = os.getenv("CRYPTO_BOT_URL", "")
     crypto_data: dict = {}
     if crypto_url:
@@ -163,10 +163,25 @@ def tool_get_status(_args: dict) -> dict:
         except Exception as _exc:
             logging.warning("tool_get_status: crypto fetch failed: %s", _exc)
 
+    if not crypto_data:
+        # No remote URL or fetch failed — read from local bot_state (same process)
+        try:
+            from state import bot_state as _bs
+            from dataclasses import asdict as _asdict
+            with _bs._lock:
+                crypto_data = {
+                    "running": _bs.running,
+                    "metrics": _asdict(_bs.metrics),
+                    "positions": {s: _asdict(p) for s, p in _bs.positions.items()},
+                }
+        except Exception as _exc:
+            logging.warning("tool_get_status: local bot_state read failed: %s", _exc)
+
     cm = crypto_data.get("metrics", {})
     cpos = [
         {"symbol": s, "pnl": p.get("pnl", 0), "pnl_pct": p.get("pnl_pct", 0),
-         "entry": p.get("entry", 0), "current": p.get("current_price", 0)}
+         "entry": p.get("entry_price", p.get("entry", 0)),
+         "current": p.get("current_price", 0)}
         for s, p in crypto_data.get("positions", {}).items()
         if p is not None
     ]
@@ -175,10 +190,10 @@ def tool_get_status(_args: dict) -> dict:
         "crypto_bot": {
             "running": crypto_data.get("running", False),
             "balance": cm.get("balance", 0),
-            "pnl": cm.get("pnl", 0),
+            "pnl": cm.get("daily_pnl", cm.get("pnl", 0)),
             "pnl_pct": cm.get("pnl_pct", 0),
             "win_rate": cm.get("win_rate", 0),
-            "total_trades": cm.get("total_trades", 0),
+            "total_trades": cm.get("total_trades", cm.get("daily_trades", 0)),
             "shield_active": cm.get("shield_active", False),
             "open_positions": cpos,
         },
