@@ -409,6 +409,7 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
 
     Side-effect: writes the result into bot_state so the API can serve it.
     """
+    global _claude_consecutive_failures
     symbol = symbol or config.symbol
 
     latest = df.dropna(subset=["rsi", "sma_50"]).iloc[-1]
@@ -532,7 +533,6 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                 )
                 claude_signal = "HOLD"
             # Successful call — reset failure counter.
-            global _claude_consecutive_failures
             _claude_consecutive_failures = 0
             # Update in-memory and Supabase cache after a real API call.
             _now = datetime.now(timezone.utc).isoformat()
@@ -551,7 +551,6 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                 claude_confidence=claude_confidence, claude_reason=claude_reason,
             )
         except Exception as exc:
-            global _claude_consecutive_failures
             _claude_consecutive_failures += 1
             logging.exception("Claude decision failed (%d consecutive); final signal forced to HOLD: %s",
                               _claude_consecutive_failures, exc)
