@@ -383,6 +383,15 @@ class BotState:
 
     def to_dict(self) -> dict:
         with self._lock:
+            m = self.metrics
+            metrics = asdict(m)
+            # Recompute pnl/pnl_pct live from current balance vs principal.
+            # Stored value is stale (Supabase snapshot from historical peak).
+            if m.principal and m.principal > 0 and m.balance > 0:
+                live_pnl = round(m.balance - m.principal, 2)
+                live_pnl_pct = round(live_pnl / m.principal * 100, 2)
+                metrics["pnl"] = live_pnl
+                metrics["pnl_pct"] = live_pnl_pct
             return {
                 "running": self.running,
                 "paper_mode": self.paper_mode,
@@ -390,7 +399,7 @@ class BotState:
                 "signals": {s: asdict(sig) for s, sig in self.signals.items()},
                 "positions": {s: asdict(p) for s, p in self.positions.items() if p is not None},
                 "logs": [asdict(lg) for lg in self.logs[:30]],
-                "metrics": asdict(self.metrics),
+                "metrics": metrics,
                 "settings": asdict(self.settings),
                 "analytics": self._compute_analytics(),
             }
