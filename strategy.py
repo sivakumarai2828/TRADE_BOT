@@ -30,6 +30,10 @@ Signal = Literal["BUY", "SELL", "HOLD"]
 _htf_cache: dict[str, dict] = {}
 _HTF_TTL = 1800  # refresh every 30 minutes
 
+# BTC 4h EMA200 macro regime cache (single global — BTC drives all alts)
+_btc_regime_cache: dict = {}
+_BTC_REGIME_TTL = 7200  # refresh every 2 hours
+
 
 def _get_htf_trend(exchange, symbol: str) -> str:
     """Return 1-hour trend for symbol: 'up', 'down', or 'neutral'.
@@ -77,6 +81,49 @@ def _get_htf_trend(exchange, symbol: str) -> str:
         return trend
     except Exception as exc:
         logging.warning("HTF fetch failed [%s]: %s — defaulting to neutral", symbol, exc)
+        return "neutral"
+
+
+def _get_btc_regime() -> str:
+    """BTC 4h EMA200 macro regime via yfinance: 'bull', 'bear', or 'neutral'.
+
+    Cached 2h — 4h candles change slowly.
+    bull  = BTC price > EMA200 × 1.01  → full trading allowed
+    bear  = BTC price < EMA200 × 0.99  → block all new longs
+    neutral = within 1% band          → allow dip-buys only
+    Falls back to 'neutral' (non-blocking) on any error.
+    """
+    import time as _t
+    if _btc_regime_cache.get("ts") and (_t.time() - _btc_regime_cache["ts"]) < _BTC_REGIME_TTL:
+        return _btc_regime_cache["regime"]
+
+    try:
+        import yfinance as _yf
+        df = _yf.download("BTC-USD", period="60d", interval="4h", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 50:
+            return "neutral"
+
+        # Flatten MultiIndex columns (yfinance ≥0.2.38)
+        if hasattr(df.columns, "levels"):
+            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+
+        close = df["Close"].squeeze()
+        ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+        price = float(close.iloc[-1])
+
+        if price > ema200 * 1.01:
+            regime = "bull"
+        elif price < ema200 * 0.99:
+            regime = "bear"
+        else:
+            regime = "neutral"
+
+        _btc_regime_cache.update({"regime": regime, "ts": _t.time(),
+                                  "price": price, "ema200": ema200})
+        logging.info("BTC 4h regime: %s (price=%.0f EMA200=%.0f)", regime, price, ema200)
+        return regime
+    except Exception as exc:
+        logging.warning("BTC regime check failed: %s — defaulting to neutral", exc)
         return "neutral"
 
 
@@ -190,12 +237,17 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
                        oversold: float = 43.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0,
                        allow_breakout: bool = True) -> Signal:
-    # Volume confirmation: require at least 1.2x average volume for dip buys and sells.
-    vol_confirmed = avg_volume <= 0 or volume >= avg_volume * 1.2
+    import datetime as _dt
+    _hour_utc = _dt.datetime.now(_dt.timezone.utc).hour
+    _is_overnight = 0 <= _hour_utc < 6  # low vol window UTC 00-06
+    _vol_mult = 1.5 if _is_overnight else 2.0  # relaxed threshold overnight
 
-    # Setup A: Dip buy — RSI oversold with price near SMA support
-    # vol_confirmed removed: 24/7 crypto has low overnight volume which blocks valid dip entries
-    if rsi < oversold and price > sma * 0.99:
+    # Volume confirmation: 2× avg (1.5× overnight to handle thin crypto hours)
+    vol_confirmed = avg_volume <= 0 or volume >= avg_volume * _vol_mult
+
+    # Setup A: Dip buy — RSI oversold, above SMA support, volume confirmed.
+    # RSI floor at 35 prevents catching falling knives (RSI<35 = crash, not dip).
+    if 35.0 <= rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
 
     # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA.
@@ -378,6 +430,14 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                                      oversold=oversold, overbought=overbought,
                                      volume=volume, avg_volume=avg_volume,
                                      allow_breakout=_allow_breakout)
+
+    # BTC 4h EMA200 macro regime — block ALL new longs in bear market.
+    # Bear = BTC price > 1% below 4h EMA200. Neutral/bull = allow.
+    if rule_signal == "BUY":
+        btc_regime = _get_btc_regime()
+        if btc_regime == "bear":
+            logging.info("BTC regime BEAR [%s] RSI=%.1f — BUY blocked (macro downtrend)", symbol, rsi)
+            rule_signal = "HOLD"
 
     # Multi-timeframe filter: selectively block BUYs when 1h trend is bearish.
     # Rules:
