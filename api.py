@@ -58,6 +58,27 @@ logging.basicConfig(
 app = Flask(__name__)
 CORS(app)  # Allow the Vite dev server (port 5173) to call this API
 
+# ---------------------------------------------------------------------------
+# Route auth — protect all mutation routes with X-Bot-Key header.
+# Set BOT_API_KEY in .env. Requests from localhost are always allowed.
+# GET/OPTIONS requests are always public (dashboard reads, health checks).
+# ---------------------------------------------------------------------------
+_BOT_API_KEY = os.getenv("BOT_API_KEY", "")
+
+@app.before_request
+def _require_api_key():
+    if request.method in ("GET", "OPTIONS", "HEAD"):
+        return  # read-only routes are public
+    remote = request.remote_addr or ""
+    is_localhost = remote in ("127.0.0.1", "::1", "localhost")
+    if is_localhost:
+        return  # internal calls (Telegram bot on same VM) always allowed
+    if not _BOT_API_KEY:
+        return  # key not configured → open (backwards compat for local dev)
+    provided = request.headers.get("X-Bot-Key", "")
+    if provided != _BOT_API_KEY:
+        return jsonify({"ok": False, "message": "Unauthorized"}), 401
+
 import time as _time_module
 _startup_time = _time_module.time()
 _last_cycle_time = _time_module.time()  # updated every cycle; watchdog alerts if stale
@@ -177,7 +198,7 @@ try:
     from daybot.state import day_state as _day_state
     from datetime import date as _date
     _today = _date.today().isoformat()
-    _tomorrow = (_date.today().replace(day=_date.today().day + 1)).isoformat() if _date.today().day < 28 else None
+    from datetime import timedelta as _td; _tomorrow = (_date.today() + _td(days=1)).isoformat()
     for _td in filter(None, [_tomorrow, _today]):
         _row = load_evening_analysis(_td)
         if _row:
@@ -446,7 +467,7 @@ def _run_cycle() -> None:
                 usd_free = float(balance_info.get("USD", {}).get("free", 0) or 0)
                 new_bal = round(usdt_free or usd_free, 2)
             if new_bal > 0:
-                bot_state.update_metrics(balance=new_bal, balance_detail=f"Live (Alpaca): USD {_real_bal:,.2f}")
+                bot_state.update_metrics(balance=new_bal, balance_detail=f"Live (Alpaca): USD {new_bal:,.2f}")
                 # Fix peak_balance - defaults to 0k paper value; sync to real balance on first live fetch
                 if bot_state.metrics.peak_balance >= 9_000:
                     bot_state.metrics.peak_balance = new_bal

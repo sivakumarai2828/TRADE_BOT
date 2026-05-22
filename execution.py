@@ -326,7 +326,17 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
                          symbol, float(trade_size), float(amount), base, bot_state.metrics.paper_usdt,
                          bot_state.metrics.daily_trades_count, bot_state.metrics.daily_trades_limit, estimated_fee)
         else:
-            exchange.create_market_buy_order(symbol, float(amount))
+            _order = exchange.create_market_buy_order(symbol, float(amount))
+            # Verify order was accepted — rejected/cancelled orders must not create a PositionData
+            _order_status = (_order or {}).get("status", "")
+            _filled_qty = float((_order or {}).get("filled", amount))  # fallback to amount if not reported
+            if _order_status in ("canceled", "cancelled", "expired", "rejected"):
+                logging.error("BUY order REJECTED by exchange [%s] — status=%s. No position created.", symbol, _order_status)
+                bot_state.add_log("Trade rejected", f"{symbol} BUY rejected by Alpaca (status={_order_status})", tone="negative")
+                return
+            # Use actual filled amount if available (handles partial fills)
+            if _filled_qty > 0:
+                amount = Decimal(str(_filled_qty))
             with bot_state._lock:
                 bot_state.metrics.daily_trades_count += 1
                 bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + estimated_fee, 4)
