@@ -151,7 +151,7 @@ if _saved:
         _key = _os.getenv("EXCHANGE_API_KEY"); _secret = _os.getenv("EXCHANGE_API_SECRET")
         if _key and _secret:
             from alpaca.trading.client import TradingClient as _TC_startup
-            _tc_s = _TC_startup(_key, _secret, paper=False)
+            _tc_s = _TC_startup(_key, _secret, paper=True)
             _acct_s = _tc_s.get_account()
             _real_bal = round(float(_acct_s.equity), 2)
             if _real_bal > 0:
@@ -428,7 +428,7 @@ def _run_cycle() -> None:
             # Alpaca uses USD equity — use TradingClient for accurate balance
             try:
                 from alpaca.trading.client import TradingClient as _TC
-                _tc = _TC(_config.api_key, _config.api_secret, paper=False)
+                _tc = _TC(_config.api_key, _config.api_secret, paper=True)
                 _acct = _tc.get_account()
                 new_bal = round(float(_acct.equity), 2)
             except Exception:
