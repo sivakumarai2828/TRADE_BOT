@@ -78,12 +78,17 @@ def check():
         if sl_pct > 10:
             issues.append(f"⚠️ {sym}: SL is {sl_pct:.0f}% below entry — very wide")
 
-    # 4. Persistent HOLD loop (last 20 logs all HOLD)
-    recent = logs[-20:] if len(logs) >= 20 else logs
-    all_hold = all("HOLD" in l.get("message", "") for l in recent if "Signal" in l.get("type", ""))
-    sig_logs = [l for l in recent if "Signal" in l.get("type", "")]
-    if len(sig_logs) >= 10 and all_hold:
-        issues.append(f"⏸ Stuck in HOLD: last {len(sig_logs)} signals all HOLD — check RSI/volume/MTF filter")
+    # 4. Persistent HOLD loop — only flag outside overnight hours (UTC 00-07)
+    # Phase 1 filters intentionally produce more HOLDs; overnight low vol is normal.
+    from datetime import timezone as _tz
+    _now_h = datetime.now(_tz.utc).hour
+    _is_overnight = 0 <= _now_h < 7
+    if not _is_overnight:
+        recent = logs[-30:] if len(logs) >= 30 else logs
+        sig_logs = [l for l in recent if "Signal" in l.get("type", "")]
+        all_hold = sig_logs and all("HOLD" in l.get("message", "") for l in sig_logs)
+        if len(sig_logs) >= 20 and all_hold:
+            issues.append(f"⏸ Stuck in HOLD: last {len(sig_logs)} signals all HOLD — check RSI/volume/MTF filter")
 
     # 5. Daily loss halt triggered
     if m.get("daily_loss_halted"):

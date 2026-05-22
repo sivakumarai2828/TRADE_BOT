@@ -592,6 +592,23 @@ def _dispatch_openrouter_fallback(user_text: str) -> str:
     )
 
 
+def _serialize_content(content) -> list:
+    """Convert Anthropic content blocks → plain dicts (avoids ToolUseBlock pydantic error)."""
+    result = []
+    for block in content:
+        if not hasattr(block, "type"):
+            result.append(block)
+            continue
+        if block.type == "text":
+            result.append({"type": "text", "text": getattr(block, "text", "")})
+        elif block.type == "tool_use":
+            result.append({"type": "tool_use", "id": block.id,
+                           "name": block.name, "input": block.input or {}})
+        else:
+            result.append({"type": block.type})
+    return result
+
+
 def _dispatch(user_text: str) -> str:
     """Send user message to Claude with tool dispatch. Returns response string."""
     global _history, _credits_exhausted
@@ -620,7 +637,7 @@ def _dispatch(user_text: str) -> str:
 
             if response.stop_reason == "end_turn":
                 text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-                _history.append({"role": "assistant", "content": response.content})
+                _history.append({"role": "assistant", "content": _serialize_content(response.content)})
                 return text or "Done."
 
             if response.stop_reason != "tool_use":
@@ -651,7 +668,7 @@ def _dispatch(user_text: str) -> str:
                     "content": json.dumps(result),
                 })
 
-            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "assistant", "content": _serialize_content(response.content)})
             messages.append({"role": "user", "content": tool_results})
 
     except AnthropicBadRequest as exc:
