@@ -32,7 +32,7 @@ import time
 from collections import deque
 
 import requests
-from anthropic import Anthropic, BadRequestError as AnthropicBadRequest
+from anthropic import Anthropic, BadRequestError as AnthropicBadRequest, OverloadedError as AnthropicOverloaded
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
@@ -686,6 +686,9 @@ def _dispatch(user_text: str) -> str:
             messages.append({"role": "assistant", "content": _serialize_content(response.content)})
             messages.append({"role": "user", "content": tool_results})
 
+    except AnthropicOverloaded:
+        logging.warning("Telegram bot: Anthropic overloaded (529) — falling back to OpenRouter")
+        return _dispatch_openrouter_fallback(user_text)
     except AnthropicBadRequest as exc:
         if "credit balance" in str(exc).lower():
             _credits_exhausted = True
