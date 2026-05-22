@@ -34,6 +34,11 @@ _HTF_TTL = 1800  # refresh every 30 minutes
 _btc_regime_cache: dict = {}
 _BTC_REGIME_TTL = 7200  # refresh every 2 hours
 
+# Claude availability tracker — block BUY entries when API repeatedly overloaded.
+# Resets to 0 on any successful Claude call.
+_claude_consecutive_failures: int = 0
+_CLAUDE_FAILURE_THRESHOLD: int = 3  # block BUY after this many consecutive failures
+
 
 def _get_htf_trend(exchange, symbol: str) -> str:
     """Return 1-hour trend for symbol: 'up', 'down', or 'neutral'.
@@ -431,6 +436,20 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                                      volume=volume, avg_volume=avg_volume,
                                      allow_breakout=_allow_breakout)
 
+    # Claude availability gate — block BUY when AI has failed repeatedly.
+    # Prevents bad entries when the AI confirmation layer is down (e.g. 529 overload).
+    if rule_signal == "BUY" and _claude_consecutive_failures >= _CLAUDE_FAILURE_THRESHOLD:
+        logging.warning(
+            "Claude unavailable (%d consecutive failures) — BUY blocked for %s [AI gate closed]",
+            _claude_consecutive_failures, symbol,
+        )
+        bot_state.add_log(
+            "AI gate closed",
+            f"Claude failed {_claude_consecutive_failures}x — no new BUY until API recovers",
+            tone="neutral",
+        )
+        rule_signal = "HOLD"
+
     # BTC 4h EMA200 macro regime — block ALL new longs in bear market.
     # Bear = BTC price > 1% below 4h EMA200. Neutral/bull = allow.
     if rule_signal == "BUY":
@@ -512,6 +531,9 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                     claude_signal, claude_confidence, claude_reason,
                 )
                 claude_signal = "HOLD"
+            # Successful call — reset failure counter.
+            global _claude_consecutive_failures
+            _claude_consecutive_failures = 0
             # Update in-memory and Supabase cache after a real API call.
             _now = datetime.now(timezone.utc).isoformat()
             _last_claude_input[symbol] = {
@@ -529,7 +551,10 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                 claude_confidence=claude_confidence, claude_reason=claude_reason,
             )
         except Exception as exc:
-            logging.exception("Claude decision failed; final signal forced to HOLD: %s", exc)
+            global _claude_consecutive_failures
+            _claude_consecutive_failures += 1
+            logging.exception("Claude decision failed (%d consecutive); final signal forced to HOLD: %s",
+                              _claude_consecutive_failures, exc)
             claude_signal = "HOLD"
             bot_state.add_log("Claude error", str(exc)[:120], tone="negative")
 

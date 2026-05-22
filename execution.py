@@ -595,6 +595,21 @@ def monitor_positions(exchange, config: BotConfig) -> None:
         if config.dry_run:
             bot_state.refresh_paper_balance(symbol, float(current_price))
 
+        # Breakeven SL — when position up ≥1%, raise SL to entry price.
+        # Winning trade can never become a loser.
+        if pnl_pct >= 1.0 and float(entry) > pos.stop_loss:
+            with bot_state._lock:
+                p = bot_state.positions.get(symbol)
+                if p is not None and float(entry) > p.stop_loss:
+                    logging.info("Breakeven SL %s | pnl=+%.1f%% → SL raised from %.4f to entry %.4f",
+                                 symbol, pnl_pct, p.stop_loss, float(entry))
+                    bot_state.add_log(
+                        "Breakeven SL",
+                        f"{symbol} up {pnl_pct:.1f}% — SL moved to entry ${float(entry):,.4f}",
+                        tone="positive",
+                    )
+                    p.stop_loss = float(entry)
+
         logging.info("Monitor %s | price=%s SL=%s TP=%s pnl=%+.2f", symbol, current_price, pos.stop_loss, pos.take_profit, pnl)
 
         if float(current_price) <= pos.stop_loss:
