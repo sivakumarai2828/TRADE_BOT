@@ -1,4 +1,4 @@
-"""AI validation for trade signals — OpenRouter (free) primary, Claude fallback."""
+"""AI validation for trade signals — DeepSeek R1 primary, Claude Haiku fallback."""
 from __future__ import annotations
 import json
 import logging
@@ -10,9 +10,6 @@ from anthropic import Anthropic, BadRequestError as _AnthropicBadRequest
 
 # Mutable container — avoids `global` keyword inside methods
 _state = {"credits_exhausted": False}
-
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
 _SYSTEM = (
     "You are an intraday stock trading analyst. "
@@ -146,17 +143,35 @@ class AIValidator:
             if _time.time() - ts < _AI_CACHE_TTL:
                 return decision
 
-        # 1. Try OpenRouter free model first
-        openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-        if openrouter_key:
+        # 1. DeepSeek R1 via NVIDIA NIM (primary)
+        nvidia_key = os.getenv("NVIDIA_API_KEY", "")
+        if nvidia_key:
             try:
-                result = _call_openrouter(prompt, symbol)
+                from .llm_router import deepseek_chat as _ds_chat
+                import re as _re
+                raw = _ds_chat(prompt, system=_SYSTEM, max_tokens=150)
+                # Strip DeepSeek <think> blocks
+                raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                parsed = json.loads(raw)
+                decision = str(parsed.get("decision", "HOLD")).strip().upper()
+                if decision not in {"BUY", "SELL", "HOLD"}:
+                    decision = "HOLD"
+                confidence = float(parsed.get("confidence", 0.5))
+                reason = str(parsed.get("reason", ""))
+                if confidence < CONFIDENCE_THRESHOLD and decision != "HOLD":
+                    decision = "HOLD"
+                logging.info("DeepSeek-R1 [%s]: %s conf=%.2f — %s", symbol, decision, confidence, reason)
+                result = AIDecision(decision, confidence, reason)
                 _ai_cache[symbol] = (result, _time.time())
                 return result
             except Exception as exc:
-                logging.warning("OpenRouter failed for %s: %s — falling back to Claude", symbol, exc)
+                logging.warning("DeepSeek R1 failed for %s: %s — falling back to Claude Haiku", symbol, exc)
 
-        # 2. Claude fallback (Haiku — cheapest)
+        # 2. Claude Haiku fallback
         if not self._client.api_key or _state["credits_exhausted"]:
             return AIDecision("HOLD", 0.0, "no AI available — rule engine only")
 

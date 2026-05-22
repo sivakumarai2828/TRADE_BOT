@@ -78,37 +78,29 @@ def _signal(symbol: str) -> tuple[str, float, str]:
 # ---------------------------------------------------------------------------
 
 def _llm_confirm(symbol: str, action: str, reason: str, contract: dict) -> tuple[bool, float]:
+    """DeepSeek R1 via NVIDIA NIM — Haiku fallback. Replaces free Llama."""
+    import json, re
+
+    prompt = (
+        f"Options trade review:\n"
+        f"Symbol: {symbol} | Action: BUY {'CALL' if action=='BUY' else 'PUT'}\n"
+        f"Strike: ${contract['strike']} | Expiry: {contract['expiry']}\n"
+        f"Premium: ${contract['premium']:.2f}/share (cost ${contract['cost']:.0f})\n"
+        f"IV: {contract['iv']:.0%} | Signal: {reason}\n"
+        f"SL at ${contract['premium']*0.5:.2f} (−50%) | TP at ${contract['premium']*2:.2f} (+100%)\n\n"
+        f'Reply JSON only: {{"confirm": true/false, "confidence": 0.0-1.0, "reason": "brief"}}'
+    )
+
     try:
-        import json, re, requests
-
-        api_key = os.getenv("OPENROUTER_API_KEY", "")
-        if not api_key:
-            return True, 0.6
-
-        prompt = (
-            f"Options trade review:\n"
-            f"Symbol: {symbol} | Action: BUY {'CALL' if action=='BUY' else 'PUT'}\n"
-            f"Strike: ${contract['strike']} | Expiry: {contract['expiry']}\n"
-            f"Premium: ${contract['premium']:.2f}/share (cost ${contract['cost']:.0f})\n"
-            f"IV: {contract['iv']:.0%} | Signal: {reason}\n"
-            f"SL at ${contract['premium']*0.5:.2f} (−50%) | TP at ${contract['premium']*2:.2f} (+100%)\n\n"
-            f'Reply JSON only: {{"confirm": true/false, "confidence": 0.0-1.0, "reason": "brief"}}'
-        )
-
-        resp = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 80,
-            },
-            timeout=15,
-        )
-        text = resp.json()["choices"][0]["message"]["content"]
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
+        from daybot.llm_router import deepseek_chat as _ds_chat
+        raw = _ds_chat(prompt, max_tokens=100)
+        # Strip DeepSeek <think> blocks
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        m = re.search(r"\{.*?\}", raw, re.DOTALL)
         if m:
             data = json.loads(m.group())
+            logging.info("Options DeepSeek-R1 [%s]: confirm=%s conf=%.2f", symbol,
+                         data.get("confirm"), data.get("confidence", 0.0))
             return bool(data.get("confirm", False)), float(data.get("confidence", 0.0))
     except Exception as exc:
         logging.warning("Options LLM confirm failed: %s", exc)
