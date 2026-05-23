@@ -446,7 +446,12 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     oversold = bot_state.settings.rsi_oversold
     overbought = bot_state.settings.rsi_overbought
 
+    # Fetch 1h trend early — used for both breakout permission AND MTF filter below.
+    # Cached 30 min so no extra API cost fetching here vs later.
+    _htf_early = _get_htf_trend(exchange, symbol) if exchange is not None else "neutral"
+
     # Check mode manager for breakout permission (SAFE/SHIELD block Setup B).
+    # Override: always allow breakout when 1h trend is confirmed uptrend — quality entry.
     _allow_breakout = True
     try:
         from api import _crypto_mode_manager
@@ -454,6 +459,9 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
             _allow_breakout = _crypto_mode_manager.params().allow_breakout
     except Exception:
         pass
+    if not _allow_breakout and _htf_early == "up":
+        _allow_breakout = True  # uptrend confirmed — Setup B has edge even in SAFE mode
+        logging.info("Breakout override [%s]: 1h uptrend — Setup B allowed despite SAFE mode", symbol)
 
     rule_signal = _rule_based_signal(rsi=rsi, price=price, sma=sma,
                                      oversold=oversold, overbought=overbought,
@@ -490,7 +498,7 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     #   Setup C (recovery, RSI 40-50) — ALLOWED in downtrend (RSI emerging = potential reversal)
     # SELL signals never blocked — exits always allowed.
     if rule_signal == "BUY" and exchange is not None:
-        htf = _get_htf_trend(exchange, symbol)
+        htf = _htf_early  # already fetched above — reuse cached result
         if htf == "down":
             # Confirmed downtrend — block ALL new longs (catching knives).
             logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f — BUY blocked", symbol, rsi)
