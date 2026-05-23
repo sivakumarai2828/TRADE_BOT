@@ -558,6 +558,83 @@ def close_open_position(exchange, config: BotConfig, symbol: str = None) -> bool
     return closed_any
 
 
+def _partial_close(exchange, config: BotConfig, symbol: str, price: Decimal, fraction: float = 0.5) -> None:
+    """Sell a fraction of an open position (TP1 partial take-profit).
+
+    Sells `fraction` of current amount, moves SL to breakeven, marks tp1_hit=True.
+    Remaining position continues running toward TP2 (full TP%).
+    """
+    pos = bot_state.get_position(symbol)
+    if pos is None or pos.tp1_hit:
+        return
+
+    entry = _d(pos.entry)
+    sell_amount = _round_amount(exchange, symbol, _d(str(round(pos.amount * fraction, 8))))
+    if sell_amount <= 0:
+        logging.warning("TP1 partial sell skipped — rounded amount is zero for %s", symbol)
+        return
+
+    base = symbol.split("/")[0]
+    sell_value = float(price * sell_amount)
+    sell_fee = sell_value * 0.0015
+    partial_pnl = float((price - entry) * sell_amount)
+    partial_pnl_pct = float((price - entry) / entry * 100)
+
+    if config.dry_run:
+        proceeds = sell_value
+        with bot_state._lock:
+            bot_state.metrics.paper_usdt = round(bot_state.metrics.paper_usdt + proceeds, 2)
+            held = bot_state.metrics.paper_holdings.get(base, 0.0)
+            bot_state.metrics.paper_holdings[base] = max(0.0, round(held - float(sell_amount), 8))
+            bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + sell_fee, 4)
+            bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + sell_fee, 4)
+        logging.info("PAPER TP1 SELL %s: %.6f units @ $%.2f | pnl=+$%.2f | fee~$%.4f",
+                     symbol, float(sell_amount), float(price), partial_pnl, sell_fee)
+    else:
+        try:
+            exchange.create_market_sell_order(symbol, float(sell_amount))
+        except Exception as exc:
+            logging.error("TP1 partial sell FAILED for %s: %s — position unchanged", symbol, exc)
+            return
+        with bot_state._lock:
+            bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + sell_fee, 4)
+            bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + sell_fee, 4)
+
+    # Update position: reduce amount, lock SL at breakeven, flag tp1_hit
+    with bot_state._lock:
+        p = bot_state.positions.get(symbol)
+        if p is not None:
+            p.amount = max(0.0, round(p.amount - float(sell_amount), 8))
+            p.tp1_hit = True
+            p.stop_loss = float(entry)  # SL → breakeven, can't lose on remaining
+
+    bot_state.add_log(
+        "TP1 hit 🎯",
+        f"{symbol} +{partial_pnl_pct:.1f}% — sold {fraction*100:.0f}% @ ${float(price):,.2f} "
+        f"| locked +${partial_pnl:.2f} | SL → breakeven | 50% running",
+        tone="positive",
+    )
+
+    from telegram_notify import _send
+    _send(
+        f"🎯 <b>TP1 Hit — Partial Exit</b>\n"
+        f"{symbol} +{partial_pnl_pct:.1f}%\n"
+        f"Sold 50% @ ${float(price):,.2f} | +${partial_pnl:.2f} locked\n"
+        f"SL moved to breakeven. Remaining 50% running to TP2."
+    )
+
+    save_trade(
+        symbol=symbol, side="sell_partial", amount=float(sell_amount),
+        entry_price=float(entry), exit_price=float(price),
+        pnl=partial_pnl, pnl_pct=partial_pnl_pct, reason="tp1_partial",
+        is_house_trade=pos.is_house_trade,
+    )
+
+    if config.dry_run:
+        bot_state.refresh_paper_balance(symbol, float(price))
+    _save()
+
+
 def monitor_positions(exchange, config: BotConfig) -> None:
     """Check all open positions against SL/TP and update live PnL."""
     open_symbols = [s for s, p in bot_state.positions.items() if p is not None]
@@ -609,6 +686,16 @@ def monitor_positions(exchange, config: BotConfig) -> None:
                         tone="positive",
                     )
                     p.stop_loss = float(entry)
+
+        # TP1 — partial exit at +2%: sell 50%, SL → breakeven, remaining runs to TP2.
+        # Only fires once per position (tp1_hit flag prevents repeat).
+        if pnl_pct >= 2.0 and not pos.tp1_hit:
+            logging.info("TP1 triggered %s | pnl=+%.2f%% — partial close 50%%", symbol, pnl_pct)
+            _partial_close(exchange, config, symbol, current_price, fraction=0.5)
+            # Refresh pos after partial close (amount changed)
+            pos = bot_state.get_position(symbol)
+            if pos is None:
+                continue  # fully closed somehow
 
         logging.info("Monitor %s | price=%s SL=%s TP=%s pnl=%+.2f", symbol, current_price, pos.stop_loss, pos.take_profit, pnl)
 

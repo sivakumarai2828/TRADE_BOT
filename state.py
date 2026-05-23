@@ -49,6 +49,7 @@ class PositionData:
     highest_price: float
     is_house_trade: bool = False
     entry_time: str = ""  # ISO UTC timestamp — used for time-based exit
+    tp1_hit: bool = False  # True after 50% partial exit fired at TP1 (+2%)
 
 
 @dataclass
