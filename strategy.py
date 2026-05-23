@@ -459,9 +459,9 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
             _allow_breakout = _crypto_mode_manager.params().allow_breakout
     except Exception:
         pass
-    if not _allow_breakout and _htf_early == "up":
-        _allow_breakout = True  # uptrend confirmed — Setup B has edge even in SAFE mode
-        logging.info("Breakout override [%s]: 1h uptrend — Setup B allowed despite SAFE mode", symbol)
+    if not _allow_breakout and price > sma * 1.001:
+        _allow_breakout = True  # 5-min price above SMA = breakout confirmed — allow despite SAFE mode
+        logging.info("Breakout override [%s]: price %.4f > SMA*1.001 — Setup B allowed despite SAFE mode", symbol, price)
 
     rule_signal = _rule_based_signal(rsi=rsi, price=price, sma=sma,
                                      oversold=oversold, overbought=overbought,
@@ -504,10 +504,14 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
             logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f — BUY blocked", symbol, rsi)
             rule_signal = "HOLD"
         elif htf == "neutral":
-            # Neutral trend: allow Setup A (deep dip RSI<oversold) — bounces happen in sideways.
-            # Block Setup B (breakout) and Setup C (recovery) — no trend confirmation.
-            if rsi >= oversold:
-                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f — BUY blocked (no uptrend for C/B)", symbol, rsi)
+            # Neutral trend: allow Setup A (deep dip RSI<oversold) and Setup B (breakout above SMA).
+            # Block Setup C (recovery RSI oversold-50 with no price confirmation) — no trend to ride.
+            if rsi >= oversold and price > sma * 1.001:
+                # Setup B breakout: price already above SMA = price confirming the move.
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f price above SMA — Setup B breakout allowed", symbol, rsi)
+            elif rsi >= oversold:
+                # Setup C: RSI recovering but price not above SMA — sideways chop, skip.
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f price flat — BUY blocked (Setup C in sideways)", symbol, rsi)
                 rule_signal = "HOLD"
             else:
                 logging.info("MTF filter [%s]: 1h neutral RSI=%.1f — deep dip BUY allowed", symbol, rsi)
