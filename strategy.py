@@ -90,13 +90,15 @@ def _get_htf_trend(exchange, symbol: str) -> str:
 
 
 def _get_btc_regime() -> str:
-    """BTC 4h EMA200 macro regime via yfinance: 'bull', 'bear', or 'neutral'.
+    """BTC 4h EMA50 macro regime via yfinance: 'bull', 'bear', or 'neutral'.
 
     Cached 2h — 4h candles change slowly.
-    bull  = BTC price > EMA200 × 1.01  → full trading allowed
-    bear  = BTC price < EMA200 × 0.99  → block all new longs
-    neutral = within 1% band          → allow dip-buys only
-    Falls back to 'neutral' (non-blocking) on any error.
+    bull    = BTC price > EMA50 × 1.02  → full trading allowed
+    bear    = BTC price < EMA50 × 0.97  → block all new longs
+    neutral = within 2% band           → allow dip-buys only (Setup A/C)
+
+    EMA50 (not EMA200) used — captures current ~2-week macro trend without
+    distortion from peaks/crashes 2+ months ago. Falls back to 'neutral' on error.
     """
     import time as _t
     if _btc_regime_cache.get("ts") and (_t.time() - _btc_regime_cache["ts"]) < _BTC_REGIME_TTL:
@@ -104,7 +106,7 @@ def _get_btc_regime() -> str:
 
     try:
         import yfinance as _yf
-        df = _yf.download("BTC-USD", period="60d", interval="4h", progress=False, auto_adjust=True)
+        df = _yf.download("BTC-USD", period="30d", interval="4h", progress=False, auto_adjust=True)
         if df.empty or len(df) < 50:
             return "neutral"
 
@@ -113,19 +115,19 @@ def _get_btc_regime() -> str:
             df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
 
         close = df["Close"].squeeze()
-        ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+        ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
         price = float(close.iloc[-1])
 
-        if price > ema200 * 1.01:
+        if price > ema50 * 1.02:
             regime = "bull"
-        elif price < ema200 * 0.99:
+        elif price < ema50 * 0.97:
             regime = "bear"
         else:
             regime = "neutral"
 
         _btc_regime_cache.update({"regime": regime, "ts": _t.time(),
-                                  "price": price, "ema200": ema200})
-        logging.info("BTC 4h regime: %s (price=%.0f EMA200=%.0f)", regime, price, ema200)
+                                  "price": price, "ema50": ema50})
+        logging.info("BTC 4h regime: %s (price=%.0f EMA50=%.0f)", regime, price, ema50)
         return regime
     except Exception as exc:
         logging.warning("BTC regime check failed: %s — defaulting to neutral", exc)
