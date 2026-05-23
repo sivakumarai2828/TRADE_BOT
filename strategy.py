@@ -520,6 +520,16 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
         else:
             logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f — BUY allowed", symbol, rsi)
 
+    # Volume gate — Setup B breakout (RSI 50-65) requires real volume confirmation.
+    # Deep dip Setup A (RSI < oversold) allowed even on low volume (panic dips dry up volume).
+    if rule_signal == "BUY" and rsi >= oversold and avg_volume > 0:
+        if volume < avg_volume * 1.5:
+            logging.info("Volume gate [%s]: vol=%.0f < 1.5×avg=%.0f — breakout not confirmed, HOLD",
+                         symbol, volume, avg_volume)
+            rule_signal = "HOLD"
+        else:
+            logging.info("Volume gate [%s]: vol=%.0f ≥ 1.5×avg=%.0f — volume confirmed ✓", symbol, volume, avg_volume)
+
     claude_confidence = 0.0
     claude_reason = ""
     last = _last_claude_input.get(symbol, {})
@@ -569,8 +579,8 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                 config=config, rsi=rsi, price=price, sma=sma,
                 oversold=oversold, overbought=overbought, symbol=symbol,
             )
-            # Require confidence >= 0.55 — low-confidence responses count as HOLD.
-            if claude_confidence < 0.55 and claude_signal != "HOLD":
+            # Require confidence >= 0.65 for BUY — low-confidence = HOLD (no trade).
+            if claude_confidence < 0.65 and claude_signal != "HOLD":
                 logging.info(
                     "Claude signal %s overridden to HOLD — confidence %.2f < 0.65 | reason: %s",
                     claude_signal, claude_confidence, claude_reason,
@@ -612,8 +622,15 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     elif claude_signal == rule_signal:
         final_action = rule_signal
     elif claude_signal == "HOLD":
-        final_action = rule_signal  # Claude uncertain — rule wins
-        logging.info("Claude uncertain (HOLD) for %s rule=%s — proceeding with rule", symbol, rule_signal)
+        # Upgraded Option-B: BUY requires Claude confirmation ≥65%.
+        # Claude uncertain on BUY → skip (quality over quantity).
+        # SELL still executes — exits always allowed, don't trap positions.
+        if rule_signal == "BUY":
+            final_action = "HOLD"
+            logging.info("Claude uncertain for %s — BUY skipped (need ≥65%% confidence, got HOLD)", symbol)
+        else:
+            final_action = rule_signal  # SELL: Claude uncertain → trust rule
+            logging.info("Claude uncertain (HOLD) for %s rule=%s SELL — proceeding with rule", symbol, rule_signal)
     elif claude_confidence > 0.70:
         final_action = "HOLD"  # Claude strongly disagrees — veto
         logging.info("Claude strong veto for %s (conf=%.2f) rule=%s claude=%s — HOLD", symbol, claude_confidence, rule_signal, claude_signal)

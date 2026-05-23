@@ -369,6 +369,48 @@ _symbol_errors: dict[str, int] = {}      # symbol → consecutive error count
 _symbol_skip_cycles: dict[str, int] = {} # symbol → cycles remaining to skip
 
 
+_weekly_start_balance: float = 0.0
+_weekly_start_date: str = ""   # ISO week: "2026-W21"
+_weekly_halted: bool = False
+_WEEKLY_LOSS_PCT = 4.0         # halt trading if down 4% in a week
+
+
+def _check_weekly_halt() -> bool:
+    """Return True if weekly loss threshold breached — halt new BUYs."""
+    global _weekly_start_balance, _weekly_start_date, _weekly_halted
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    iso_week = now.strftime("%G-W%V")  # e.g. "2026-W21"
+
+    balance = bot_state.metrics.balance
+    if not balance:
+        return False
+
+    # New week — reset tracker
+    if iso_week != _weekly_start_date:
+        _weekly_start_date = iso_week
+        _weekly_start_balance = balance
+        _weekly_halted = False
+        logging.info("Weekly tracker reset — new week %s start balance $%.2f", iso_week, balance)
+        return False
+
+    if _weekly_start_balance <= 0:
+        _weekly_start_balance = balance
+        return False
+
+    weekly_pct = (balance - _weekly_start_balance) / _weekly_start_balance * 100
+    if weekly_pct <= -_WEEKLY_LOSS_PCT and not _weekly_halted:
+        _weekly_halted = True
+        logging.warning("Weekly loss halt — down %.2f%% this week ($%.2f → $%.2f)",
+                        weekly_pct, _weekly_start_balance, balance)
+        bot_state.add_log(
+            "Weekly halt 🛑",
+            f"Down {abs(weekly_pct):.1f}% this week — no new BUYs until Monday",
+            tone="negative",
+        )
+    return _weekly_halted
+
+
 def _run_symbol_cycle(symbol: str) -> None:
     """One complete trading cycle for a single symbol."""
     global _exchange, _config
@@ -376,6 +418,11 @@ def _run_symbol_cycle(symbol: str) -> None:
     # Daily loss limit — skip all trading for the day once threshold hit.
     if bot_state.metrics.daily_loss_halted:
         logging.info("Daily loss limit active — skipping %s", symbol)
+        return
+
+    # Weekly loss halt — 4% drawdown in a week stops new BUYs (existing positions still monitored).
+    if _check_weekly_halt():
+        logging.info("Weekly loss halt active — skipping new entries for %s", symbol)
         return
 
     # Per-symbol error backoff — skip if this symbol is in cooldown from repeated failures.

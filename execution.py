@@ -98,15 +98,19 @@ def _d(value) -> Decimal:
 
 
 def _dynamic_trade_pct(balance: float, principal: float) -> float:
-    """Return trade size % based on profit tier. Scales up on gains, down on drawback."""
+    """Return trade size % — Upgraded Option-B: 50% base for 2-position 100% utilization.
+
+    Max 2 open positions × 50% each = 100% capital deployed.
+    Scales slightly on strong gains, compresses on drawdown.
+    """
     if principal <= 0:
-        return 25.0
+        return 50.0
     ratio = balance / principal  # 1.0 = breakeven, 2.0 = 100% gain
-    if ratio >= 3.0:   return 35.0  # 200%+ gain
-    if ratio >= 2.0:   return 30.0  # 100–200% gain
-    if ratio >= 1.5:   return 28.0  # 50–100% gain
-    if ratio >= 1.25:  return 26.0  # 25–50% gain
-    return 25.0                     # base 25% (< 25% gain or any drawdown)
+    if ratio >= 2.0:   return 55.0  # 100%+ gain — scale slightly
+    if ratio >= 1.5:   return 52.0  # 50–100% gain
+    if ratio >= 1.25:  return 50.0  # 25–50% gain
+    if ratio >= 0.95:  return 50.0  # base (at or near starting capital)
+    return 45.0                     # drawdown — compress slightly
 
 
 def _round_amount(exchange, symbol: str, amount: Decimal) -> Decimal:
@@ -262,7 +266,7 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             logging.info("BUY skipped — %s position already open", symbol)
             return
 
-        max_positions = int(os.getenv("MAX_OPEN_POSITIONS", "3"))
+        max_positions = int(os.getenv("MAX_OPEN_POSITIONS", "2"))
         open_count = sum(1 for p in bot_state.positions.values() if p is not None)
         if open_count >= max_positions:
             logging.info("BUY skipped — portfolio limit reached (%d/%d open positions)", open_count, max_positions)
@@ -695,15 +699,9 @@ def monitor_positions(exchange, config: BotConfig) -> None:
                     )
                     p.stop_loss = float(entry)
 
-        # TP1 — partial exit at +2%: sell 50%, SL → breakeven, remaining runs to TP2.
-        # Only fires once per position (tp1_hit flag prevents repeat).
-        if pnl_pct >= 2.0 and not pos.tp1_hit:
-            logging.info("TP1 triggered %s | pnl=+%.2f%% — partial close 50%%", symbol, pnl_pct)
-            _partial_close(exchange, config, symbol, current_price, fraction=0.5)
-            # Refresh pos after partial close (amount changed)
-            pos = bot_state.get_position(symbol)
-            if pos is None:
-                continue  # fully closed somehow
+        # Upgraded Option-B: NO partial TP1 exit.
+        # Hold full position → single clean exit at TP (6.5%) or SL (3%).
+        # Breakeven SL already fired at +1% above — position is risk-free from there.
 
         logging.info("Monitor %s | price=%s SL=%s TP=%s pnl=%+.2f", symbol, current_price, pos.stop_loss, pos.take_profit, pnl)
 

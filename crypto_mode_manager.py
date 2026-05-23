@@ -32,9 +32,11 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(1.0, 2.0, 25.0, False, "SAFE"),
-    "AGGRESSIVE": ModeParams(1.5, 2.0, 25.0, True,  "AGGRESSIVE"),
-    "SHIELD":     ModeParams(0.3, 1.5,  6.0, False, "SHIELD"),
+    # Upgraded Option-B params: single 6.5% TP, 3% SL, breakout always allowed.
+    # Base trade size is 50% of balance (set in _dynamic_trade_pct).
+    "SAFE":       ModeParams(1.0, 3.0,  6.5, True,  "SAFE"),
+    "AGGRESSIVE": ModeParams(1.0, 3.0,  6.5, True,  "AGGRESSIVE"),
+    "SHIELD":     ModeParams(0.5, 2.0,  6.5, False, "SHIELD"),  # 25% size in shield
 }
 
 
