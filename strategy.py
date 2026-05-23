@@ -467,14 +467,13 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     # SELL signals never blocked — exits always allowed.
     if rule_signal == "BUY" and exchange is not None:
         htf = _get_htf_trend(exchange, symbol)
-        if htf == "down":
-            if 50.0 <= rsi <= 65.0:
-                # Setup B — block: momentum breakout in downtrend has low edge
-                logging.info("MTF filter [%s]: 1h down + RSI=%.1f (breakout zone) — BUY blocked", symbol, rsi)
-                rule_signal = "HOLD"
-            else:
-                # Setup A or C — allow: deep dips and recoveries can bounce even in downtrend
-                logging.info("MTF filter [%s]: 1h down but RSI=%.1f (dip/recovery) — BUY allowed", symbol, rsi)
+        if htf != "up":
+            # Require confirmed 1h uptrend for ALL entries — dips in uptrends have edge.
+            # Neutral/downtrend = catching knives. Block all new longs.
+            logging.info("MTF filter [%s]: 1h trend=%s RSI=%.1f — BUY blocked (uptrend required)", symbol, htf, rsi)
+            rule_signal = "HOLD"
+        else:
+            logging.info("MTF filter [%s]: 1h uptrend + RSI=%.1f — BUY allowed", symbol, rsi)
 
     claude_confidence = 0.0
     claude_reason = ""
