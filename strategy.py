@@ -266,13 +266,14 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * _vol_mult
 
     # MACD confirmation: histogram > 0 means short-term momentum turning bullish.
-    # Guards Setups A and C — avoids entering dips where momentum still falling.
-    # Defaults to 0.0 (blocks) when MACD not yet calculable (early candles).
+    # Guards Setup C (recovery) only — Setup A (deep dip) relies on RSI+volume alone.
+    # Deep dips: MACD lags too much, RSI<oversold is already strong enough signal.
     macd_confirmed = macd_hist > 0
 
-    # Setup A: Dip buy — RSI oversold, above SMA support, volume + MACD confirmed.
+    # Setup A: Dip buy — RSI oversold, above SMA support, volume confirmed.
     # RSI floor at 35 prevents catching falling knives (RSI<35 = crash, not dip).
-    if 35.0 <= rsi < oversold and price > sma * 0.99 and vol_confirmed and macd_confirmed:
+    # No MACD gate — at RSI 35-45 MACD still negative (lags), would block all dip entries.
+    if 35.0 <= rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
 
     # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA, MACD turning up.
@@ -280,11 +281,11 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
         return "BUY"
 
     # Setup B: Momentum breakout — gated by allow_breakout (disabled in SAFE/SHIELD mode).
-    # No MACD gate here — breakout already requires RSI 50-65 + price above SMA.
     if allow_breakout and 50.0 <= rsi <= 65.0 and price > sma * 1.001:
         return "BUY"
 
-    if rsi > overbought and vol_confirmed:
+    # SELL: RSI overbought — no volume gate (overbought tops often have lower volume).
+    if rsi > overbought:
         return "SELL"
     return "HOLD"
 
