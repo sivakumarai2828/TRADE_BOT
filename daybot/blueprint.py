@@ -587,13 +587,23 @@ def _run_cycle() -> None:
         # Fetch bot trade history + market sessions from Supabase for Claude
         history_ctx = build_ai_history_context(symbol)
 
-        # AI validation with historical context
+        # Fetch recent news — gives AI real-world context (earnings, analyst moves, macro)
+        # Cached 30 min so no extra latency on repeated cycles
+        news_ctx = None
+        try:
+            from .news_fetcher import get_news_summary
+            news_ctx = get_news_summary(symbol, max_items=5)
+        except Exception as _news_exc:
+            logging.warning("News fetch failed for %s: %s", symbol, _news_exc)
+
+        # AI validation with historical + news context
         ai_dec = _ai.validate(
             symbol=symbol, price=sig.price, ema=sig.ema,
             rsi=sig.rsi, volume=sig.volume, avg_volume=sig.avg_volume,
             trend=sig.trend, rule_signal=sig.action,
             weekly_context=weekly_ctx,
             history_context=history_ctx,
+            news_context=news_ctx,
         )
         _logger.log_ai_validation(symbol, ai_dec.decision, ai_dec.confidence, ai_dec.reason)
 

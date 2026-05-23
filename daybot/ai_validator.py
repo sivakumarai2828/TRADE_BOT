@@ -130,10 +130,11 @@ class AIValidator:
         rule_signal: str,
         weekly_context: dict | None = None,
         history_context: dict | None = None,
+        news_context: str | None = None,
     ) -> AIDecision:
         prompt = self._build_prompt(
             symbol, price, ema, rsi, volume, avg_volume, trend, rule_signal,
-            weekly_context, history_context,
+            weekly_context, history_context, news_context,
         )
 
         # 0. Cache hit — reuse decision for 10 min to avoid OpenRouter rate limit
@@ -210,7 +211,7 @@ class AIValidator:
 
     def _build_prompt(
         self, symbol, price, ema, rsi, volume, avg_volume, trend, rule_signal,
-        weekly_context, history_context,
+        weekly_context, history_context, news_context=None,
     ) -> str:
         prompt = (
             f"Stock={symbol}, price=${price:.2f}, EMA(50)=${ema:.2f}, "
@@ -261,5 +262,8 @@ class AIValidator:
                         f"({s['market_regime']}) — "
                         f"bot: {s['wins']}W/{s['losses']}L PnL ${s['daily_pnl']:+.2f}\n"
                     )
+        if news_context:
+            prompt += f"\nRecent news for {symbol}:\n{news_context}\n"
+
         prompt += "\nBased on all the above — BUY, SELL, or HOLD?"
         return prompt

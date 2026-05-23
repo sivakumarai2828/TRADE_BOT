@@ -88,8 +88,21 @@ def _analyze_symbol(
     if not chain_data:
         return None
 
+    # Fetch news + earnings before asking AI — prevents IV crush and bad-news entries
+    from .news_fetcher import get_news_and_earnings, earnings_within_days
+    news_summary, earnings_date = get_news_and_earnings(symbol, max_items=5)
+    earnings_soon = earnings_within_days(symbol, days=3)
+    if earnings_soon:
+        logging.info("Options picker: %s has earnings within 3 days (%s) — skipping to avoid IV crush",
+                     symbol, earnings_date)
+        return None
+
     import json
     from .llm_router import deepseek_json
+
+    earnings_line = (f"Next earnings: {earnings_date}" if earnings_date
+                     else "Next earnings: not found (assume safe)")
+    news_block = f"\nRecent news:\n{news_summary}" if news_summary else ""
 
     prompt = f"""You are an options trading advisor. Analyze this setup and recommend one options trade.
 
@@ -97,8 +110,9 @@ Symbol: {symbol}
 Direction bias: {direction} (from overnight analysis)
 Market regime: {regime}
 VIX: {vix:.1f} ({"high — options expensive, prefer spreads or smaller size" if vix > 25 else "normal — buying options reasonable"})
+{earnings_line}
 Evening analysis notes: {notes or "none"}
-Entry zone from analysis: {entry_zone}
+Entry zone from analysis: {entry_zone}{news_block}
 
 Available options (nearest weekly expiry):
 {json.dumps(chain_data, indent=2)}
