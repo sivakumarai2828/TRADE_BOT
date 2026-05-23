@@ -490,13 +490,20 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     # SELL signals never blocked — exits always allowed.
     if rule_signal == "BUY" and exchange is not None:
         htf = _get_htf_trend(exchange, symbol)
-        if htf != "up":
-            # Require confirmed 1h uptrend for ALL entries — dips in uptrends have edge.
-            # Neutral/downtrend = catching knives. Block all new longs.
-            logging.info("MTF filter [%s]: 1h trend=%s RSI=%.1f — BUY blocked (uptrend required)", symbol, htf, rsi)
+        if htf == "down":
+            # Confirmed downtrend — block ALL new longs (catching knives).
+            logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f — BUY blocked", symbol, rsi)
             rule_signal = "HOLD"
+        elif htf == "neutral":
+            # Neutral trend: allow Setup A (deep dip RSI<oversold) — bounces happen in sideways.
+            # Block Setup B (breakout) and Setup C (recovery) — no trend confirmation.
+            if rsi >= oversold:
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f — BUY blocked (no uptrend for C/B)", symbol, rsi)
+                rule_signal = "HOLD"
+            else:
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f — deep dip BUY allowed", symbol, rsi)
         else:
-            logging.info("MTF filter [%s]: 1h uptrend + RSI=%.1f — BUY allowed", symbol, rsi)
+            logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f — BUY allowed", symbol, rsi)
 
     claude_confidence = 0.0
     claude_reason = ""
