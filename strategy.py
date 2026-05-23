@@ -218,8 +218,18 @@ def get_market_data(
 # Indicators
 # ---------------------------------------------------------------------------
 
+def _calculate_macd(prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD line, signal line, histogram — pure pandas, no ta library."""
+    ema_fast = prices.ewm(span=fast, adjust=False).mean()
+    ema_slow = prices.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add RSI(14), SMA(50), ATR(14), and 20-bar average volume columns."""
+    """Add RSI(14), SMA(50), ATR(14), MACD(12,26,9), and 20-bar average volume columns."""
 
     if "close" not in df.columns:
         raise ValueError("DataFrame must contain a close column")
@@ -231,6 +241,10 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         high=result["high"], low=result["low"], close=result["close"], window=14
     ).average_true_range()
     result["vol_avg_20"] = result["volume"].rolling(window=20).mean()
+    macd_line, macd_sig, macd_hist = _calculate_macd(result["close"])
+    result["macd"] = macd_line
+    result["macd_signal"] = macd_sig
+    result["macd_hist"] = macd_hist
     return result
 
 
@@ -241,7 +255,8 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def _rule_based_signal(rsi: float, price: float, sma: float,
                        oversold: float = 43.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0,
-                       allow_breakout: bool = True) -> Signal:
+                       allow_breakout: bool = True,
+                       macd_hist: float = 0.0) -> Signal:
     import datetime as _dt
     _hour_utc = _dt.datetime.now(_dt.timezone.utc).hour
     _is_overnight = 0 <= _hour_utc < 6  # low vol window UTC 00-06
@@ -250,16 +265,22 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
     # Volume confirmation: 2× avg (1.5× overnight to handle thin crypto hours)
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * _vol_mult
 
-    # Setup A: Dip buy — RSI oversold, above SMA support, volume confirmed.
+    # MACD confirmation: histogram > 0 means short-term momentum turning bullish.
+    # Guards Setups A and C — avoids entering dips where momentum still falling.
+    # Defaults to 0.0 (blocks) when MACD not yet calculable (early candles).
+    macd_confirmed = macd_hist > 0
+
+    # Setup A: Dip buy — RSI oversold, above SMA support, volume + MACD confirmed.
     # RSI floor at 35 prevents catching falling knives (RSI<35 = crash, not dip).
-    if 35.0 <= rsi < oversold and price > sma * 0.99 and vol_confirmed:
+    if 35.0 <= rsi < oversold and price > sma * 0.99 and vol_confirmed and macd_confirmed:
         return "BUY"
 
-    # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA.
-    if oversold <= rsi <= 50.0 and price > sma * 0.98:
+    # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA, MACD turning up.
+    if oversold <= rsi <= 50.0 and price > sma * 0.98 and macd_confirmed:
         return "BUY"
 
     # Setup B: Momentum breakout — gated by allow_breakout (disabled in SAFE/SHIELD mode).
+    # No MACD gate here — breakout already requires RSI 50-65 + price above SMA.
     if allow_breakout and 50.0 <= rsi <= 65.0 and price > sma * 1.001:
         return "BUY"
 
@@ -419,6 +440,7 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     atr = float(latest["atr"]) if "atr" in latest and not pd.isna(latest["atr"]) else 0.0
     volume = float(latest["volume"]) if "volume" in latest else 0.0
     avg_volume = float(latest["vol_avg_20"]) if "vol_avg_20" in latest and not pd.isna(latest["vol_avg_20"]) else 0.0
+    macd_hist = float(latest["macd_hist"]) if "macd_hist" in latest.index and not pd.isna(latest["macd_hist"]) else 0.0
 
     oversold = bot_state.settings.rsi_oversold
     overbought = bot_state.settings.rsi_overbought
@@ -435,7 +457,8 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     rule_signal = _rule_based_signal(rsi=rsi, price=price, sma=sma,
                                      oversold=oversold, overbought=overbought,
                                      volume=volume, avg_volume=avg_volume,
-                                     allow_breakout=_allow_breakout)
+                                     allow_breakout=_allow_breakout,
+                                     macd_hist=macd_hist)
 
     # Claude availability gate — block BUY when AI has failed repeatedly.
     # Prevents bad entries when the AI confirmation layer is down (e.g. 529 overload).
