@@ -1,10 +1,13 @@
-"""Options bot main loop — crypto bot logic applied to SPY/QQQ options.
+"""Options bot — momentum swing strategy for individual high-beta stocks.
 
-Signal  → RSI + EMA on underlying (same as crypto/day bot)
-Confirm → OpenRouter Llama (free, same as day bot BUY gate)
-Entry   → buy call (bullish) or put (bearish) within $250 budget
-Exit    → SL 40% of premium | TP 80% gain | expiry guard 30min before close
-Limits  → max 2 contracts open | SHIELD on 2 consecutive losses
+Universe  → NVDA, AMD, TSLA, META, AAPL  (+SPY/QQQ fallback)
+Signal    → RSI momentum breakout + volume surge + EMA trend filter
+Contract  → slightly OTM (1-3%), 7-14 DTE (2-3 day swing hold)
+Confirm   → DeepSeek R1 AI gate (confidence ≥ 0.60)
+Entry     → buy call (bullish) or put (bearish) within 25% of balance budget
+Exit      → SL 50% of premium | TP 200% gain (3x) | expiry guard 30min before close
+Limits    → max 2 contracts open | SHIELD on 2 consecutive losses
+Capital   → $500 → 2 × $125 contracts deployed, $250 reserve
 """
 from __future__ import annotations
 
@@ -19,16 +22,16 @@ from .state import options_state, OptionsPosition
 _stop_event = threading.Event()
 _bot_thread: Optional[threading.Thread] = None
 
-SYMBOLS = ["SPY", "QQQ"]
+SYMBOLS = ["NVDA", "AMD", "TSLA", "META", "AAPL", "SPY", "QQQ"]
 POLL_SECONDS = int(os.getenv("OPTIONS_POLL_SECONDS", "300"))   # 5 min
 MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "2"))
-_OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% of balance per contract
+_OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% of balance per contract (~$125 on $500)
 BUDGET = float(os.getenv("OPTIONS_BUDGET", "0"))               # 0 = use dynamic pct of balance
-SL_PCT = 0.40     # stop loss: lose 40% of premium
-TP_PCT = 0.80     # take profit: gain 80% of premium
+SL_PCT = 0.50     # stop loss: lose 50% of premium ($62 on $125 contract)
+TP_PCT = 2.00     # take profit: 200% gain = 3x (your target, e.g. $125 → $375)
 DAILY_LOSS_HALT_PCT = 10.0
 EXPIRY_GUARD_MIN = 30
-MIN_CONFIDENCE = 0.55
+MIN_CONFIDENCE = 0.60  # raised from 0.55 — individual stocks need stronger signal
 
 
 # ---------------------------------------------------------------------------
@@ -36,38 +39,75 @@ MIN_CONFIDENCE = 0.55
 # ---------------------------------------------------------------------------
 
 def _signal(symbol: str) -> tuple[str, float, str]:
-    """RSI(14) + EMA50 on 5-min bars. Returns (action, confidence, reason)."""
+    """Momentum swing signal for individual high-beta stocks + ETFs.
+
+    Uses 15-min bars (better for 2-3 day swings than 5-min noise):
+      BUY  call  → RSI < 40 recovering + price > EMA50 + volume surge
+      BUY  put   → RSI > 68 rolling over + price < EMA50 + volume surge
+    Volume gate: current bar volume must exceed 1.5× 20-bar avg.
+    Returns (action, confidence, reason).
+    """
     try:
         import yfinance as yf
 
-        df = yf.download(symbol, period="5d", interval="5m", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 20:
+        # 15-min bars: 10d gives ~260 bars — enough for EMA50 + volume avg
+        df = yf.download(symbol, period="10d", interval="15m", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 55:
             return "HOLD", 0.0, "insufficient data"
 
-        # Flatten MultiIndex columns (yfinance ≥0.2.38 returns (field, ticker) columns)
+        # Flatten MultiIndex columns (yfinance ≥0.2.38)
         if hasattr(df.columns, "levels"):
             df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
 
         close = df["Close"].squeeze()
+        volume = df["Volume"].squeeze()
+
+        # RSI(14)
         delta = close.diff()
         gain = delta.clip(lower=0).rolling(14).mean()
         loss = (-delta.clip(upper=0)).rolling(14).mean()
         rs = gain / loss.replace(0, float("nan"))
         rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+        rsi_prev = float((100 - 100 / (1 + rs)).iloc[-3])  # 3 bars ago — detect direction
 
-        ema50 = float(close.ewm(span=50).mean().iloc[-1])
+        # EMA50 trend filter
+        ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
         price = float(close.iloc[-1])
-        day_open = float(df["Open"].squeeze().iloc[0])
+
+        # Volume gate: current bar vs 20-bar avg (momentum confirmation)
+        vol_now = float(volume.iloc[-1])
+        vol_avg = float(volume.rolling(20).mean().iloc[-1])
+        vol_ratio = vol_now / vol_avg if vol_avg > 0 else 0.0
+        vol_ok = vol_ratio >= 1.5  # 1.5× avg = confirmed momentum
+
+        # Day change for context
+        day_open = float(df["Open"].squeeze().resample("1D").first().iloc[-1])
         day_change = (price - day_open) / day_open * 100
 
-        if rsi < 45 and price > ema50 and day_change > -1.0:
-            conf = min(0.50 + (45 - rsi) / 50, 0.85)
-            return "BUY", conf, f"RSI {rsi:.0f} oversold, above EMA50, day {day_change:+.1f}%"
-        if rsi > 58 and price < ema50 and day_change < 1.0:
-            conf = min(0.50 + (rsi - 58) / 50, 0.85)
-            return "SELL", conf, f"RSI {rsi:.0f} overbought, below EMA50, day {day_change:+.1f}%"
+        # ── CALL signal: RSI recovering from oversold, trending up, volume confirms ──
+        # rsi_prev > rsi ensures RSI is RISING (not still falling)
+        if rsi < 40 and rsi > rsi_prev and price > ema50:
+            conf = min(0.55 + (40 - rsi) / 40, 0.88)
+            if vol_ok:
+                conf = min(conf + 0.08, 0.92)  # volume boost
+                reason = f"RSI {rsi:.0f}↑ oversold recovery, above EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+            else:
+                conf = max(conf - 0.05, 0.55)
+                reason = f"RSI {rsi:.0f}↑ oversold, above EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+            return "BUY", round(conf, 2), reason
 
-        return "HOLD", 0.0, f"RSI {rsi:.0f} neutral"
+        # ── PUT signal: RSI rolling over from overbought, trending down, volume confirms ──
+        if rsi > 68 and rsi < rsi_prev and price < ema50:
+            conf = min(0.55 + (rsi - 68) / 40, 0.88)
+            if vol_ok:
+                conf = min(conf + 0.08, 0.92)
+                reason = f"RSI {rsi:.0f}↓ overbought rollover, below EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+            else:
+                conf = max(conf - 0.05, 0.55)
+                reason = f"RSI {rsi:.0f}↓ overbought, below EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+            return "SELL", round(conf, 2), reason
+
+        return "HOLD", 0.0, f"RSI {rsi:.0f} neutral (EMA50={ema50:.2f} price={price:.2f})"
     except Exception as exc:
         logging.warning("Options signal failed %s: %s", symbol, exc)
         return "HOLD", 0.0, "error"
@@ -87,7 +127,8 @@ def _llm_confirm(symbol: str, action: str, reason: str, contract: dict) -> tuple
         f"Strike: ${contract['strike']} | Expiry: {contract['expiry']}\n"
         f"Premium: ${contract['premium']:.2f}/share (cost ${contract['cost']:.0f})\n"
         f"IV: {contract['iv']:.0%} | Signal: {reason}\n"
-        f"SL at ${contract['premium']*0.5:.2f} (−50%) | TP at ${contract['premium']*2:.2f} (+100%)\n\n"
+        f"SL at ${contract['premium']*0.5:.2f} (−50%) | TP at ${contract['premium']*3:.2f} (+200%, 3×)\n"
+        f"OTM: {contract.get('otm_pct',0):.1f}% | Strategy: 2-3 day momentum swing\n\n"
         f'Reply JSON only: {{"confirm": true/false, "confidence": 0.0-1.0, "reason": "brief"}}'
     )
 
