@@ -211,21 +211,27 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     state.metrics.balance = round(
                         state.metrics.balance + pos.entry_premium * pos.qty * 100 + pnl, 2
                     )
-                    state.metrics.total_trades += 1
                     if pnl >= 0:
                         state.metrics.wins_today += 1
                     else:
                         state.metrics.losses_today += 1
-                    total = state.metrics.wins_today + state.metrics.losses_today
-                    state.metrics.win_rate = round(
-                        state.metrics.wins_today / total * 100, 1
-                    ) if total > 0 else 0.0
+                # Persist cumulative stats (survives restart)
+                state.record_trade_close(pnl)
                 tone = "positive" if pnl >= 0 else "negative"
                 state.add_log(
                     "Closed",
                     f"{pos.symbol} {pos.option_type.upper()} ${pos.strike} | "
-                    f"{reason} | PnL ${pnl:+.2f} ({pnl_pct:+.1f}%)",
+                    f"{reason} | PnL ${pnl:+.2f} ({pnl_pct:+.1f}%) | "
+                    f"Balance ${state.metrics.balance:.2f}",
                     tone,
+                )
+                logging.info(
+                    "Options trade closed: %s %s | reason=%s pnl=$%.2f | "
+                    "total=%d wins=%d losses=%d wr=%.0f%% balance=$%.2f",
+                    pos.symbol, pos.option_type, reason, pnl,
+                    state.metrics.total_trades, state.metrics.total_wins,
+                    state.metrics.total_losses, state.metrics.win_rate,
+                    state.metrics.balance,
                 )
 
     # --- ENTRY CHECK ---
@@ -370,9 +376,21 @@ def _is_market_hours() -> bool:
 
 def _bot_loop(api_key: str, secret_key: str, paper: bool) -> None:
     logging.info("Options bot loop started (paper=%s)", paper)
-    options_state.add_log("Bot started", f"Options loop running — paper={paper}", "neutral")
+    options_state.add_log(
+        "Bot started",
+        f"Options loop running — paper={paper} | monitoring since {options_state.metrics.monitor_start_date}",
+        "neutral",
+    )
+
+    _last_day = datetime.now(timezone.utc).date()
 
     while not _stop_event.is_set():
+        # Midnight daily reset
+        today = datetime.now(timezone.utc).date()
+        if today != _last_day:
+            options_state.daily_reset()
+            _last_day = today
+
         if not _is_market_hours():
             _stop_event.wait(60)
             continue

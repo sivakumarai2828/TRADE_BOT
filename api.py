@@ -868,10 +868,15 @@ def optionsbot_status():
             "losses_today": m.losses_today,
             "daily_pnl": m.daily_pnl,
             "total_trades": m.total_trades,
+            "total_wins": m.total_wins,
+            "total_losses": m.total_losses,
+            "total_pnl": m.total_pnl,
             "win_rate": m.win_rate,
             "mode": m.mode,
             "balance": m.balance,
+            "peak_balance": m.peak_balance,
             "daily_loss_halted": m.daily_loss_halted,
+            "monitor_start_date": m.monitor_start_date,
         }
     return jsonify({
         "running": options_state.running,
@@ -904,6 +909,16 @@ def optionsbot_stop():
         return jsonify({"ok": False, "message": "optionsbot not available on this VM"}), 404
     stop_options_bot()
     return jsonify({"ok": True, "message": "Options bot stopped"})
+
+
+@app.get("/optionsbot/summary")
+def optionsbot_summary():
+    """2-week paper monitoring summary — persisted across restarts."""
+    try:
+        from optionsbot.state import options_state
+        return jsonify(options_state.summary())
+    except ModuleNotFoundError:
+        return jsonify({"error": "optionsbot not available"}), 404
 
 
 @app.post("/reset-halt")
