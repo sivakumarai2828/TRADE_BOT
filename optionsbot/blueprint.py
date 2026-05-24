@@ -5,9 +5,10 @@ Signal    → RSI momentum breakout + volume surge + EMA trend filter
 Contract  → slightly OTM (1-3%), 7-14 DTE (2-3 day swing hold)
 Confirm   → DeepSeek R1 AI gate (confidence ≥ 0.60)
 Entry     → buy call (bullish) or put (bearish) within 25% of balance budget
-Exit      → SL 50% of premium | TP 200% gain (3x) | expiry guard 30min before close
-Limits    → max 2 contracts open | SHIELD on 2 consecutive losses
-Capital   → $500 → 2 × $125 contracts deployed, $250 reserve
+Exit      → trailing SL (breakeven lock at +50%, +100%, +150%) | TP 200% (3×)
+Filters   → SPY trend gate | earnings avoid (3 days) | IV guard (>90% = skip)
+Limits    → max 4 contracts open | SHIELD on 2 consecutive losses
+Capital   → $500 → 4 × $125 = 100% deployed
 """
 from __future__ import annotations
 
@@ -24,14 +25,95 @@ _bot_thread: Optional[threading.Thread] = None
 
 SYMBOLS = ["NVDA", "AMD", "TSLA", "META", "AAPL", "SPY", "QQQ"]
 POLL_SECONDS = int(os.getenv("OPTIONS_POLL_SECONDS", "300"))   # 5 min
-MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "2"))
-_OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% of balance per contract (~$125 on $500)
-BUDGET = float(os.getenv("OPTIONS_BUDGET", "0"))               # 0 = use dynamic pct of balance
-SL_PCT = 0.50     # stop loss: lose 50% of premium ($62 on $125 contract)
-TP_PCT = 2.00     # take profit: 200% gain = 3x (your target, e.g. $125 → $375)
+MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "4"))   # 4 × $125 = $500 full capital
+_OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% per contract
+BUDGET = float(os.getenv("OPTIONS_BUDGET", "0"))               # 0 = dynamic
+SL_PCT = 0.50          # initial SL: −50% (overridden by trailing stop as trade profits)
+TP_PCT = 2.00          # take profit: +200% = 3× exit
+IV_MAX = 0.90          # skip contracts where IV > 90% (too expensive)
+EARNINGS_AVOID_DAYS = 3  # skip stock if earnings within N days
 DAILY_LOSS_HALT_PCT = 10.0
 EXPIRY_GUARD_MIN = 30
-MIN_CONFIDENCE = 0.60  # raised from 0.55 — individual stocks need stronger signal
+MIN_CONFIDENCE = 0.60
+
+# Sector map — avoid same-sector doubles in same direction
+_SECTOR = {
+    "NVDA": "semis", "AMD": "semis",
+    "META": "tech",  "AAPL": "tech",
+    "TSLA": "ev",
+    "SPY": "index",  "QQQ": "index",
+}
+
+
+# ---------------------------------------------------------------------------
+# Filter 1 — SPY market regime
+# ---------------------------------------------------------------------------
+
+def _spy_trend() -> str:
+    """Check SPY EMA20 on 15-min bars. Returns 'bull' / 'bear' / 'neutral'.
+
+    Gate: only buy calls in bull/neutral. Only buy puts in bear/neutral.
+    """
+    try:
+        import yfinance as yf
+        df = yf.download("SPY", period="5d", interval="15m", progress=False, auto_adjust=True)
+        if df.empty or len(df) < 20:
+            return "neutral"
+        if hasattr(df.columns, "levels"):
+            df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+        close = df["Close"].squeeze()
+        ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+        price = float(close.iloc[-1])
+        if price > ema20 * 1.003:
+            return "bull"
+        if price < ema20 * 0.997:
+            return "bear"
+        return "neutral"
+    except Exception as exc:
+        logging.debug("SPY trend check failed: %s", exc)
+        return "neutral"
+
+
+# ---------------------------------------------------------------------------
+# Filter 2 — Earnings avoid
+# ---------------------------------------------------------------------------
+
+def _has_earnings_soon(symbol: str) -> bool:
+    """Return True if earnings within next EARNINGS_AVOID_DAYS days.
+
+    Earnings = IV spike before + IV crush after. Option loses even if stock moves right.
+    """
+    if symbol in ("SPY", "QQQ"):
+        return False  # ETFs have no earnings
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        cal = ticker.calendar
+        if cal is None:
+            return False
+        today = datetime.now(timezone.utc).date()
+        # yfinance returns DataFrame or dict depending on version
+        if hasattr(cal, "columns"):
+            dates = cal.columns.tolist()
+        elif isinstance(cal, dict):
+            dates = list(cal.values())
+        else:
+            return False
+        for d in dates:
+            try:
+                if hasattr(d, "date"):
+                    ed = d.date()
+                else:
+                    from datetime import date as _date
+                    ed = datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                if 0 <= (ed - today).days <= EARNINGS_AVOID_DAYS:
+                    logging.info("Earnings avoid [%s]: earnings on %s — skip", symbol, ed)
+                    return True
+            except Exception:
+                continue
+    except Exception as exc:
+        logging.debug("Earnings check failed %s: %s", symbol, exc)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -41,69 +123,67 @@ MIN_CONFIDENCE = 0.60  # raised from 0.55 — individual stocks need stronger si
 def _signal(symbol: str) -> tuple[str, float, str]:
     """Momentum swing signal for individual high-beta stocks + ETFs.
 
-    Uses 15-min bars (better for 2-3 day swings than 5-min noise):
-      BUY  call  → RSI < 40 recovering + price > EMA50 + volume surge
-      BUY  put   → RSI > 68 rolling over + price < EMA50 + volume surge
-    Volume gate: current bar volume must exceed 1.5× 20-bar avg.
+    15-min bars (less noise than 5-min for 2-3 day swings):
+      BUY call  → RSI < 40 rising + price > EMA50 + volume surge
+      BUY put   → RSI > 68 rolling over + price < EMA50 + volume surge
+    Volume gate: current bar > 1.5× 20-bar avg.
     Returns (action, confidence, reason).
     """
     try:
         import yfinance as yf
 
-        # 15-min bars: 10d gives ~260 bars — enough for EMA50 + volume avg
         df = yf.download(symbol, period="10d", interval="15m", progress=False, auto_adjust=True)
         if df.empty or len(df) < 55:
             return "HOLD", 0.0, "insufficient data"
 
-        # Flatten MultiIndex columns (yfinance ≥0.2.38)
         if hasattr(df.columns, "levels"):
             df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
 
-        close = df["Close"].squeeze()
+        close  = df["Close"].squeeze()
         volume = df["Volume"].squeeze()
 
         # RSI(14)
         delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = (-delta.clip(upper=0)).rolling(14).mean()
-        rs = gain / loss.replace(0, float("nan"))
-        rsi = float((100 - 100 / (1 + rs)).iloc[-1])
-        rsi_prev = float((100 - 100 / (1 + rs)).iloc[-3])  # 3 bars ago — detect direction
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, float("nan"))
+        rsi_series = 100 - 100 / (1 + rs)
+        rsi      = float(rsi_series.iloc[-1])
+        rsi_prev = float(rsi_series.iloc[-3])  # 3 bars ago — detect direction
 
         # EMA50 trend filter
         ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
         price = float(close.iloc[-1])
 
-        # Volume gate: current bar vs 20-bar avg (momentum confirmation)
-        vol_now = float(volume.iloc[-1])
-        vol_avg = float(volume.rolling(20).mean().iloc[-1])
+        # Volume gate
+        vol_now   = float(volume.iloc[-1])
+        vol_avg   = float(volume.rolling(20).mean().iloc[-1])
         vol_ratio = vol_now / vol_avg if vol_avg > 0 else 0.0
-        vol_ok = vol_ratio >= 1.5  # 1.5× avg = confirmed momentum
+        vol_ok    = vol_ratio >= 1.5
 
-        # Day change for context
-        day_open = float(df["Open"].squeeze().resample("1D").first().iloc[-1])
+        # Day change
+        day_open   = float(df["Open"].squeeze().resample("1D").first().iloc[-1])
         day_change = (price - day_open) / day_open * 100
 
-        # ── CALL signal: RSI recovering from oversold, trending up, volume confirms ──
-        # rsi_prev > rsi ensures RSI is RISING (not still falling)
+        # CALL: RSI recovering from oversold, above EMA50
         if rsi < 40 and rsi > rsi_prev and price > ema50:
             conf = min(0.55 + (40 - rsi) / 40, 0.88)
             if vol_ok:
-                conf = min(conf + 0.08, 0.92)  # volume boost
+                conf   = min(conf + 0.08, 0.92)
                 reason = f"RSI {rsi:.0f}↑ oversold recovery, above EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             else:
-                conf = max(conf - 0.05, 0.55)
+                conf   = max(conf - 0.05, 0.55)
                 reason = f"RSI {rsi:.0f}↑ oversold, above EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             return "BUY", round(conf, 2), reason
 
-        # ── PUT signal: RSI rolling over from overbought, trending down, volume confirms ──
+        # PUT: RSI rolling over from overbought, below EMA50
         if rsi > 68 and rsi < rsi_prev and price < ema50:
             conf = min(0.55 + (rsi - 68) / 40, 0.88)
             if vol_ok:
-                conf = min(conf + 0.08, 0.92)
+                conf   = min(conf + 0.08, 0.92)
                 reason = f"RSI {rsi:.0f}↓ overbought rollover, below EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             else:
-                conf = max(conf - 0.05, 0.55)
+                conf   = max(conf - 0.05, 0.55)
                 reason = f"RSI {rsi:.0f}↓ overbought, below EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             return "SELL", round(conf, 2), reason
 
@@ -114,11 +194,11 @@ def _signal(symbol: str) -> tuple[str, float, str]:
 
 
 # ---------------------------------------------------------------------------
-# LLM confirm (OpenRouter Llama — free)
+# LLM confirm
 # ---------------------------------------------------------------------------
 
 def _llm_confirm(symbol: str, action: str, reason: str, contract: dict) -> tuple[bool, float]:
-    """DeepSeek R1 via NVIDIA NIM — Haiku fallback. Replaces free Llama."""
+    """DeepSeek R1 via NVIDIA NIM — confirms trade setup."""
     import json, re
 
     prompt = (
@@ -126,22 +206,22 @@ def _llm_confirm(symbol: str, action: str, reason: str, contract: dict) -> tuple
         f"Symbol: {symbol} | Action: BUY {'CALL' if action=='BUY' else 'PUT'}\n"
         f"Strike: ${contract['strike']} | Expiry: {contract['expiry']}\n"
         f"Premium: ${contract['premium']:.2f}/share (cost ${contract['cost']:.0f})\n"
-        f"IV: {contract['iv']:.0%} | Signal: {reason}\n"
-        f"SL at ${contract['premium']*0.5:.2f} (−50%) | TP at ${contract['premium']*3:.2f} (+200%, 3×)\n"
-        f"OTM: {contract.get('otm_pct',0):.1f}% | Strategy: 2-3 day momentum swing\n\n"
+        f"IV: {contract['iv']:.0%} | OTM: {contract.get('otm_pct',0):.1f}% | Signal: {reason}\n"
+        f"Exit: trailing SL (breakeven at +50%, lock +50% at +100%) | TP at +200% (3×)\n"
+        f"Strategy: 2-3 day momentum swing. Earnings cleared. IV under 90%.\n\n"
         f'Reply JSON only: {{"confirm": true/false, "confidence": 0.0-1.0, "reason": "brief"}}'
     )
 
     try:
         from daybot.llm_router import deepseek_chat as _ds_chat
         raw = _ds_chat(prompt, max_tokens=100)
-        # Strip DeepSeek <think> blocks
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         m = re.search(r"\{.*?\}", raw, re.DOTALL)
         if m:
             data = json.loads(m.group())
-            logging.info("Options DeepSeek-R1 [%s]: confirm=%s conf=%.2f", symbol,
-                         data.get("confirm"), data.get("confidence", 0.0))
+            logging.info("Options AI [%s]: confirm=%s conf=%.2f reason=%s",
+                         symbol, data.get("confirm"), data.get("confidence", 0.0),
+                         data.get("reason", ""))
             return bool(data.get("confirm", False)), float(data.get("confidence", 0.0))
     except Exception as exc:
         logging.warning("Options LLM confirm failed: %s", exc)
@@ -154,14 +234,40 @@ def _llm_confirm(symbol: str, action: str, reason: str, contract: dict) -> tuple
 
 def _near_expiry(pos: OptionsPosition) -> bool:
     try:
-        # Options expire at market close (4 PM ET = 20:00 UTC in summer, 21:00 in winter)
-        exp = datetime.strptime(pos.expiry, "%Y-%m-%d")
-        # Use 20:00 UTC as conservative close (EDT)
+        exp     = datetime.strptime(pos.expiry, "%Y-%m-%d")
         exp_utc = exp.replace(hour=20, minute=0, tzinfo=timezone.utc)
-        guard = exp_utc - timedelta(minutes=EXPIRY_GUARD_MIN)
+        guard   = exp_utc - timedelta(minutes=EXPIRY_GUARD_MIN)
         return datetime.now(timezone.utc) >= guard
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Trailing stop updater
+# ---------------------------------------------------------------------------
+
+def _update_trailing_sl(pos: OptionsPosition, current: float) -> str | None:
+    """Upgrade SL as position profits. Returns log message if SL changed, else None.
+
+    Ladder:
+      current ≥ entry × 1.5  (+50%)  → SL = entry       (breakeven)
+      current ≥ entry × 2.0  (+100%) → SL = entry × 1.5 (+50% locked)
+      current ≥ entry × 2.5  (+150%) → SL = entry × 2.0 (+100% locked)
+    """
+    entry = pos.entry_premium
+    msg   = None
+
+    if current >= entry * 2.5 and pos.sl_price < entry * 2.0:
+        pos.sl_price = round(entry * 2.0, 2)
+        msg = f"SL → +100% locked ${pos.sl_price:.2f} (option at +150%)"
+    elif current >= entry * 2.0 and pos.sl_price < entry * 1.5:
+        pos.sl_price = round(entry * 1.5, 2)
+        msg = f"SL → +50% locked ${pos.sl_price:.2f} (option at +100%)"
+    elif current >= entry * 1.5 and pos.sl_price < entry:
+        pos.sl_price = round(entry, 2)
+        msg = f"SL → breakeven ${pos.sl_price:.2f} (option at +50%)"
+
+    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +277,7 @@ def _near_expiry(pos: OptionsPosition) -> bool:
 def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
     state = options_state
 
-    # --- EXIT CHECK ---
+    # ── EXIT CHECK + TRAILING STOP ──────────────────────────────────────────
     with state._lock:
         open_positions = list(state.positions.values())
 
@@ -183,19 +289,29 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
         if current is None:
             continue
 
-        pnl = round((current - pos.entry_premium) * pos.qty * 100, 2)
+        pnl     = round((current - pos.entry_premium) * pos.qty * 100, 2)
         pnl_pct = round((current - pos.entry_premium) / pos.entry_premium * 100, 1)
 
+        # Update price + trailing SL inside lock
         with state._lock:
-            if pos.contract_symbol in state.positions:
-                p = state.positions[pos.contract_symbol]
-                p.current_premium = current
-                p.pnl = pnl
-                p.pnl_pct = pnl_pct
-                p.highest_premium = max(p.highest_premium, current)
+            if pos.contract_symbol not in state.positions:
+                continue
+            p = state.positions[pos.contract_symbol]
+            p.current_premium  = current
+            p.pnl              = pnl
+            p.pnl_pct          = pnl_pct
+            p.highest_premium  = max(p.highest_premium, current)
+            trail_msg = _update_trailing_sl(p, current)
+
+        if trail_msg:
+            state.add_log("Trailing SL", f"{pos.symbol}: {trail_msg}", "neutral")
+
+        # Exit decision (using updated sl_price after trailing)
+        with state._lock:
+            sl_price = state.positions[pos.contract_symbol].sl_price if pos.contract_symbol in state.positions else pos.sl_price
 
         reason = None
-        if current <= pos.sl_price:
+        if current <= sl_price:
             reason = "stop_loss"
         elif current >= pos.tp_price:
             reason = "take_profit"
@@ -208,14 +324,13 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                 with state._lock:
                     state.positions.pop(pos.contract_symbol, None)
                     state.metrics.daily_pnl = round(state.metrics.daily_pnl + pnl, 2)
-                    state.metrics.balance = round(
+                    state.metrics.balance   = round(
                         state.metrics.balance + pos.entry_premium * pos.qty * 100 + pnl, 2
                     )
                     if pnl >= 0:
                         state.metrics.wins_today += 1
                     else:
                         state.metrics.losses_today += 1
-                # Persist cumulative stats (survives restart)
                 state.record_trade_close(pnl)
                 tone = "positive" if pnl >= 0 else "negative"
                 state.add_log(
@@ -226,7 +341,7 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     tone,
                 )
                 logging.info(
-                    "Options trade closed: %s %s | reason=%s pnl=$%.2f | "
+                    "Options closed: %s %s | reason=%s pnl=$%.2f | "
                     "total=%d wins=%d losses=%d wr=%.0f%% balance=$%.2f",
                     pos.symbol, pos.option_type, reason, pnl,
                     state.metrics.total_trades, state.metrics.total_wins,
@@ -234,73 +349,100 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     state.metrics.balance,
                 )
 
-    # --- ENTRY CHECK ---
+    # ── ENTRY CHECK ─────────────────────────────────────────────────────────
     with state._lock:
-        halted = state.metrics.daily_loss_halted
+        halted     = state.metrics.daily_loss_halted
         open_count = len(state.positions)
-        balance = state.metrics.balance
-        start_bal = state.metrics.daily_start_balance
-        losses = state.metrics.losses_today
-        consecutive_wins = state.metrics.wins_today
+        balance    = state.metrics.balance
+        start_bal  = state.metrics.daily_start_balance
+        losses     = state.metrics.losses_today
+        wins       = state.metrics.wins_today
 
     if halted:
         return
 
-    # Daily loss halt (same fix as crypto: include open PnL)
+    # Daily loss halt
     if start_bal > 0:
         open_pnl = sum(p.pnl for p in state.positions.values())
         drop = (start_bal - (balance + open_pnl)) / start_bal * 100
         if drop >= DAILY_LOSS_HALT_PCT:
             with state._lock:
                 state.metrics.daily_loss_halted = True
-            state.add_log(
-                "Daily limit hit",
-                f"Balance dropped {drop:.1f}% — paused until tomorrow",
-                "negative",
-            )
+            state.add_log("Daily limit", f"Down {drop:.1f}% — paused until tomorrow", "negative")
             return
 
-    # SHIELD mode: 2+ consecutive losses → no new trades
+    # SHIELD: 2+ losses today → no new entries
     if losses >= 2:
         with state._lock:
             state.metrics.mode = "SHIELD"
-        state.add_log("Mode", "SHIELD — 2 losses today, no new trades", "neutral")
+        state.add_log("Mode", "SHIELD — 2 losses today, no new entries", "neutral")
         return
 
-    # AGGRESSIVE mode: 3+ wins, 0 losses
-    if consecutive_wins >= 3 and losses == 0:
-        with state._lock:
-            state.metrics.mode = "AGGRESSIVE"
-    else:
-        with state._lock:
-            state.metrics.mode = "SAFE"
+    with state._lock:
+        state.metrics.mode = "AGGRESSIVE" if wins >= 3 and losses == 0 else "SAFE"
 
     if open_count >= MAX_POSITIONS:
         return
 
-    # --- SCAN SYMBOLS ---
+    # ── FILTER 1: SPY market regime ──────────────────────────────────────────
+    spy = _spy_trend()
+    state.add_log("Market", f"SPY trend: {spy.upper()}", "neutral")
+
+    # ── SCAN SYMBOLS ─────────────────────────────────────────────────────────
     for symbol in SYMBOLS:
         with state._lock:
+            if len(state.positions) >= MAX_POSITIONS:
+                break
             already_open = any(p.symbol == symbol for p in state.positions.values())
         if already_open:
             continue
 
         action, confidence, reason = _signal(symbol)
-        state.add_log(
-            "Signal",
-            f"{symbol}: {action} conf={confidence:.0%} — {reason}",
-            "neutral",
-        )
+        state.add_log("Signal", f"{symbol}: {action} conf={confidence:.0%} — {reason}", "neutral")
 
         if action == "HOLD" or confidence < MIN_CONFIDENCE:
             continue
 
-        # Pick contract — dynamic 25% of balance, or fixed BUDGET if set
+        # SPY gate: don't buy calls in bear, don't buy puts in bull
+        if spy == "bear" and action == "BUY":
+            state.add_log("Skipped", f"{symbol}: market bearish — no calls", "neutral")
+            continue
+        if spy == "bull" and action == "SELL":
+            state.add_log("Skipped", f"{symbol}: market bullish — no puts", "neutral")
+            continue
+
+        # FILTER 2: Earnings avoid
+        if _has_earnings_soon(symbol):
+            state.add_log("Skipped", f"{symbol}: earnings within {EARNINGS_AVOID_DAYS}d — IV crush risk", "neutral")
+            continue
+
+        # FILTER 3: Sector dedup — don't open same sector + same direction twice
+        my_sector = _SECTOR.get(symbol, "other")
+        with state._lock:
+            sector_conflict = any(
+                _SECTOR.get(p.symbol, "x") == my_sector and
+                ((p.option_type == "call") == (action == "BUY"))
+                for p in state.positions.values()
+            )
+        if sector_conflict:
+            state.add_log("Skipped", f"{symbol}: same sector ({my_sector}) already open in same direction", "neutral")
+            continue
+
+        # Pick contract
         from .chain import pick_contract
-        _budget = BUDGET if BUDGET > 0 else round(state.metrics.balance * _OPTIONS_BUDGET_PCT, 2)
+        _budget  = BUDGET if BUDGET > 0 else round(balance * _OPTIONS_BUDGET_PCT, 2)
         contract = pick_contract(symbol, action, _budget)
         if not contract:
-            state.add_log("Skipped", f"{symbol}: no contract within ${_budget:.0f} budget", "neutral")
+            state.add_log("Skipped", f"{symbol}: no contract within ${_budget:.0f}", "neutral")
+            continue
+
+        # FILTER 4: IV guard — skip if implied volatility too high (expensive premium)
+        if contract["iv"] > IV_MAX:
+            state.add_log(
+                "Skipped",
+                f"{symbol}: IV {contract['iv']:.0%} > {IV_MAX:.0%} max — premium too expensive",
+                "neutral",
+            )
             continue
 
         # LLM confirm
@@ -309,23 +451,19 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
         state.add_log(
             "AI",
             f"{symbol} {contract['option_type'].upper()} ${contract['strike']} "
-            f"exp {contract['expiry']} | conf={final_conf:.0%}",
+            f"exp {contract['expiry']} IV={contract['iv']:.0%} | conf={final_conf:.0%}",
             "neutral",
         )
 
         if not confirmed or final_conf < MIN_CONFIDENCE:
-            state.add_log("Skipped", f"{symbol}: LLM rejected (conf={final_conf:.0%})", "neutral")
+            state.add_log("Skipped", f"{symbol}: AI rejected (conf={final_conf:.0%})", "neutral")
             continue
 
         # Balance check
         with state._lock:
             balance = state.metrics.balance
         if balance < contract["cost"]:
-            state.add_log(
-                "Skipped",
-                f"{symbol}: insufficient balance ${balance:.0f} < ${contract['cost']:.0f}",
-                "neutral",
-            )
+            state.add_log("Skipped", f"{symbol}: balance ${balance:.0f} < cost ${contract['cost']:.0f}", "neutral")
             continue
 
         # Execute BUY
@@ -335,28 +473,35 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             sl = round(contract["premium"] * (1 - SL_PCT), 2)
             tp = round(contract["premium"] * (1 + TP_PCT), 2)
             pos = OptionsPosition(
-                symbol=symbol,
-                contract_symbol=contract["contract_symbol"],
-                option_type=contract["option_type"],
-                strike=contract["strike"],
-                expiry=contract["expiry"],
-                qty=1,
-                entry_premium=contract["premium"],
-                current_premium=contract["premium"],
-                sl_price=sl,
-                tp_price=tp,
-                entry_time=datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                highest_premium=contract["premium"],
+                symbol          = symbol,
+                contract_symbol = contract["contract_symbol"],
+                option_type     = contract["option_type"],
+                strike          = contract["strike"],
+                expiry          = contract["expiry"],
+                qty             = 1,
+                entry_premium   = contract["premium"],
+                current_premium = contract["premium"],
+                sl_price        = sl,
+                tp_price        = tp,
+                entry_time      = datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                highest_premium = contract["premium"],
             )
             with state._lock:
                 state.positions[contract["contract_symbol"]] = pos
                 state.metrics.balance = round(state.metrics.balance - contract["cost"], 2)
+                open_count = len(state.positions)
             state.add_log(
                 "Trade BUY",
                 f"{symbol} {contract['option_type'].upper()} ${contract['strike']} "
-                f"exp {contract['expiry']} @ ${contract['premium']:.2f} | "
-                f"cost=${contract['cost']:.0f} | SL=${sl:.2f} TP=${tp:.2f}",
+                f"exp {contract['expiry']} IV={contract['iv']:.0%} OTM={contract.get('otm_pct',0):.1f}% "
+                f"@ ${contract['premium']:.2f} | cost=${contract['cost']:.0f} "
+                f"SL=${sl:.2f} TP=${tp:.2f} | open={open_count}/{MAX_POSITIONS}",
                 "positive",
+            )
+            logging.info(
+                "Options BUY: %s %s $%.0f exp=%s | cost=$%.0f SL=$%.2f TP=$%.2f balance=$%.2f",
+                symbol, contract["option_type"], contract["strike"], contract["expiry"],
+                contract["cost"], sl, tp, state.metrics.balance,
             )
 
 
@@ -368,8 +513,8 @@ def _is_market_hours() -> bool:
     now = datetime.now(timezone.utc)
     if now.weekday() >= 5:
         return False
-    # 9:35 AM – 3:45 PM ET (ET = UTC-4 in summer)
-    et = now - timedelta(hours=4)
+    # 9:35 AM – 3:45 PM ET (EDT = UTC-4)
+    et      = now - timedelta(hours=4)
     minutes = et.hour * 60 + et.minute
     return 9 * 60 + 35 <= minutes <= 15 * 60 + 45
 
@@ -378,7 +523,8 @@ def _bot_loop(api_key: str, secret_key: str, paper: bool) -> None:
     logging.info("Options bot loop started (paper=%s)", paper)
     options_state.add_log(
         "Bot started",
-        f"Options loop running — paper={paper} | monitoring since {options_state.metrics.monitor_start_date}",
+        f"Options loop — paper={paper} | monitoring since {options_state.metrics.monitor_start_date} | "
+        f"max={MAX_POSITIONS} positions | TP=3× trailing SL",
         "neutral",
     )
 
@@ -398,7 +544,7 @@ def _bot_loop(api_key: str, secret_key: str, paper: bool) -> None:
             _run_cycle(api_key, secret_key, paper)
         except Exception as exc:
             logging.error("Options bot cycle error: %s", exc)
-            options_state.add_log("Error", str(exc)[:100], "negative")
+            options_state.add_log("Error", str(exc)[:120], "negative")
         _stop_event.wait(POLL_SECONDS)
 
     logging.info("Options bot loop stopped")
