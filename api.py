@@ -916,6 +916,24 @@ def reset_halt():
     return jsonify({"ok": True})
 
 
+@app.post("/reset-daily")
+def reset_daily():
+    """Adhoc daily reset — clears trade count, fees, halts. Useful mid-day restart."""
+    global _weekly_halted
+    with bot_state._lock:
+        import datetime as _dt
+        bot_state.metrics.daily_trades_count = 0
+        bot_state.metrics.daily_fees_paid = 0.0
+        bot_state.metrics.daily_loss_halted = False
+        bot_state.metrics.daily_limit_notified = False
+        bot_state.metrics.daily_start_balance = bot_state.metrics.balance
+        bot_state.metrics.daily_date = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    # Also clear weekly halt so trading fully resumes
+    _weekly_halted = False
+    bot_state.add_log("Reset", "Daily counters reset — trades=0, halts cleared", tone="neutral")
+    return jsonify({"ok": True})
+
+
 @app.post("/settings")
 def settings():
     """Update runtime settings without restarting the bot."""

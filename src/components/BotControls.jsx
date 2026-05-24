@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
-import { Pause, Play, SlidersHorizontal, TrendingUp } from "lucide-react";
+import { Pause, Play, SlidersHorizontal, TrendingUp, RotateCcw } from "lucide-react";
 import { startBot, stopBot, updateSettings } from "../api.js";
 import { useAuth } from "../AuthContext.jsx";
+
+async function apiResetDaily() {
+  const BASE = import.meta.env.VITE_API_URL ?? "";
+  const res = await fetch(`${BASE}/reset-daily`, { method: "POST" });
+  return res.json();
+}
 
 const BASE = import.meta.env.VITE_API_URL ?? "";
 
@@ -104,6 +110,20 @@ export default function BotControls({ running, settings, onRefresh }) {
     finally { setBusy(false); }
   }
 
+  async function handleResetDaily() {
+    setBusy(true); setError(null); setSuccessMsg(null);
+    try {
+      const res = await apiResetDaily();
+      if (res.ok) {
+        setSuccessMsg("Daily reset done — trades=0, halts cleared ✓");
+        await onRefresh?.();
+      } else {
+        setError("Reset failed");
+      }
+    } catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+
   async function handleDeposit() {
     setBusy(true); setError(null); setSuccessMsg(null);
     try {
@@ -157,6 +177,15 @@ export default function BotControls({ running, settings, onRefresh }) {
           {busy && running ? "Stopping…" : "Stop Bot"}
         </button>
       </div>
+
+      {/* Adhoc Daily Reset */}
+      <button onClick={handleResetDaily} disabled={busy || !isOwner}
+        title={!isOwner ? "View-only access" : "Reset daily trade count, fees & halts without restarting bot"}
+        className="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-4 py-2.5 text-sm font-medium text-amber-300 transition hover:bg-amber-400/10 disabled:opacity-40">
+        <RotateCcw className="h-4 w-4" />
+        Reset Daily Counters
+      </button>
+      <p className="mt-1 text-center text-xs text-neutral-600">Clears trade count · fees · halts — no restart needed</p>
 
       {/* Auto mode */}
       <label className="mt-5 flex cursor-pointer items-center justify-between rounded-lg border border-neutral-800 bg-neutral-950 p-4">
