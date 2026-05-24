@@ -7,10 +7,14 @@
  */
 
 const BASE = import.meta.env.VITE_API_URL ?? "";
+const BOT_KEY = import.meta.env.VITE_BOT_API_KEY ?? "";
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(BOT_KEY ? { "X-Bot-Key": BOT_KEY } : {}),
+    },
     ...options,
   });
   if (!res.ok) {
@@ -52,6 +56,13 @@ export const stopBot = () => request("/stop", { method: "POST" });
 /** Force-close a position. Pass symbol to close one pair, omit to close all. */
 export const closePosition = (symbol) =>
   request("/close", { method: "POST", body: JSON.stringify(symbol ? { symbol } : {}) });
+
+/** Reset daily counters (trade count, fees, halts) without restarting. */
+export const resetDaily = () => request("/reset-daily", { method: "POST" });
+
+/** Set paper balance to given amount. */
+export const deposit = (amount) =>
+  request("/deposit", { method: "POST", body: JSON.stringify({ amount }) });
 
 /**
  * Push updated runtime settings to the backend.

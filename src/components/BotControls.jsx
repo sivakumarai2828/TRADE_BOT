@@ -1,24 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pause, Play, SlidersHorizontal, TrendingUp, RotateCcw } from "lucide-react";
-import { startBot, stopBot, updateSettings } from "../api.js";
+import { startBot, stopBot, updateSettings, resetDaily, deposit } from "../api.js";
 import { useAuth } from "../AuthContext.jsx";
-
-async function apiResetDaily() {
-  const BASE = import.meta.env.VITE_API_URL ?? "";
-  const res = await fetch(`${BASE}/reset-daily`, { method: "POST" });
-  return res.json();
-}
-
-const BASE = import.meta.env.VITE_API_URL ?? "";
-
-async function apiDeposit(amount) {
-  const res = await fetch(`${BASE}/deposit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount }),
-  });
-  return res.json();
-}
 
 export default function BotControls({ running, settings, onRefresh }) {
   const { isOwner } = useAuth();
@@ -113,13 +96,9 @@ export default function BotControls({ running, settings, onRefresh }) {
   async function handleResetDaily() {
     setBusy(true); setError(null); setSuccessMsg(null);
     try {
-      const res = await apiResetDaily();
-      if (res.ok) {
-        setSuccessMsg("Daily reset done — trades=0, halts cleared ✓");
-        await onRefresh?.();
-      } else {
-        setError("Reset failed");
-      }
+      await resetDaily();
+      setSuccessMsg("Daily reset done — trades=0, halts cleared ✓");
+      await onRefresh?.();
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   }
@@ -127,13 +106,9 @@ export default function BotControls({ running, settings, onRefresh }) {
   async function handleDeposit() {
     setBusy(true); setError(null); setSuccessMsg(null);
     try {
-      const res = await apiDeposit(Number(depositAmount));
-      if (res.ok) {
-        setSuccessMsg(`Paper balance set to $${Number(depositAmount).toLocaleString()}`);
-        await onRefresh?.();
-      } else {
-        setError(res.message);
-      }
+      await deposit(Number(depositAmount));
+      setSuccessMsg(`Paper balance set to $${Number(depositAmount).toLocaleString()}`);
+      await onRefresh?.();
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
   }
