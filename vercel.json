@@ -14,6 +14,8 @@
     { "source": "/settings",      "destination": "http://34.67.95.221:8000/settings" },
     { "source": "/close",         "destination": "http://34.67.95.221:8000/close" },
     { "source": "/health",        "destination": "http://34.67.95.221:8000/health" },
-    { "source": "/profit-report", "destination": "http://34.67.95.221:8000/profit-report" }
+    { "source": "/profit-report", "destination": "http://34.67.95.221:8000/profit-report" },
+    { "source": "/reset-daily",   "destination": "http://34.67.95.221:8000/reset-daily" },
+    { "source": "/deposit",       "destination": "http://34.67.95.221:8000/deposit" }
   ]
 }
