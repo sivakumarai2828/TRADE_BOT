@@ -288,10 +288,24 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             return
 
         if bot_state.settings.trade_size_mode == "percent":
-            available = bot_state.metrics.paper_usdt if config.dry_run else bot_state.metrics.balance
+            if config.dry_run:
+                available = bot_state.metrics.paper_usdt
+            else:
+                # Live: use actual cash from Alpaca (not equity — equity includes locked position value).
+                # equity = cash + open positions; only cash can be spent on new BUYs.
+                try:
+                    from alpaca.trading.client import TradingClient as _TC2
+                    _tc2 = _TC2(config.api_key, config.api_secret, paper=False)
+                    _acct = _tc2.get_account()
+                    available = float(_acct.cash)
+                    logging.info("Live cash from Alpaca: $%.2f (equity $%.2f)", available, bot_state.metrics.balance)
+                except Exception as _e:
+                    # Fallback to equity with 10% buffer to avoid over-spending
+                    available = bot_state.metrics.balance * 0.90
+                    logging.warning("Cash fetch failed (%s) — using 90%% of equity $%.2f", _e, available)
             dynamic_pct = _dynamic_trade_pct(bot_state.metrics.balance, bot_state.metrics.principal)
             trade_size = Decimal(str(round(available * dynamic_pct / 100, 2)))
-            logging.info("Base sizing: %.1f%% of $%.2f = $%.2f", dynamic_pct, available, float(trade_size))
+            logging.info("Base sizing: %.1f%% of cash $%.2f = $%.2f", dynamic_pct, available, float(trade_size))
         else:
             trade_size = Decimal(str(bot_state.settings.trade_size_usdt))
 
