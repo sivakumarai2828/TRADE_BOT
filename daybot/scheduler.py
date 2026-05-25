@@ -89,6 +89,10 @@ def job_premarket() -> None:
 def job_autostart() -> None:
     """9:35 AM ET — Auto-start the day bot if not already running."""
     try:
+        import os
+        if os.getenv("DISABLE_DAY_BOT", "").lower() in ("1", "true", "yes"):
+            logging.info("Scheduler: DISABLE_DAY_BOT set — skip auto-start")
+            return
         from .state import day_state
         if day_state.running:
             logging.info("Scheduler: bot already running — skip auto-start")

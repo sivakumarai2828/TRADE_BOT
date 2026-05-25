@@ -140,7 +140,10 @@ from daybot.blueprint import daybot_bp
 from daybot.scheduler import start_scheduler
 from telegram_bot import start_telegram_bot
 app.register_blueprint(daybot_bp, url_prefix="/daybot")
-start_scheduler()
+if os.getenv("DISABLE_DAY_BOT", "").lower() not in ("1", "true", "yes"):
+    start_scheduler()
+else:
+    logging.info("DISABLE_DAY_BOT set — daybot scheduler skipped")
 start_telegram_bot()
 
 # Options bot — paper trading on same VM as day bot (not on crypto-bot-vm)

@@ -733,8 +733,11 @@ def monitor_positions(exchange, config: BotConfig) -> None:
                 from datetime import datetime, timezone as _tz
                 entry_dt = datetime.fromisoformat(pos.entry_time)
                 hours_open = (datetime.now(_tz.utc) - entry_dt).total_seconds() / 3600
-                if hours_open >= 6:
-                    logging.info("Time-based exit %s — %.1fh open, pnl=%.2f", symbol, hours_open, pnl)
+                entry_val = float(pos.amount) * float(pos.entry_price)
+                loss_pct = abs(pnl) / entry_val * 100 if entry_val > 0 else 0
+                # Only time-exit if loss >= 1% — avoids exiting on pure fee drag (flat days)
+                if hours_open >= 6 and loss_pct >= 1.0:
+                    logging.info("Time-based exit %s — %.1fh open, pnl=%.2f (%.2f%%)", symbol, hours_open, pnl, -loss_pct)
                     _close_position(exchange, config, symbol, current_price, reason="time_exit")
             except Exception:
                 pass
