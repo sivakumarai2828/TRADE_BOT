@@ -98,14 +98,53 @@ def _tg(token: str, chat_id: str, msg: str) -> None:
         logging.warning("Telegram send failed: %s", e)
 
 # ---------------------------------------------------------------------------
+# RCA report builder
+# ---------------------------------------------------------------------------
+
+def _send_rca(
+    token: str,
+    chat_id: str,
+    symptom: str,
+    root_cause: str,
+    fix: str,
+    file_changed: str = "None (restart only)",
+    github_sha: str | None = None,
+    status: str = "Monitoring...",
+    severity: str = "medium",
+) -> None:
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    sev_emoji = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(severity, "🟡")
+    sha_line = f"🔗 GitHub: <code>{github_sha}</code> ✅" if github_sha else "🔗 GitHub: restart only"
+    msg = (
+        f"📋 <b>AUTO-FIX RCA REPORT</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🕐 Time: {now}\n"
+        f"{sev_emoji} Severity: {severity.upper()}\n"
+        f"⚠️ Symptom: {symptom}\n"
+        f"🔍 Root cause: {root_cause}\n"
+        f"🛠 Fix applied: {fix}\n"
+        f"📁 File: <code>{file_changed}</code>\n"
+        f"{sha_line}\n"
+        f"✅ Status: {status}\n"
+        f"━━━━━━━━━━━━━━━"
+    )
+    _tg(token, chat_id, msg)
+    logging.info("RCA sent: %s | %s", symptom, fix)
+
+
+# ---------------------------------------------------------------------------
 # Service control
 # ---------------------------------------------------------------------------
 
-def _restart_bot(token: str, chat_id: str, reason: str) -> bool:
+def _restart_bot(
+    token: str,
+    chat_id: str,
+    reason: str,
+    symptom: str | None = None,
+    root_cause: str | None = None,
+    severity: str = "medium",
+) -> bool:
     logging.warning("AUTO-RESTART: %s", reason)
-    _tg(token, chat_id,
-        f"🔧 <b>Auto-restart triggered</b>\n"
-        f"Reason: <code>{reason}</code>")
     try:
         subprocess.run(["sudo", "systemctl", "restart", SERVICE], timeout=30)
         time.sleep(12)
@@ -114,10 +153,17 @@ def _restart_bot(token: str, chat_id: str, reason: str) -> bool:
             capture_output=True, text=True,
         )
         ok = result.stdout.strip() == "active"
-        if ok:
-            _tg(token, chat_id, "✅ <b>trade-bot restarted OK</b>")
-        else:
-            _tg(token, chat_id, "🔴 <b>Restart FAILED</b> — manual action needed!")
+        status = "Bot restarted — back online ✅" if ok else "🔴 RESTART FAILED — manual action needed!"
+        _send_rca(
+            token, chat_id,
+            symptom=symptom or reason,
+            root_cause=root_cause or reason,
+            fix=f"Restarted {SERVICE} service",
+            file_changed="None (restart only)",
+            github_sha=None,
+            status=status,
+            severity=severity if ok else "critical",
+        )
         return ok
     except Exception as e:
         _tg(token, chat_id, f"🔴 Restart exception: <code>{e}</code>")
@@ -382,19 +428,22 @@ Diagnose and return fix JSON."""
                 f"Severity: {severity}"
             )
             sha = _git_commit_and_push(fname, commit_msg)
-            github_line = (
-                f"GitHub: <code>{sha}</code> pushed ✅"
-                if sha else
-                "GitHub: push failed — committed locally only"
-            )
-            _tg(token, chat_id,
-                f"🤖 <b>AI Auto-fixed</b>\n"
-                f"Issue: <code>{issue_type}</code>\n"
-                f"File: <code>{fname}</code>\n"
-                f"Fix: {explain}\n"
-                f"{github_line}\n"
-                f"Restarting bot...")
-            _restart_bot(token, chat_id, f"AI applied fix: {explain}")
+            # Restart bot with fresh code
+            subprocess.run(["sudo", "systemctl", "restart", SERVICE], timeout=30)
+            time.sleep(12)
+            svc_ok = subprocess.run(
+                ["systemctl", "is-active", SERVICE],
+                capture_output=True, text=True,
+            ).stdout.strip() == "active"
+            # Send full RCA
+            _send_rca(token, chat_id,
+                symptom=issue_type,
+                root_cause=diagnosis,
+                fix=f"AI patched code: {explain}",
+                file_changed=fname,
+                github_sha=sha,
+                status="Bot restarted with fix ✅" if svc_ok else "🔴 Restart failed after patch",
+                severity=severity)
         else:
             _tg(token, chat_id,
                 f"🤖 AI patch FAILED to apply to <code>{fname}</code>\n"
@@ -478,7 +527,11 @@ def _process_line(line: str, state: State, token: str, chat_id: str) -> None:
         if state.tsla_count >= 5 and state.can_act("tsla"):
             state.acted("tsla")
             state.tsla_count = 0
-            _restart_bot(token, chat_id, "Daybot leaked onto crypto VM (TSLA spam)")
+            _restart_bot(token, chat_id,
+                reason="TSLA spam",
+                symptom="TSLA bar fetch spam (5+ occurrences) on crypto VM",
+                root_cause="Daybot scheduler started on crypto-only VM — DISABLE_DAY_BOT flag bypassed",
+                severity="high")
 
     # get_portfolio_value flood
     if "get_portfolio_value failed" in line:
@@ -486,7 +539,11 @@ def _process_line(line: str, state: State, token: str, chat_id: str) -> None:
         recent = [t for t in state.pf_fails if (now - t).total_seconds() < 300]
         if len(recent) >= 5 and state.can_act("pf_flood"):
             state.acted("pf_flood")
-            _restart_bot(token, chat_id, "get_portfolio_value failing 5+ times in 5 min")
+            _restart_bot(token, chat_id,
+                reason="portfolio value flood",
+                symptom="get_portfolio_value failing 5+ times in 5 min",
+                root_cause="Daybot running with wrong API keys or paper endpoint mismatch",
+                severity="medium")
 
     # Insufficient balance — AI fix
     if "40310000" in line and state.can_act("insuf_bal", 1800):
@@ -495,31 +552,43 @@ def _process_line(line: str, state: State, token: str, chat_id: str) -> None:
             issue_type="40310000 insufficient balance",
             error_snippet=line.strip())
 
-    # Cycle errors
+    # Cycle errors — RCA alert
     if "Cycle error" in line:
         state.cycle_errs.append(now)
         recent = [t for t in state.cycle_errs if (now - t).total_seconds() < 600]
         if len(recent) >= 3 and state.can_act("cycle_err"):
             state.acted("cycle_err")
-            _tg(token, chat_id,
-                f"⚠️ <b>3 cycle errors in 10 min</b>\n"
-                f"<code>{line.strip()[-200:]}</code>")
+            _send_rca(token, chat_id,
+                symptom="3+ cycle errors in 10 min",
+                root_cause="Alpaca API or network connectivity issue",
+                fix="Monitoring — bot self-recovers on next cycle",
+                file_changed="None",
+                status="Watching for recovery...",
+                severity="medium")
 
-    # Stop-losses
+    # Stop-losses — RCA alert
     if "stop_loss" in line and ("close" in line.lower() or "reason" in line.lower()):
         state.sl_times.append(now)
         recent = [t for t in state.sl_times if (now - t).total_seconds() < 3600]
         if len(recent) >= 3 and state.can_act("consec_sl"):
             state.acted("consec_sl")
-            _tg(token, chat_id,
-                "🔴 <b>3 stop-losses in 60 min</b>\n"
-                "Possible flash crash — consider /stop command.")
+            _send_rca(token, chat_id,
+                symptom="3 stop-losses triggered in 60 min",
+                root_cause="Possible flash crash or sustained downtrend across all symbols",
+                fix="No auto-fix — positions protected by SL. Consider /stop if market crashing.",
+                file_changed="None",
+                status="⚠️ Manual review recommended",
+                severity="high")
 
-    # Double thread
+    # Double thread — RCA restart
     if "start already in progress" in line.lower() or "thread already alive" in line.lower():
         if state.can_act("double_thread"):
             state.acted("double_thread")
-            _restart_bot(token, chat_id, "Double-thread detected")
+            _restart_bot(token, chat_id,
+                reason="double-thread",
+                symptom="Two bot threads running simultaneously",
+                root_cause="Concurrent _start_crypto_bot_internal calls — telegram_bot re-import triggered module-level code twice",
+                severity="critical")
 
     # Unknown persistent errors — AI diagnose
     if "ERROR:root:" in line or "Traceback (most recent call last)" in line:
@@ -539,7 +608,10 @@ def _periodic_checks(state: State, token: str, chat_id: str) -> None:
     if mins_since >= STALL_MINUTES and state.can_act("stall"):
         state.acted("stall")
         _restart_bot(token, chat_id,
-            f"Bot stalled — no Cycle BEGIN for {mins_since:.0f} min")
+            reason="stall",
+            symptom=f"No Cycle BEGIN for {mins_since:.0f} min — bot loop frozen",
+            root_cause="Bot thread stalled or crashed silently — loop not advancing",
+            severity="critical")
 
 # ---------------------------------------------------------------------------
 # Main
