@@ -121,10 +121,19 @@ def _watchdog_loop() -> None:
                     logging.error("Watchdog auto-recovery failed: %s", exc)
 
 
+# Guard: api.py runs as __main__ on service start, but telegram_bot.py does
+# "import api" which causes Python to load this file AGAIN as a separate module
+# object — running all module-level code twice and spawning duplicate threads.
+# os.environ is process-wide, so this flag prevents the double-start.
+_STARTUP_GUARD_KEY = "_TRADE_BOT_STARTUP_DONE"
+_IS_FIRST_LOAD = not os.environ.get(_STARTUP_GUARD_KEY)
+if _IS_FIRST_LOAD:
+    os.environ[_STARTUP_GUARD_KEY] = "1"
+
 # Flask debug reloader spawns a parent + child process — both would import this module
 # and start a watchdog. Only start in the child (WERKZEUG_RUN_MAIN=true) or in
 # non-debug runs where the env var is absent.
-if os.environ.get("WERKZEUG_RUN_MAIN", "true") == "true":
+if _IS_FIRST_LOAD and os.environ.get("WERKZEUG_RUN_MAIN", "true") == "true":
     threading.Thread(target=_watchdog_loop, daemon=True, name="watchdog").start()
 
 from daybot.blueprint import daybot_bp
@@ -312,7 +321,8 @@ def _send_startup_alert() -> None:
     except Exception:
         pass
 
-threading.Thread(target=_send_startup_alert, daemon=True, name="startup-alert").start()
+if _IS_FIRST_LOAD:
+    threading.Thread(target=_send_startup_alert, daemon=True, name="startup-alert").start()
 
 
 def _auto_start_bots() -> None:
@@ -351,7 +361,8 @@ def _auto_start_bots() -> None:
             logging.warning("Day bot auto-start exception: %s", exc)
 
 
-threading.Thread(target=_auto_start_bots, daemon=True, name="bot-autostart").start()
+if _IS_FIRST_LOAD:
+    threading.Thread(target=_auto_start_bots, daemon=True, name="bot-autostart").start()
 
 # ---------------------------------------------------------------------------
 # Bot thread management
@@ -359,6 +370,7 @@ threading.Thread(target=_auto_start_bots, daemon=True, name="bot-autostart").sta
 
 _bot_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
+_start_lock = threading.Lock()   # prevents concurrent starts → no double-thread
 _exchange = None
 _config = None
 _crypto_mode_manager = None   # CryptoModeManager — created on /start
@@ -648,8 +660,8 @@ def signals():
 def positions():
     with bot_state._lock:
         from dataclasses import asdict
-        pos = bot_state.position
-        return jsonify(asdict(pos) if pos else None)
+        pos_dict = {s: asdict(p) for s, p in bot_state.positions.items() if p is not None}
+        return jsonify(pos_dict)
 
 
 @app.get("/logs")
@@ -692,6 +704,20 @@ def _start_crypto_bot_internal() -> str | None:
     """Start the crypto bot loop. Returns error message string or None on success."""
     global _bot_thread, _stop_event, _exchange, _config, _crypto_mode_manager, _harvester
 
+    # Mutex: block concurrent starts — prevents double-thread race condition
+    if not _start_lock.acquire(blocking=False):
+        logging.warning("_start_crypto_bot_internal: start already in progress — skipping concurrent call")
+        return "Start already in progress"
+    try:
+        return _start_crypto_bot_locked()
+    finally:
+        _start_lock.release()
+
+
+def _start_crypto_bot_locked() -> str | None:
+    """Inner start — called only under _start_lock."""
+    global _bot_thread, _stop_event, _exchange, _config, _crypto_mode_manager, _harvester
+
     with bot_state._lock:
         if bot_state.running:
             return "Bot is already running"
@@ -729,9 +755,15 @@ def _start_crypto_bot_internal() -> str | None:
         claude_model=_config.anthropic_model,
     )
 
+    # Guard: don't start a second thread if one is already alive (prevents duplicate signals)
+    if _bot_thread is not None and _bot_thread.is_alive():
+        logging.warning("_start_bot_loop: thread already alive (pid=%d) — skipping duplicate start", _bot_thread.ident or -1)
+        return None
+
     _stop_event = threading.Event()
     _bot_thread = threading.Thread(target=_bot_loop, daemon=True)
     _bot_thread.start()
+    logging.info("Bot thread started: ident=%d", _bot_thread.ident or -1)
 
     with bot_state._lock:
         bot_state.running = True

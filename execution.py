@@ -221,14 +221,14 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
         bot_state.refresh_paper_balance(symbol, float(price))
 
     bot_state.record_trade_result(float(pnl))
-    # Variable cooldown by exit reason — shorter after wins, longer after losses.
+    # Variable cooldown by exit reason — 60 min base to reduce fee drag.
     _cooldown_map = {
-        "stop_loss":    6,  # 30 min — market went wrong, give it time
-        "time_exit":    4,  # 20 min — neutral exit, medium wait
-        "take_profit":  2,  # 10 min — market was strong, re-enter sooner
-        "manual_close": 3,  # 15 min — manual override
+        "stop_loss":    12,  # 60 min — market went wrong, wait full hour
+        "time_exit":    12,  # 60 min — neutral exit, wait full hour
+        "take_profit":  12,  # 60 min — avoid re-entering on same noise
+        "manual_close":  6,  # 30 min — manual override, shorter wait
     }
-    _cooldown_cycles = _cooldown_map.get(reason, 4)
+    _cooldown_cycles = _cooldown_map.get(reason, 12)
     bot_state.set_cooldown(symbol, cycles=_cooldown_cycles)
     bot_state.check_daily_loss_limit()
     notify_sell(symbol, float(price), float(pnl), pnl_pct, reason)
@@ -297,15 +297,20 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
                     from alpaca.trading.client import TradingClient as _TC2
                     _tc2 = _TC2(config.api_key, config.api_secret, paper=False)
                     _acct = _tc2.get_account()
-                    available = float(_acct.cash)
-                    logging.info("Live cash from Alpaca: $%.2f (equity $%.2f)", available, bot_state.metrics.balance)
+                    # buying_power = true free cash available for new orders (confirmed = non_marginable_buying_power)
+                    # cash field on Alpaca crypto accounts can return equity — use buying_power instead
+                    available = float(_acct.buying_power)
+                    logging.info("Live buying_power from Alpaca: $%.2f (equity $%.2f)", available, bot_state.metrics.balance)
                 except Exception as _e:
-                    # Fallback to equity with 10% buffer to avoid over-spending
-                    available = bot_state.metrics.balance * 0.90
-                    logging.warning("Cash fetch failed (%s) — using 90%% of equity $%.2f", _e, available)
+                    # Fallback: use 45% of balance to stay well under real available cash
+                    available = bot_state.metrics.balance * 0.45
+                    logging.warning("Cash fetch failed (%s) — using 45%% of balance $%.2f", _e, available)
             dynamic_pct = _dynamic_trade_pct(bot_state.metrics.balance, bot_state.metrics.principal)
-            trade_size = Decimal(str(round(available * dynamic_pct / 100, 2)))
-            logging.info("Base sizing: %.1f%% of cash $%.2f = $%.2f", dynamic_pct, available, float(trade_size))
+            raw_size = round(available * dynamic_pct / 100, 2)
+            # Hard cap: never request more than 95% of available buying power
+            max_safe = round(available * 0.95, 2)
+            trade_size = Decimal(str(min(raw_size, max_safe)))
+            logging.info("Base sizing: %.1f%% of $%.2f = $%.2f (cap=$%.2f)", dynamic_pct, available, float(trade_size), max_safe)
         else:
             trade_size = Decimal(str(bot_state.settings.trade_size_usdt))
 
