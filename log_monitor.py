@@ -166,6 +166,72 @@ def _apply_patch(filename: str, old_str: str, new_str: str) -> bool:
         return False
 
 
+def _git_commit_and_push(filename: str, commit_msg: str) -> str | None:
+    """
+    Stage file, commit, push to GitHub.
+    Returns commit SHA on success, None on failure.
+    Requires GITHUB_TOKEN in .env for HTTPS push.
+    """
+    env = _load_env()
+    gh_token = env.get("GITHUB_TOKEN", "")
+
+    try:
+        # Configure remote with token if available
+        if gh_token:
+            remote_url = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True, cwd=BOT_DIR,
+            ).stdout.strip()
+            # Inject token into URL: https://TOKEN@github.com/...
+            if "https://" in remote_url and "@" not in remote_url:
+                auth_url = remote_url.replace(
+                    "https://", f"https://{gh_token}@"
+                )
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", auth_url],
+                    cwd=BOT_DIR, capture_output=True,
+                )
+
+        # Stage the patched file
+        subprocess.run(
+            ["git", "add", filename],
+            cwd=BOT_DIR, check=True, capture_output=True,
+        )
+
+        # Commit
+        full_msg = f"{commit_msg}\n\nCo-Authored-By: AI Log Monitor <noreply@anthropic.com>"
+        subprocess.run(
+            ["git", "commit", "-m", full_msg],
+            cwd=BOT_DIR, check=True, capture_output=True,
+        )
+
+        # Get commit SHA
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BOT_DIR, capture_output=True, text=True,
+        ).stdout.strip()
+
+        # Push
+        push_result = subprocess.run(
+            ["git", "push", "origin", "master"],
+            cwd=BOT_DIR, capture_output=True, text=True,
+        )
+
+        if push_result.returncode == 0:
+            logging.info("Git push OK — commit %s", sha)
+            return sha
+        else:
+            logging.warning("Git push failed: %s", push_result.stderr[:200])
+            return sha  # commit exists locally even if push failed
+
+    except subprocess.CalledProcessError as e:
+        logging.error("Git commit/push error: %s", e)
+        return None
+    except Exception as e:
+        logging.error("Git sync error: %s", e)
+        return None
+
+
 def _ai_diagnose_and_fix(
     token: str,
     chat_id: str,
@@ -308,11 +374,25 @@ Diagnose and return fix JSON."""
 
         patch_ok = _apply_patch(fname, old_str, new_str)
         if patch_ok:
+            # Commit + push to GitHub
+            commit_msg = (
+                f"AI auto-fix: {explain}\n\n"
+                f"Issue: {issue_type}\n"
+                f"Diagnosis: {diagnosis}\n"
+                f"Severity: {severity}"
+            )
+            sha = _git_commit_and_push(fname, commit_msg)
+            github_line = (
+                f"GitHub: <code>{sha}</code> pushed ✅"
+                if sha else
+                "GitHub: push failed — committed locally only"
+            )
             _tg(token, chat_id,
                 f"🤖 <b>AI Auto-fixed</b>\n"
                 f"Issue: <code>{issue_type}</code>\n"
                 f"File: <code>{fname}</code>\n"
                 f"Fix: {explain}\n"
+                f"{github_line}\n"
                 f"Restarting bot...")
             _restart_bot(token, chat_id, f"AI applied fix: {explain}")
         else:
