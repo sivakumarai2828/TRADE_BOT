@@ -475,7 +475,8 @@ def _check_balance(token: str, chat_id: str) -> None:
         if BOT_DIR not in sys.path:
             sys.path.insert(0, BOT_DIR)
         from alpaca.trading.client import TradingClient
-        client = TradingClient(api_key, api_secret, paper=False)
+        is_paper = env.get("PAPER", "false").lower() in ("1", "true", "yes")
+        client = TradingClient(api_key, api_secret, paper=is_paper)
         equity = float(client.get_account().equity)
         logging.info("Balance check: $%.2f", equity)
         if equity < LOW_BAL_THRESH:
