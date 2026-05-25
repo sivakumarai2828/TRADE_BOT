@@ -462,6 +462,64 @@ Diagnose and return fix JSON."""
             f"Issue: {issue_type}")
 
 # ---------------------------------------------------------------------------
+# Daily heartbeat
+# ---------------------------------------------------------------------------
+
+def _daily_heartbeat(token: str, chat_id: str) -> None:
+    """Send 8 AM ET status ping — both bots, balance, next market open."""
+    env        = _load_env()
+    api_key    = env.get("EXCHANGE_API_KEY", "")
+    api_secret = env.get("EXCHANGE_API_SECRET", "")
+    is_paper   = env.get("PAPER", "false").lower() in ("1", "true", "yes")
+
+    # Bot running state + balance via local API
+    bot_running = False
+    balance_str = "unknown"
+    trades_str  = ""
+    try:
+        import urllib.request, json as _json
+        with urllib.request.urlopen("http://localhost:8000/status", timeout=5) as r:
+            d = _json.loads(r.read())
+            bot_running = d.get("running", False)
+            m = d.get("metrics", {})
+            bal = m.get("balance", 0.0)
+            trades = m.get("total_trades", 0)
+            balance_str = f"${bal:.2f}"
+            trades_str  = f" | {trades} trades"
+    except Exception:
+        pass
+
+    # Alpaca account equity + next market open
+    equity_str   = ""
+    next_open_str = ""
+    try:
+        if BOT_DIR not in sys.path:
+            sys.path.insert(0, BOT_DIR)
+        from alpaca.trading.client import TradingClient
+        client = TradingClient(api_key, api_secret, paper=is_paper)
+        equity = float(client.get_account().equity)
+        equity_str = f" | Alpaca ${equity:.2f}"
+        clock = client.get_clock()
+        if clock.is_open:
+            next_open_str = "Market: 🟢 OPEN"
+        else:
+            next_open_str = f"Next open: {clock.next_open.strftime('%a %b %d %H:%M ET')}"
+    except Exception:
+        pass
+
+    bot_icon = "✅" if bot_running else "🔴"
+    mode_str = "paper" if is_paper else "live"
+    _tg(token, chat_id,
+        f"🌅 <b>Daily Heartbeat — 08:00 ET</b>\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{bot_icon} Bot: {'running' if bot_running else 'stopped'} | {mode_str} | "
+        f"{balance_str}{equity_str}{trades_str}\n"
+        f"🔍 Monitor: active\n"
+        f"📅 {next_open_str}\n"
+        f"━━━━━━━━━━━━━━━")
+
+
+# ---------------------------------------------------------------------------
 # Balance check
 # ---------------------------------------------------------------------------
 
@@ -603,6 +661,11 @@ def _process_line(line: str, state: State, token: str, chat_id: str) -> None:
 
 def _periodic_checks(state: State, token: str, chat_id: str) -> None:
     now = datetime.utcnow()
+
+    # Daily heartbeat at 08:00 ET (13:00 UTC) — once per day
+    if now.hour == 13 and now.minute < 1 and state.can_act("heartbeat", 82800):  # 23h cooldown
+        state.acted("heartbeat")
+        _daily_heartbeat(token, chat_id)
 
     # Stall check
     mins_since = (now - state.last_cycle_begin).total_seconds() / 60
