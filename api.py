@@ -333,18 +333,21 @@ def _auto_start_bots() -> None:
     import time as _t
     _t.sleep(10)  # let Flask + scheduler fully initialise first
 
-    # --- Crypto bot: always start ---
-    # On fresh service start no thread can be running — reset flag so start proceeds.
-    with bot_state._lock:
-        bot_state.running = False
-    try:
-        err = _start_crypto_bot_internal()
-        if err:
-            logging.warning("Crypto bot auto-start failed: %s", err)
-        else:
-            logging.info("Crypto bot auto-started on service startup")
-    except Exception as exc:
-        logging.warning("Crypto bot auto-start exception: %s", exc)
+    # --- Crypto bot: start only if not disabled ---
+    if os.getenv("DISABLE_CRYPTO", "").lower() in ("1", "true", "yes"):
+        logging.info("DISABLE_CRYPTO set — crypto bot auto-start skipped")
+    else:
+        # On fresh service start no thread can be running — reset flag so start proceeds.
+        with bot_state._lock:
+            bot_state.running = False
+        try:
+            err = _start_crypto_bot_internal()
+            if err:
+                logging.warning("Crypto bot auto-start failed: %s", err)
+            else:
+                logging.info("Crypto bot auto-started on service startup")
+        except Exception as exc:
+            logging.warning("Crypto bot auto-start exception: %s", exc)
 
     # --- Day bot: start only if mid-session restart (9:35–15:55 ET, Mon–Fri) ---
     if os.getenv("DISABLE_DAY_BOT", "").lower() not in ("1", "true", "yes"):
