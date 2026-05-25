@@ -46,7 +46,11 @@ BAL_CHECK_SECS  = 60
 LOW_BAL_THRESH  = 400.0
 
 # Source files Claude is allowed to patch
-PATCHABLE_FILES = ["execution.py", "strategy.py", "config.py"]
+PATCHABLE_FILES = [
+    "execution.py", "strategy.py", "config.py",
+    "optionsbot/blueprint.py", "optionsbot/executor.py",
+    "daybot/blueprint.py", "api.py",
+]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -556,6 +560,7 @@ class State:
         self.sl_times:     deque = deque(maxlen=10)
         self.error_lines:  deque = deque(maxlen=20)
         self.tsla_count         = 0
+        self.bar_fetch_none_count = 0
         self.last_action: dict[str, datetime] = {}
         self.restart_count      = 0
         self.last_restart       = datetime.min
@@ -580,7 +585,7 @@ def _process_line(line: str, state: State, token: str, chat_id: str) -> None:
     if any(kw in line for kw in ("ERROR", "Exception", "Traceback", "raise ")):
         state.error_lines.append(line.strip())
 
-    # TSLA leak
+    # TSLA leak (crypto VM specific — daybot running where it shouldn't)
     if "TSLA: bar fetch returned None" in line:
         state.tsla_count += 1
         if state.tsla_count >= 5 and state.can_act("tsla"):
@@ -591,6 +596,42 @@ def _process_line(line: str, state: State, token: str, chat_id: str) -> None:
                 symptom="TSLA bar fetch spam (5+ occurrences) on crypto VM",
                 root_cause="Daybot scheduler started on crypto-only VM — DISABLE_DAY_BOT flag bypassed",
                 severity="high")
+
+    # Generic bar fetch None — any symbol (day bot on market holiday or bad data)
+    if "bar fetch returned None" in line and state.can_act("bar_fetch_none", 1800):
+        state.bar_fetch_none_count = getattr(state, "bar_fetch_none_count", 0) + 1
+        if state.bar_fetch_none_count >= 5:
+            state.acted("bar_fetch_none")
+            state.bar_fetch_none_count = 0
+            _tg(token, chat_id,
+                "⚠️ <b>Bar Fetch Failures</b>\n"
+                "5+ symbols returning None for bar data.\n"
+                "Likely cause: market holiday or Alpaca data outage.\n"
+                "No action taken — bot skips gracefully.")
+
+    # Options market closed (42210000) — alert once, no restart
+    if "42210000" in line and state.can_act("opt_42210000", 3600):
+        state.acted("opt_42210000")
+        _tg(token, chat_id,
+            "ℹ️ <b>Options Market Closed</b>\n"
+            "Bot attempted order outside market hours (42210000).\n"
+            "Expected on holidays/weekends. Bot skips automatically.\n"
+            "If this repeats on a trading day → holiday check bug.")
+
+    # Weekly loss halt — WARNING level, not ERROR, so needs explicit detection
+    if "Weekly loss halt" in line and state.can_act("weekly_halt", 86400):
+        state.acted("weekly_halt")
+        import re as _re
+        m = _re.search(r"down ([\d.]+)%.*\(\$([\d,.]+) → \$([\d,.]+)\)", line)
+        if m:
+            pct, start, curr = m.group(1), m.group(2), m.group(3)
+            _tg(token, chat_id,
+                f"🛑 <b>Weekly Loss Halt Triggered</b>\n"
+                f"Down <b>{pct}%</b> this week\n"
+                f"Balance: ${start} → ${curr}\n"
+                f"No new BUYs until Monday midnight reset.")
+        else:
+            _tg(token, chat_id, "🛑 <b>Weekly Loss Halt Triggered</b> — check logs")
 
     # get_portfolio_value flood
     if "get_portfolio_value failed" in line:
