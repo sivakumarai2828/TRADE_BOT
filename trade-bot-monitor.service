@@ -1,0 +1,17 @@
+[Unit]
+Description=Trade Bot Log Monitor (auto-fix + Telegram alerts)
+After=trade-bot.service
+Requires=network.target
+
+[Service]
+User=sivakumarkondapalle
+WorkingDirectory=/home/sivakumarkondapalle/TRADE_BOT
+EnvironmentFile=/home/sivakumarkondapalle/TRADE_BOT/.env
+ExecStart=/home/sivakumarkondapalle/venv311/bin/python3 log_monitor.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
