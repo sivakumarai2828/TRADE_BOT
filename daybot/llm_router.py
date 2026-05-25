@@ -1,11 +1,11 @@
 """LLM Router — centralised model selection.
 
 Routing strategy (from memory/llm_routing_strategy.md):
-  claude-sonnet-4-6   → critical decisions (evening analysis only)
-  deepseek-r1/NVIDIA  → reasoning-heavy tasks (India, options)
+  claude-sonnet-4-6        → critical decisions (evening analysis only)
+  deepseek-v4-flash/NVIDIA → reasoning-heavy tasks (India, options)
   llama-3.3-70b/OpenRouter → simple tasks (premarket, signals)
-  claude-haiku-4-5    → fallback when any free LLM fails
-  pure Python         → exits, risk checks, rule engine
+  claude-haiku-4-5         → fallback when any free LLM fails
+  pure Python              → exits, risk checks, rule engine
 """
 from __future__ import annotations
 import json
@@ -27,8 +27,12 @@ def _claude_haiku_chat(prompt: str, system: str = "", max_tokens: int = 1500) ->
 
 
 # ---------------------------------------------------------------------------
-# DeepSeek R1 via NVIDIA NIM (reasoning-heavy, free) → Haiku fallback
+# DeepSeek via NVIDIA NIM (reasoning-heavy) → Haiku fallback
+# Model: deepseek-v4-flash (replaces retired deepseek-r1-distill-llama-70b)
 # ---------------------------------------------------------------------------
+
+_NVIDIA_MODEL = "deepseek-ai/deepseek-v4-flash"
+
 
 def deepseek_chat(prompt: str, system: str = "", max_tokens: int = 1500) -> str:
     """Call DeepSeek via NVIDIA NIM. Falls back to Claude Haiku on failure."""
@@ -42,7 +46,7 @@ def deepseek_chat(prompt: str, system: str = "", max_tokens: int = 1500) -> str:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": prompt})
             response = client.chat.completions.create(
-                model="deepseek-ai/deepseek-r1-distill-llama-70b",
+                model=_NVIDIA_MODEL,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0,
