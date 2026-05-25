@@ -509,10 +509,23 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
 # Bot loop
 # ---------------------------------------------------------------------------
 
-def _is_market_hours() -> bool:
+def _is_market_hours(api_key: str = "", secret_key: str = "", paper: bool = True) -> bool:
+    """Check if US market is open. Queries Alpaca clock when creds provided — handles holidays + early closes."""
     now = datetime.now(timezone.utc)
+    # Weekend fast-exit — no API call
     if now.weekday() >= 5:
         return False
+
+    # Alpaca clock — authoritative, handles Memorial Day / Christmas / early closes
+    if api_key:
+        try:
+            from alpaca.trading.client import TradingClient
+            clock = TradingClient(api_key, secret_key, paper=paper).get_clock()
+            return bool(clock.is_open)
+        except Exception as exc:
+            logging.debug("Alpaca clock check failed (%s) — using time fallback", exc)
+
+    # Time-based fallback (no holiday awareness)
     # 9:35 AM – 3:45 PM ET (EDT = UTC-4)
     et      = now - timedelta(hours=4)
     minutes = et.hour * 60 + et.minute
@@ -537,7 +550,7 @@ def _bot_loop(api_key: str, secret_key: str, paper: bool) -> None:
             options_state.daily_reset()
             _last_day = today
 
-        if not _is_market_hours():
+        if not _is_market_hours(api_key, secret_key, paper):
             _stop_event.wait(60)
             continue
         try:

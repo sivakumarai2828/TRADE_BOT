@@ -468,8 +468,9 @@ def _run_cycle() -> None:
         with day_state._lock:
             day_state.watchlist = symbols
 
-    # --- Skip new entries outside trading windows ---
-    if not _in_trading_window():
+    # --- Skip new entries outside trading windows or on market holidays ---
+    # mkt_open = Alpaca clock (handles Memorial Day, Christmas, early closes)
+    if not _in_trading_window() or not mkt_open:
         return
 
     # --- No-trade alert after 90 min in window with 0 trades ---
