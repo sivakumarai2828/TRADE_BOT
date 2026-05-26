@@ -49,6 +49,7 @@ def sell_contract(
             qty=qty,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
+            position_intent="sell_to_close",
         )
         result = tc.submit_order(order)
         logging.info("Options SELL submitted: %s qty=%d id=%s", contract_symbol, qty, result.id)
