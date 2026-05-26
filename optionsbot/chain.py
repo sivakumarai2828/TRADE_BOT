@@ -35,10 +35,10 @@ def pick_contract(
     direction: str,        # "BUY" → call, "SELL" → put
     budget: float = 150.0, # max premium cost per contract (premium × 100)
 ) -> Optional[dict]:
-    """Return best slightly-OTM contract within budget, 7-14 DTE.
+    """Return best OTM contract within budget, 7-14 DTE.
 
-    Prefers 1-3% OTM over ATM for better leverage on big moves.
-    Falls back to ATM if nothing affordable in OTM zone.
+    Prefers 4-9% OTM for affordable premium on high-priced underlyings.
+    Falls back to any affordable contract if nothing in OTM zone.
     """
     if underlying not in OPTIONABLE:
         logging.warning("chain: %s not in optionable universe", underlying)
@@ -59,13 +59,17 @@ def pick_contract(
         logging.warning("chain: no %s %s contracts within $%.0f budget", underlying, option_type, budget)
         return None
 
-    # Prefer slightly OTM (1-3% out) for better leverage → bigger % gain on underlying move
+    # Prefer 4-9% OTM — affordable premium on high-priced stocks ($500+/share)
+    # High-priced underlyings (AMD/NVDA/TSLA) need deep-enough OTM to stay within $125 budget
     # For calls: OTM means strike > current_price  |  For puts: OTM means strike < current_price
-    otm = [r for r in candidates if r.get("otm_pct", 0) >= 1.0 and r.get("otm_pct", 0) <= 4.0]
-    pool = otm if otm else candidates  # fallback to ATM if nothing in OTM zone
+    otm = [r for r in candidates if r.get("otm_pct", 0) >= 4.0 and r.get("otm_pct", 0) <= 9.0]
+    if not otm:
+        # Fallback: any OTM contract 2-12%
+        otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 12.0]
+    pool = otm if otm else candidates  # last resort: any affordable
 
-    # Sort by: prefer OTM zone first, then by delta proxy (dist to ATM)
-    pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 2.0))  # target ~2% OTM
+    # Sort: target ~6% OTM — enough leverage, affordable premium
+    pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 6.0))
     best = pool[0]
 
     contract_symbol = _opra_symbol(underlying, best["strike"], best["expiry"], option_type)
@@ -131,8 +135,8 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
         df = df.copy()
         df["dist"] = abs(df["strike"] - current_price)
 
-        # Look at wider range: nearest 10 strikes (not just 5) to find OTM options
-        nearest = df.nsmallest(10, "dist")
+        # Look at wider range: nearest 20 strikes — captures 6-10% OTM on high-price stocks
+        nearest = df.nsmallest(20, "dist")
 
         rows = []
         for _, row in nearest.iterrows():
