@@ -485,12 +485,17 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
         )
         rule_signal = "HOLD"
 
-    # BTC 4h EMA200 macro regime — block ALL new longs in bear market.
-    # Bear = BTC price > 1% below 4h EMA200. Neutral/bull = allow.
+    # BTC 4h macro regime gate:
+    #   bear   → block ALL longs on all symbols
+    #   neutral → block ETH/SOL longs (alts follow BTC; only trade BTC itself in choppy market)
+    #   bull   → allow all symbols
     if rule_signal == "BUY":
         btc_regime = _get_btc_regime()
         if btc_regime == "bear":
             logging.info("BTC regime BEAR [%s] RSI=%.1f — BUY blocked (macro downtrend)", symbol, rsi)
+            rule_signal = "HOLD"
+        elif btc_regime == "neutral" and symbol not in ("BTC/USD", "BTC/USDT", "BTCUSD"):
+            logging.info("BTC regime NEUTRAL [%s] — altcoin BUY blocked (only BTC in choppy market)", symbol)
             rule_signal = "HOLD"
 
     # Multi-timeframe filter: selectively block BUYs when 1h trend is bearish.
