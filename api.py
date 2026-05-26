@@ -513,6 +513,7 @@ def _run_cycle() -> None:
     """Run a cycle for every active symbol, then update live balance once."""
     global _exchange, _config, _last_cycle_time
     _last_cycle_time = _time_module.time()
+    logging.info("Cycle BEGIN: %d symbol(s) active", len(list(bot_state.settings.active_symbols)))
 
     # Adaptive mode evaluation — runs once per cycle before any symbol
     if _crypto_mode_manager is not None:

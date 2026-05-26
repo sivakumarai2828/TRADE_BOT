@@ -717,6 +717,8 @@ def _periodic_checks(state: State, token: str, chat_id: str) -> None:
             symptom=f"No Cycle BEGIN for {mins_since:.0f} min — bot loop frozen",
             root_cause="Bot thread stalled or crashed silently — loop not advancing",
             severity="critical")
+        # Reset heartbeat timer — give bot 15 min after restart before next stall check
+        state.last_cycle_begin = datetime.utcnow()
 
 # ---------------------------------------------------------------------------
 # Main
