@@ -155,11 +155,12 @@ def _signal(symbol: str) -> tuple[str, float, str]:
         ema50 = float(close.ewm(span=50, adjust=False).mean().iloc[-1])
         price = float(close.iloc[-1])
 
-        # Volume gate
-        vol_now   = float(volume.iloc[-1])
-        vol_avg   = float(volume.rolling(20).mean().iloc[-1])
+        # Volume gate — use iloc[-2] (last *completed* 15-min bar)
+        # iloc[-1] is the current forming bar and has 0 volume in yfinance until bar closes
+        vol_now   = float(volume.iloc[-2])
+        vol_avg   = float(volume.rolling(20).mean().iloc[-2])
         vol_ratio = vol_now / vol_avg if vol_avg > 0 else 0.0
-        vol_ok    = vol_ratio >= 1.2  # lowered from 1.5 — 15-min bars rarely hit 1.5×
+        vol_ok    = vol_ratio >= 1.2  # lowered from 1.5
 
         # Day change
         day_open   = float(df["Open"].squeeze().resample("1D").first().iloc[-1])
