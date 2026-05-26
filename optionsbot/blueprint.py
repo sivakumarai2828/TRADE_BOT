@@ -159,35 +159,37 @@ def _signal(symbol: str) -> tuple[str, float, str]:
         vol_now   = float(volume.iloc[-1])
         vol_avg   = float(volume.rolling(20).mean().iloc[-1])
         vol_ratio = vol_now / vol_avg if vol_avg > 0 else 0.0
-        vol_ok    = vol_ratio >= 1.5
+        vol_ok    = vol_ratio >= 1.2  # lowered from 1.5 — 15-min bars rarely hit 1.5×
 
         # Day change
         day_open   = float(df["Open"].squeeze().resample("1D").first().iloc[-1])
         day_change = (price - day_open) / day_open * 100
 
-        # CALL: RSI recovering from oversold, above EMA50
-        if rsi < 40 and rsi > rsi_prev and price > ema50:
-            conf = min(0.55 + (40 - rsi) / 40, 0.88)
+        # CALL: RSI oversold recovery — allow price up to 3% below EMA50 (pullback entry)
+        # Fix: original required price > EMA50 which is impossible when RSI < 43 (oversold = price down)
+        if rsi < 43 and rsi > rsi_prev and price > ema50 * 0.97:
+            conf = min(0.55 + (43 - rsi) / 43, 0.88)
             if vol_ok:
                 conf   = min(conf + 0.08, 0.92)
-                reason = f"RSI {rsi:.0f}↑ oversold recovery, above EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+                reason = f"RSI {rsi:.0f}↑ oversold recovery, near EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             else:
                 conf   = max(conf - 0.05, 0.55)
-                reason = f"RSI {rsi:.0f}↑ oversold, above EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+                reason = f"RSI {rsi:.0f}↑ oversold, near EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             return "BUY", round(conf, 2), reason
 
-        # PUT: RSI rolling over from overbought, below EMA50
-        if rsi > 68 and rsi < rsi_prev and price < ema50:
-            conf = min(0.55 + (rsi - 68) / 40, 0.88)
+        # PUT: RSI overbought rollover — allow price up to 5% above EMA50
+        # Fix: original required price < EMA50 which is impossible when RSI > 65 (overbought = price up)
+        if rsi > 65 and rsi < rsi_prev and price < ema50 * 1.05:
+            conf = min(0.55 + (rsi - 65) / 40, 0.88)
             if vol_ok:
                 conf   = min(conf + 0.08, 0.92)
-                reason = f"RSI {rsi:.0f}↓ overbought rollover, below EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+                reason = f"RSI {rsi:.0f}↓ overbought rollover, near EMA50, vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             else:
                 conf   = max(conf - 0.05, 0.55)
-                reason = f"RSI {rsi:.0f}↓ overbought, below EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
+                reason = f"RSI {rsi:.0f}↓ overbought, near EMA50, low vol {vol_ratio:.1f}×, day {day_change:+.1f}%"
             return "SELL", round(conf, 2), reason
 
-        return "HOLD", 0.0, f"RSI {rsi:.0f} neutral (EMA50={ema50:.2f} price={price:.2f})"
+        return "HOLD", 0.0, f"RSI {rsi:.0f} no setup (EMA50={ema50:.2f} price={price:.2f} vol={vol_ratio:.1f}×)"
     except Exception as exc:
         logging.warning("Options signal failed %s: %s", symbol, exc)
         return "HOLD", 0.0, "error"
