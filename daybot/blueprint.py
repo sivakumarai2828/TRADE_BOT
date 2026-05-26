@@ -615,8 +615,7 @@ def _run_cycle() -> None:
                 day_state.signals[symbol].ai_confidence = ai_dec.confidence
                 day_state.signals[symbol].ai_reason = ai_dec.reason
 
-        # AI veto: only block when AI gives the OPPOSITE signal with >70% confidence.
-        # AI returning HOLD (uncertain) does NOT block the rule signal.
+        # AI veto: block on strong opposite signal OR very-low-confidence HOLD
         if (
             ai_dec.decision != sig.action
             and ai_dec.decision != "HOLD"
@@ -625,6 +624,14 @@ def _run_cycle() -> None:
             logging.info(
                 "%s: rule=%s AI=%s conf=%.2f — strong AI veto, skipping",
                 symbol, sig.action, ai_dec.decision, ai_dec.confidence,
+            )
+            continue
+        # Also skip if AI returns HOLD with very low confidence (< 0.45)
+        # conf < 0.45 = AI has no conviction — rule signal alone isn't worth the risk
+        if ai_dec.decision == "HOLD" and ai_dec.confidence < 0.45:
+            logging.info(
+                "%s: rule=%s AI=HOLD conf=%.2f — AI too uncertain, skipping",
+                symbol, sig.action, ai_dec.confidence,
             )
             continue
         if ai_dec.decision != sig.action:
@@ -688,7 +695,11 @@ def _run_cycle() -> None:
                 else:
                     entry_atr = data.get("atr", 0.0)
                     risk = entry_atr if entry_atr > 0 else sig.price * 0.01
-                    sl = round(sig.price - 1.0 * risk, 2)
+                    # Floor: SL must be at least config.stop_loss_pct below entry
+                    # Prevents ultra-tight ATR-based SL on low-volatility stocks (SOFI ~$0.01 ATR)
+                    sl_atr = round(sig.price - 1.0 * risk, 2)
+                    sl_pct = round(sig.price * (1 - _config.stop_loss_pct), 2)
+                    sl = min(sl_atr, sl_pct)  # lower price = more buffer from entry
                     tp1_price = round(sig.price + 1.5 * risk, 2)
                     tp = round(sig.price + 3.0 * risk, 2)
                 pos = DayPosition(
