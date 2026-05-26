@@ -53,6 +53,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,  # override Flask's default handler so INFO logs reach journalctl
 )
 
 app = Flask(__name__)
