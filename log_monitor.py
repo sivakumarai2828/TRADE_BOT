@@ -708,17 +708,28 @@ def _periodic_checks(state: State, token: str, chat_id: str) -> None:
         state.acted("heartbeat")
         _daily_heartbeat(token, chat_id)
 
-    # Stall check
+    # Stall check — only fire if bot is running (skip when intentionally stopped overnight/weekend)
     mins_since = (now - state.last_cycle_begin).total_seconds() / 60
     if mins_since >= STALL_MINUTES and state.can_act("stall"):
-        state.acted("stall")
-        _restart_bot(token, chat_id,
-            reason="stall",
-            symptom=f"No Cycle BEGIN for {mins_since:.0f} min — bot loop frozen",
-            root_cause="Bot thread stalled or crashed silently — loop not advancing",
-            severity="critical")
-        # Reset heartbeat timer — give bot 15 min after restart before next stall check
-        state.last_cycle_begin = datetime.utcnow()
+        bot_running = False
+        try:
+            import urllib.request as _ur, json as _js
+            with _ur.urlopen("http://localhost:8000/status", timeout=4) as _r:
+                bot_running = bool(_js.loads(_r.read()).get("running", False))
+        except Exception:
+            bot_running = True  # API unreachable → assume stuck, restart
+        if bot_running:
+            state.acted("stall")
+            _restart_bot(token, chat_id,
+                reason="stall",
+                symptom=f"No Cycle BEGIN for {mins_since:.0f} min — bot loop frozen",
+                root_cause="Bot thread stalled or crashed silently — loop not advancing",
+                severity="critical")
+            # Reset heartbeat timer — give bot 15 min after restart before next stall check
+            state.last_cycle_begin = datetime.utcnow()
+        else:
+            # Bot intentionally stopped (outside market hours) — reset timer silently
+            state.last_cycle_begin = datetime.utcnow()
 
 # ---------------------------------------------------------------------------
 # Main

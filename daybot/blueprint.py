@@ -385,6 +385,7 @@ def _handle_mode_switch(new_mode: str, old_mode: str) -> None:
 
 def _run_cycle() -> None:
     global _scanner, _risk, _monitor, _ai, _logger
+    logging.info("Cycle BEGIN: daybot")
 
     try:
         pv, timed_out = _run_with_timeout(_executor.get_portfolio_value)
