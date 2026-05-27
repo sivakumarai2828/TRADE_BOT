@@ -899,6 +899,8 @@ def optionsbot_status():
                 "entry_time": p.entry_time,
                 "pnl": p.pnl,
                 "pnl_pct": p.pnl_pct,
+                "highest_premium": p.highest_premium,
+                "tp1_hit": p.tp1_hit,
             }
             for cs, p in options_state.positions.items()
         }
