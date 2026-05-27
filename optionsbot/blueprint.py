@@ -364,10 +364,13 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
     if halted:
         return
 
-    # Daily loss halt
+    # Daily loss halt — use current market VALUE of open positions, not unrealized pnl.
+    # Bug: balance already deducted premium cost, so balance + open_pnl (gain/loss only)
+    # = $826 + $0 = $826 immediately after buying, showing 17% "loss" even though no loss.
+    # Fix: add current_premium × qty × 100 (full market value) instead of just pnl.
     if start_bal > 0:
-        open_pnl = sum(p.pnl for p in state.positions.values())
-        drop = (start_bal - (balance + open_pnl)) / start_bal * 100
+        open_value = sum(p.current_premium * p.qty * 100 for p in state.positions.values())
+        drop = (start_bal - (balance + open_value)) / start_bal * 100
         if drop >= DAILY_LOSS_HALT_PCT:
             with state._lock:
                 state.metrics.daily_loss_halted = True
