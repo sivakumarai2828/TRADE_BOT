@@ -418,17 +418,27 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         if not has_position:
             logging.info("SELL skipped — no open %s position", symbol)
             return
-        # Guard: don't exit at a loss on RSI signal — let SL handle downside.
-        # Only signal_sell when position is at breakeven or better (>= -0.5%).
+        # Guard: don't exit at a loss on weak signals — let SL handle downside.
+        # BUT allow high-confidence exits (≥70%) even when losing — RSI overbought
+        # reversal with both rule+Claude agreeing is a real signal, not noise.
+        # Bug: ETH RSI 73-78 SELL blocked at -1.8% → held until SL at -3.16%.
         pos = bot_state.get_position(symbol)
         if pos is not None:
             signal_pnl_pct = float((current_price - Decimal(str(pos.entry))) / Decimal(str(pos.entry)) * 100)
             if signal_pnl_pct < -0.5:
+                # Check signal confidence from shared state (set by generate_signal before execute_trade)
+                sig_data = bot_state.signals.get(symbol)
+                sig_confidence = getattr(sig_data, "confidence", 0) if sig_data else 0
+                if sig_confidence < 70:
+                    logging.info(
+                        "SELL signal skipped [%s] — position %.1f%% loss, confidence=%d%% < 70%%, SL will protect",
+                        symbol, signal_pnl_pct, sig_confidence,
+                    )
+                    return
                 logging.info(
-                    "SELL signal skipped [%s] — position at %.1f%% (< -0.5%%), SL will protect downside",
-                    symbol, signal_pnl_pct,
+                    "SELL allowed [%s] — %.1f%% loss BUT confidence=%d%% ≥ 70%% (strong RSI reversal, override guard)",
+                    symbol, signal_pnl_pct, sig_confidence,
                 )
-                return
         _close_position(exchange, config, symbol, current_price, reason="signal_sell")
 
 
