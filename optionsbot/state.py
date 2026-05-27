@@ -31,6 +31,7 @@ class OptionsPosition:
     pnl: float = 0.0
     pnl_pct: float = 0.0
     highest_premium: float = 0.0
+    tp1_hit: bool = False    # True after 50% partial sold at +100%
 
 
 @dataclass

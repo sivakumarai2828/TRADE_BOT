@@ -309,6 +309,46 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
         if trail_msg:
             state.add_log("Trailing SL", f"{pos.symbol}: {trail_msg}", "neutral")
 
+        # ── TP1 PARTIAL EXIT: sell half at +100%, let rest ride to 3× ──────
+        # Only fires when: qty ≥ 2, gain ≥ +100%, tp1 not yet triggered
+        with state._lock:
+            if pos.contract_symbol not in state.positions:
+                continue
+            p = state.positions[pos.contract_symbol]
+            tp1_eligible = (
+                not p.tp1_hit
+                and p.qty >= 2
+                and pnl_pct >= 100.0
+            )
+        if tp1_eligible:
+            sell_qty = p.qty // 2
+            ok = sell_contract(pos.contract_symbol, sell_qty, api_key, secret_key, paper)
+            if ok:
+                partial_pnl = round((current - pos.entry_premium) * sell_qty * 100, 2)
+                with state._lock:
+                    if pos.contract_symbol in state.positions:
+                        p2 = state.positions[pos.contract_symbol]
+                        p2.qty     -= sell_qty
+                        p2.tp1_hit  = True
+                        p2.sl_price = p2.entry_premium  # move SL to breakeven
+                        state.metrics.balance = round(
+                            state.metrics.balance + pos.entry_premium * sell_qty * 100 + partial_pnl, 2
+                        )
+                        state.metrics.daily_pnl = round(state.metrics.daily_pnl + partial_pnl, 2)
+                state.add_log(
+                    "TP1 Partial",
+                    f"{pos.symbol}: sold {sell_qty}/{pos.qty} at +{pnl_pct:.0f}% → "
+                    f"+${partial_pnl:.2f} locked | SL → breakeven ${pos.entry_premium:.2f} | "
+                    f"{p.qty - sell_qty} contract riding to 3×",
+                    "positive",
+                )
+                logging.info(
+                    "TP1 partial [%s]: sold %d contracts @ $%.2f (+%.0f%%) pnl=$%.2f | "
+                    "%d remaining, SL→breakeven",
+                    pos.symbol, sell_qty, current, pnl_pct, partial_pnl, p.qty - sell_qty,
+                )
+            continue  # skip full-exit check this cycle
+
         # Exit decision (using updated sl_price after trailing)
         with state._lock:
             sl_price = state.positions[pos.contract_symbol].sl_price if pos.contract_symbol in state.positions else pos.sl_price
@@ -465,16 +505,23 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             state.add_log("Skipped", f"{symbol}: AI rejected (conf={final_conf:.0%})", "neutral")
             continue
 
-        # Balance check
+        # Balance check — buy 2 contracts if budget allows (enables TP1 partial exit)
         with state._lock:
             balance = state.metrics.balance
         if balance < contract["cost"]:
             state.add_log("Skipped", f"{symbol}: balance ${balance:.0f} < cost ${contract['cost']:.0f}", "neutral")
             continue
 
+        # Buy 2 contracts when balance >= 2× cost AND remaining slots allow it
+        # 2 contracts → sell 1 at +100% (lock profit), let 1 ride to 3×
+        with state._lock:
+            slots_left = MAX_POSITIONS - len(state.positions)
+        buy_qty = 2 if (balance >= contract["cost"] * 2 and slots_left >= 2) else 1
+        total_cost = contract["cost"] * buy_qty
+
         # Execute BUY
         from .executor import buy_contract
-        ok = buy_contract(contract["contract_symbol"], 1, api_key, secret_key, paper)
+        ok = buy_contract(contract["contract_symbol"], buy_qty, api_key, secret_key, paper)
         if ok:
             sl = round(contract["premium"] * (1 - SL_PCT), 2)
             tp = round(contract["premium"] * (1 + TP_PCT), 2)
@@ -484,7 +531,7 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                 option_type     = contract["option_type"],
                 strike          = contract["strike"],
                 expiry          = contract["expiry"],
-                qty             = 1,
+                qty             = buy_qty,
                 entry_premium   = contract["premium"],
                 current_premium = contract["premium"],
                 sl_price        = sl,
@@ -494,20 +541,20 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             )
             with state._lock:
                 state.positions[contract["contract_symbol"]] = pos
-                state.metrics.balance = round(state.metrics.balance - contract["cost"], 2)
+                state.metrics.balance = round(state.metrics.balance - total_cost, 2)
                 open_count = len(state.positions)
             state.add_log(
                 "Trade BUY",
                 f"{symbol} {contract['option_type'].upper()} ${contract['strike']} "
                 f"exp {contract['expiry']} IV={contract['iv']:.0%} OTM={contract.get('otm_pct',0):.1f}% "
-                f"@ ${contract['premium']:.2f} | cost=${contract['cost']:.0f} "
+                f"@ ${contract['premium']:.2f} × {buy_qty} | cost=${total_cost:.0f} "
                 f"SL=${sl:.2f} TP=${tp:.2f} | open={open_count}/{MAX_POSITIONS}",
                 "positive",
             )
             logging.info(
-                "Options BUY: %s %s $%.0f exp=%s | cost=$%.0f SL=$%.2f TP=$%.2f balance=$%.2f",
+                "Options BUY: %s %s $%.0f exp=%s | qty=%d cost=$%.0f SL=$%.2f TP=$%.2f balance=$%.2f",
                 symbol, contract["option_type"], contract["strike"], contract["expiry"],
-                contract["cost"], sl, tp, state.metrics.balance,
+                buy_qty, total_cost, sl, tp, state.metrics.balance,
             )
 
 
