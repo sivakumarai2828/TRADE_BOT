@@ -72,7 +72,7 @@ class OptionsState:
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
-        """Load persisted metrics from JSON. Called on startup."""
+        """Load persisted metrics + open positions from JSON. Called on startup."""
         if not os.path.exists(_STATE_FILE):
             # First run — set monitor start date
             self.metrics.monitor_start_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -92,17 +92,59 @@ class OptionsState:
             m.monitor_start_date = data.get("monitor_start_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
             m.last_trade_date    = data.get("last_trade_date", "")
             m.daily_start_balance = m.balance  # reset daily baseline to current balance
+            # ── Restore open positions ──
+            for cs, pd in data.get("positions", {}).items():
+                try:
+                    self.positions[cs] = OptionsPosition(
+                        symbol          = pd["symbol"],
+                        contract_symbol = pd["contract_symbol"],
+                        option_type     = pd["option_type"],
+                        strike          = float(pd["strike"]),
+                        expiry          = pd["expiry"],
+                        qty             = int(pd["qty"]),
+                        entry_premium   = float(pd["entry_premium"]),
+                        current_premium = float(pd["current_premium"]),
+                        sl_price        = float(pd["sl_price"]),
+                        tp_price        = float(pd["tp_price"]),
+                        entry_time      = pd["entry_time"],
+                        pnl             = float(pd.get("pnl", 0.0)),
+                        pnl_pct         = float(pd.get("pnl_pct", 0.0)),
+                        highest_premium = float(pd.get("highest_premium", pd["entry_premium"])),
+                        tp1_hit         = bool(pd.get("tp1_hit", False)),
+                    )
+                except Exception as pe:
+                    logging.warning("Options position restore failed [%s]: %s", cs, pe)
             logging.info(
-                "Options state loaded: balance=$%.2f trades=%d wins=%d losses=%d since=%s",
-                m.balance, m.total_trades, m.total_wins, m.total_losses, m.monitor_start_date,
+                "Options state loaded: balance=$%.2f trades=%d wins=%d losses=%d positions=%d since=%s",
+                m.balance, m.total_trades, m.total_wins, m.total_losses,
+                len(self.positions), m.monitor_start_date,
             )
         except Exception as exc:
             logging.warning("Options state load failed: %s — starting fresh", exc)
 
     def _save(self) -> None:
-        """Persist cumulative metrics to JSON. Call after every trade close."""
+        """Persist cumulative metrics + open positions to JSON."""
         try:
             m = self.metrics
+            positions_data = {}
+            for cs, p in self.positions.items():
+                positions_data[cs] = {
+                    "symbol":          p.symbol,
+                    "contract_symbol": p.contract_symbol,
+                    "option_type":     p.option_type,
+                    "strike":          p.strike,
+                    "expiry":          p.expiry,
+                    "qty":             p.qty,
+                    "entry_premium":   p.entry_premium,
+                    "current_premium": p.current_premium,
+                    "sl_price":        p.sl_price,
+                    "tp_price":        p.tp_price,
+                    "entry_time":      p.entry_time,
+                    "pnl":             p.pnl,
+                    "pnl_pct":         p.pnl_pct,
+                    "highest_premium": p.highest_premium,
+                    "tp1_hit":         p.tp1_hit,
+                }
             data = {
                 "balance":            m.balance,
                 "peak_balance":       m.peak_balance,
@@ -113,6 +155,7 @@ class OptionsState:
                 "win_rate":           m.win_rate,
                 "monitor_start_date": m.monitor_start_date,
                 "last_trade_date":    m.last_trade_date,
+                "positions":          positions_data,
                 "saved_at":           datetime.now(timezone.utc).isoformat(),
             }
             with open(_STATE_FILE, "w") as f:

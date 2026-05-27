@@ -347,6 +347,7 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     "%d remaining, SL→breakeven",
                     pos.symbol, sell_qty, current, pnl_pct, partial_pnl, p.qty - sell_qty,
                 )
+                state._save()  # persist updated qty + tp1_hit + sl_price + balance
             continue  # skip full-exit check this cycle
 
         # Exit decision (using updated sl_price after trailing)
@@ -551,6 +552,7 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                 f"SL=${sl:.2f} TP=${tp:.2f} | open={open_count}/{MAX_POSITIONS}",
                 "positive",
             )
+            state._save()  # persist position so restart doesn't lose it
             logging.info(
                 "Options BUY: %s %s $%.0f exp=%s | qty=%d cost=$%.0f SL=$%.2f TP=$%.2f balance=$%.2f",
                 symbol, contract["option_type"], contract["strike"], contract["expiry"],
