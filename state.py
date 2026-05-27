@@ -108,7 +108,7 @@ class BotSettings:
     polling_seconds: int = 60
     auto_mode: bool = True
     rsi_oversold: float = 38.0
-    rsi_overbought: float = 70.0
+    rsi_overbought: float = 78.0
     house_profit_threshold: float = 2.0
     house_take_profit_pct: float = 15.0
     house_stop_loss_pct: float = 50.0

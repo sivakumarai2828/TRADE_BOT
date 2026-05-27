@@ -417,6 +417,17 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         if not has_position:
             logging.info("SELL skipped — no open %s position", symbol)
             return
+        # Guard: don't exit at a loss on RSI signal — let SL handle downside.
+        # Only signal_sell when position is at breakeven or better (>= -0.5%).
+        pos = bot_state.get_position(symbol)
+        if pos is not None:
+            signal_pnl_pct = float((current_price - Decimal(str(pos.entry))) / Decimal(str(pos.entry)) * 100)
+            if signal_pnl_pct < -0.5:
+                logging.info(
+                    "SELL signal skipped [%s] — position at %.1f%% (< -0.5%%), SL will protect downside",
+                    symbol, signal_pnl_pct,
+                )
+                return
         _close_position(exchange, config, symbol, current_price, reason="signal_sell")
 
 
