@@ -450,20 +450,27 @@ def _run_cycle() -> None:
         day_state.add_log("Risk", "Daily loss limit hit — no new trades today", "negative")
         return
 
-    # --- Build fixed daily watchlist once per trading day ---
-    # Replaces periodic random scanner — bot now specialises on 5 known symbols.
-    # Core ETFs always included; volatile stocks health-checked at open.
+    # --- Build daily watchlist once per trading day ---
+    # Priority: evening_approved AI picks → scanner fallback → hardcoded default
+    # Evening agent runs at 8 PM ET and picks 6-10 high-quality symbols for next day.
+    # Using AI picks gives higher-ATR stocks (AMZN, GOOGL, PLTR) vs fixed BAC/SOFI only.
     from zoneinfo import ZoneInfo
     today_str = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     if getattr(_run_cycle, "_watchlist_date", None) != today_str:
-        try:
-            symbols, timed_out = _run_with_timeout(_scanner.build_daily_watchlist)
-            if timed_out or not symbols:
-                logging.warning("Watchlist build timed out — using default fixed list")
-                symbols = ["SPY", "QQQ", "NVDA", "AMD", "TSLA"]
-        except Exception as exc:
-            logging.warning("Watchlist build failed: %s — using default", exc)
-            symbols = ["SPY", "QQQ", "NVDA", "AMD", "TSLA"]
+        # Use evening AI picks if available (set by evening agent the night before)
+        evening_picks = list(day_state.evening_approved or [])
+        if evening_picks:
+            symbols = evening_picks[:8]  # cap at 8 — manageable universe
+            logging.info("Watchlist from evening AI: %s", symbols)
+        else:
+            try:
+                symbols, timed_out = _run_with_timeout(_scanner.build_daily_watchlist)
+                if timed_out or not symbols:
+                    logging.warning("Watchlist build timed out — using default fixed list")
+                    symbols = ["BAC", "SOFI", "AMD", "TSLA", "SNAP"]
+            except Exception as exc:
+                logging.warning("Watchlist build failed: %s — using default", exc)
+                symbols = ["BAC", "SOFI", "AMD", "TSLA", "SNAP"]
         _run_cycle._watchlist_date = today_str
         _logger.log_scan(symbols)
         with day_state._lock:
@@ -491,10 +498,11 @@ def _run_cycle() -> None:
         _handle_mode_switch(new_mode, old_mode)
     mode_params = _mode_manager.params()
 
-    # --- Per-symbol cycle (fixed daily watchlist only) ---
-    # evening_approved/premarket_approved bypassed — fixed watchlist is the universe.
-    # Blacklist: chronic losers from historical performance (WR < 30%)
-    _BLACKLIST = frozenset({'META', 'MA', 'NVDA'})  # META 25% WR -85, MA 17% WR -0, NVDA 20% WR -8
+    # --- Per-symbol cycle ---
+    # Blacklist: only keep chronic losers with no recovery path.
+    # NVDA removed — AI already screens it nightly; if evening picks include it, it's worthy.
+    # META/MA kept — genuinely poor historical WR with this strategy.
+    _BLACKLIST = frozenset({'META', 'MA'})  # META 25% WR -85, MA 17% WR -0
     universe = [s for s in day_state.watchlist if s not in _BLACKLIST]
     if len(universe) < len(day_state.watchlist):
         _removed = [s for s in day_state.watchlist if s in _BLACKLIST]
