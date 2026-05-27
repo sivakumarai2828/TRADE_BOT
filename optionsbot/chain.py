@@ -59,17 +59,17 @@ def pick_contract(
         logging.warning("chain: no %s %s contracts within $%.0f budget", underlying, option_type, budget)
         return None
 
-    # Prefer 4-9% OTM — affordable premium on high-priced stocks ($500+/share)
-    # High-priced underlyings (AMD/NVDA/TSLA) need deep-enough OTM to stay within $125 budget
+    # Prefer 2-6% OTM — $250 budget ($1000 × 25%) fits near-ATM contracts
+    # Better delta (~0.35-0.45) = more responsive to underlying move = bigger % gain
     # For calls: OTM means strike > current_price  |  For puts: OTM means strike < current_price
-    otm = [r for r in candidates if r.get("otm_pct", 0) >= 4.0 and r.get("otm_pct", 0) <= 9.0]
+    otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 6.0]
     if not otm:
-        # Fallback: any OTM contract 2-12%
-        otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 12.0]
+        # Fallback: any OTM contract 1-10%
+        otm = [r for r in candidates if r.get("otm_pct", 0) >= 1.0 and r.get("otm_pct", 0) <= 10.0]
     pool = otm if otm else candidates  # last resort: any affordable
 
-    # Sort: target ~6% OTM — enough leverage, affordable premium
-    pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 6.0))
+    # Sort: target ~3% OTM — good delta, affordable at $250 budget
+    pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 3.0))
     best = pool[0]
 
     contract_symbol = _opra_symbol(underlying, best["strike"], best["expiry"], option_type)

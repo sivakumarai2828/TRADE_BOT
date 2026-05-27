@@ -40,15 +40,15 @@ class OptionsMetrics:
     losses_today: int = 0
     daily_pnl: float = 0.0
     daily_loss_halted: bool = False
-    daily_start_balance: float = 500.0
+    daily_start_balance: float = 1000.0
 
     # ── Cumulative (persisted across restarts) ──
     total_trades: int = 0
     total_wins: int = 0
     total_losses: int = 0
     win_rate: float = 0.0
-    balance: float = 500.0
-    peak_balance: float = 500.0
+    balance: float = 1000.0
+    peak_balance: float = 1000.0
     total_pnl: float = 0.0
 
     # ── Session meta ──
@@ -81,7 +81,7 @@ class OptionsState:
             with open(_STATE_FILE) as f:
                 data = json.load(f)
             m = self.metrics
-            m.balance            = float(data.get("balance", 500.0))
+            m.balance            = float(data.get("balance", 1000.0))
             m.peak_balance       = float(data.get("peak_balance", m.balance))
             m.total_trades       = int(data.get("total_trades", 0))
             m.total_wins         = int(data.get("total_wins", 0))
@@ -179,7 +179,7 @@ class OptionsState:
             "balance": m.balance,
             "peak_balance": m.peak_balance,
             "total_pnl": m.total_pnl,
-            "pnl_pct": round((m.balance - 500.0) / 500.0 * 100, 1),
+            "pnl_pct": round((m.balance - 1000.0) / 1000.0 * 100, 1),
             "total_trades": m.total_trades,
             "total_wins": m.total_wins,
             "total_losses": m.total_losses,
