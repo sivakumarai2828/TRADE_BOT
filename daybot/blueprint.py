@@ -606,6 +606,27 @@ def _run_cycle() -> None:
         except Exception as _news_exc:
             logging.warning("News fetch failed for %s: %s", symbol, _news_exc)
 
+        # Hard news gate — block BUY on clearly negative news before calling AI.
+        # Saves API cost + prevents AI from overriding obvious bad-news days.
+        # Triggers on 2+ negative signals (1 alone = noise, 2+ = real risk).
+        if sig.action == "BUY" and news_ctx:
+            _news_lower = str(news_ctx).lower()
+            _neg_keywords = [
+                "downgrade", "cut target", "misses estimate", "revenue miss",
+                "earnings miss", "profit warning", "guidance cut", "guidance lowered",
+                "sec investigation", "sec probe", "fraud", "recall", "bankruptcy",
+                "layoff", "restructuring charges", "impairment",
+            ]
+            _neg_count = sum(1 for kw in _neg_keywords if kw in _news_lower)
+            if _neg_count >= 2:
+                logging.info("%s: news gate — %d negative signals → BUY blocked", symbol, _neg_count)
+                day_state.add_log(
+                    "News gate",
+                    f"{symbol}: {_neg_count} negative news signals — BUY blocked (skip AI call)",
+                    tone="warning",
+                )
+                continue
+
         # AI validation with historical + news context
         ai_dec = _ai.validate(
             symbol=symbol, price=sig.price, ema=sig.ema,
@@ -691,6 +712,38 @@ def _run_cycle() -> None:
             if qty < 0.001:
                 day_state.add_log("Skipped", f"{symbol}: position too small (qty={qty:.4f})", "neutral")
                 continue
+
+            # Conviction scoring (0-100): 4 signals × 25 pts each.
+            # Size position proportional to conviction — strong setups get full size,
+            # weak setups get half size or are skipped entirely (< 60 = no edge).
+            _regime_score = 25 if spy_day_change > 0.0 else 0
+            _rsi_score    = 25 if (sig.rsi < 38 or (50 <= sig.rsi <= 62)) else 12
+            _avg_vol      = data.get("avg_volume", 0)
+            _vol_ratio    = data.get("volume", 0) / _avg_vol if _avg_vol > 0 else 0
+            _vol_score    = 25 if _vol_ratio >= 1.5 else (12 if _vol_ratio >= 1.0 else 0)
+            _ai_score     = int(ai_dec.confidence * 25)
+            conviction    = _regime_score + _rsi_score + _vol_score + _ai_score
+
+            logging.info(
+                "%s: conviction=%d/100 (regime=%d rsi=%d vol=%d ai=%d)",
+                symbol, conviction, _regime_score, _rsi_score, _vol_score, _ai_score,
+            )
+            if conviction < 60:
+                day_state.add_log(
+                    "Skipped", f"{symbol}: conviction={conviction}/100 < 60 — weak setup, skip", "neutral"
+                )
+                continue
+
+            # Scale qty: full size at high conviction, half at borderline
+            if conviction >= 90:
+                _size_mult = 1.0
+            elif conviction >= 75:
+                _size_mult = 0.75
+            else:
+                _size_mult = 0.50
+            qty = max(0.001, round(qty * _size_mult, 6))
+            logging.info("%s: conviction=%d → size %.0f%% → qty=%.4f", symbol, conviction, _size_mult * 100, qty)
+
             try:
                 _executor.place_buy_order(symbol, qty)
                 # ORB: use range-based SL/TP (natural levels); RSI/EMA: use mode % params

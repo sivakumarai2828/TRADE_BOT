@@ -30,6 +30,20 @@ _OI_MIN = {
 }
 
 
+def _fetch_rv(underlying: str) -> float:
+    """Compute 30-day annualized realized volatility for underlying stock."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(underlying).history(period="35d")
+        if hist.empty or len(hist) < 15:
+            return 0.0
+        returns = hist["Close"].pct_change().dropna()
+        return float(returns.std() * (252 ** 0.5))
+    except Exception as exc:
+        logging.warning("chain: RV fetch failed for %s: %s", underlying, exc)
+        return 0.0
+
+
 def pick_contract(
     underlying: str,
     direction: str,        # "BUY" → call, "SELL" → put
@@ -37,8 +51,8 @@ def pick_contract(
 ) -> Optional[dict]:
     """Return best OTM contract within budget, 7-14 DTE.
 
-    Prefers 4-9% OTM for affordable premium on high-priced underlyings.
-    Falls back to any affordable contract if nothing in OTM zone.
+    Prefers delta 0.25-0.45 (real leverage zone). Falls back to OTM% proxy.
+    IV/RV filter: skips when implied vol > 1.4× realized vol (options overpriced).
     """
     if underlying not in OPTIONABLE:
         logging.warning("chain: %s not in optionable universe", underlying)
@@ -59,6 +73,26 @@ def pick_contract(
         logging.warning("chain: no %s %s contracts within $%.0f budget", underlying, option_type, budget)
         return None
 
+    # IV/RV filter — skip when implied vol is expensive vs realized vol.
+    # Entering overpriced options = theta crushes premium even when direction is right.
+    # Threshold 1.4× gives some buffer (options always carry some premium over RV).
+    rv = _fetch_rv(underlying)
+    if rv > 0:
+        iv_list = [r["iv"] for r in candidates if r["iv"] > 0]
+        if iv_list:
+            avg_iv = sum(iv_list) / len(iv_list)
+            iv_rv = avg_iv / rv
+            logging.info(
+                "chain: %s IV=%.1f%% RV=%.1f%% ratio=%.2f",
+                underlying, avg_iv * 100, rv * 100, iv_rv,
+            )
+            if iv_rv > 1.4:
+                logging.warning(
+                    "chain: %s IV/RV=%.2f > 1.4 — options overpriced, skip (IV=%.1f%% RV=%.1f%%)",
+                    underlying, iv_rv, avg_iv * 100, rv * 100,
+                )
+                return None
+
     # Prefer 2-6% OTM — $250 budget ($1000 × 25%) fits near-ATM contracts
     # Better delta (~0.35-0.45) = more responsive to underlying move = bigger % gain
     # For calls: OTM means strike > current_price  |  For puts: OTM means strike < current_price
@@ -68,16 +102,26 @@ def pick_contract(
         otm = [r for r in candidates if r.get("otm_pct", 0) >= 1.0 and r.get("otm_pct", 0) <= 10.0]
     pool = otm if otm else candidates  # last resort: any affordable
 
-    # Sort: target ~3% OTM — good delta, affordable at $250 budget
-    pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 3.0))
+    # Delta targeting — prefer delta 0.25-0.45 (directional leverage sweet spot).
+    # Real delta > OTM% proxy: captures actual option sensitivity to underlying move.
+    # Only apply when chain provides delta data (not always available via yfinance).
+    delta_pool = [r for r in pool if 0.20 <= r.get("delta", 0) <= 0.50]
+    if len(delta_pool) >= 2:
+        pool = delta_pool
+        pool.sort(key=lambda r: abs(r.get("delta", 0.35) - 0.35))  # target delta 0.35
+        logging.info("chain: delta filter → %d contracts, targeting delta ~0.35", len(pool))
+    else:
+        # Fallback: sort by OTM% proximity to 3%
+        pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 3.0))
+
     best = pool[0]
 
     contract_symbol = _opra_symbol(underlying, best["strike"], best["expiry"], option_type)
 
     logging.info(
-        "chain: picked %s %s $%.0f exp=%s | OTM=%.1f%% premium=$%.2f cost=$%.0f IV=%.0f%%",
+        "chain: picked %s %s $%.0f exp=%s | OTM=%.1f%% delta=%.2f premium=$%.2f cost=$%.0f IV=%.0f%%",
         underlying, option_type.upper(), best["strike"], best["expiry"],
-        best.get("otm_pct", 0), best["mid"], best["mid"] * 100, best.get("iv", 0) * 100,
+        best.get("otm_pct", 0), best.get("delta", 0), best["mid"], best["mid"] * 100, best.get("iv", 0) * 100,
     )
 
     return {
@@ -92,6 +136,7 @@ def pick_contract(
         "iv": best.get("iv", 0.0),
         "spread_pct": best["spread_pct"],
         "otm_pct": best.get("otm_pct", 0.0),
+        "delta": best.get("delta", 0.0),
     }
 
 
@@ -152,6 +197,7 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
             else:
                 otm_pct = (current_price - strike) / current_price * 100
 
+            delta_raw = float(row.get("delta", 0) or 0)
             rows.append({
                 "strike": strike,
                 "expiry": target,
@@ -163,6 +209,7 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
                 "iv": round(float(row.get("impliedVolatility", 0) or 0), 3),
                 "dist": float(row["dist"]),
                 "otm_pct": round(otm_pct, 2),
+                "delta": round(abs(delta_raw), 3),  # absolute delta 0→1
             })
         return rows
     except Exception as exc:

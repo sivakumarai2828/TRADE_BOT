@@ -394,6 +394,7 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
             take_profit=float(take_profit),
             highest_price=float(current_price),
             entry_time=datetime.now(_tz.utc).isoformat(),
+            atr=atr,  # store for ATR trailing stop
         )
         bot_state.set_position(symbol, pos)
 
@@ -728,6 +729,27 @@ def monitor_positions(exchange, config: BotConfig) -> None:
                         tone="positive",
                     )
                     p.stop_loss = float(entry)
+
+        # ATR trailing stop — activates after breakeven (pnl ≥ 1%), trails at 1.5×ATR below peak.
+        # Lets winners run while dynamically adjusting to actual volatility.
+        # Separate from the fixed % trailing stop — works even when use_trailing_stop=False.
+        if pnl_pct >= 1.0 and pos.atr > 0:
+            with bot_state._lock:
+                p = bot_state.positions.get(symbol)
+                if p is not None:
+                    p.highest_price = max(p.highest_price, float(current_price))
+                    atr_trail_sl = round(p.highest_price - 1.5 * p.atr, 2)
+                    if atr_trail_sl > p.stop_loss:
+                        logging.info(
+                            "ATR trail %s | peak=%.4f atr=%.4f sl %.4f→%.4f",
+                            symbol, p.highest_price, p.atr, p.stop_loss, atr_trail_sl,
+                        )
+                        bot_state.add_log(
+                            "ATR trail",
+                            f"{symbol} SL raised to ${atr_trail_sl:,.4f} (peak - 1.5×ATR)",
+                            tone="positive",
+                        )
+                        p.stop_loss = atr_trail_sl
 
         # Upgraded Option-B: NO partial TP1 exit.
         # Hold full position → single clean exit at TP (6.5%) or SL (3%).

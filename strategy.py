@@ -238,6 +238,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     result = df.copy()
     result["rsi"] = ta.momentum.RSIIndicator(close=result["close"], window=14).rsi()
+    result["sma_20"] = ta.trend.SMAIndicator(close=result["close"], window=20).sma_indicator()
     result["sma_50"] = ta.trend.SMAIndicator(close=result["close"], window=50).sma_indicator()
     result["atr"] = ta.volatility.AverageTrueRange(
         high=result["high"], low=result["low"], close=result["close"], window=14
@@ -440,6 +441,7 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     price = float(latest["close"])
     rsi = float(latest["rsi"])
     sma = float(latest["sma_50"])
+    sma_20 = float(latest["sma_20"]) if "sma_20" in latest.index and not pd.isna(latest["sma_20"]) else 0.0
     atr = float(latest["atr"]) if "atr" in latest and not pd.isna(latest["atr"]) else 0.0
     volume = float(latest["volume"]) if "volume" in latest else 0.0
     avg_volume = float(latest["vol_avg_20"]) if "vol_avg_20" in latest and not pd.isna(latest["vol_avg_20"]) else 0.0
@@ -497,6 +499,19 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
         elif btc_regime == "neutral" and symbol not in ("BTC/USD", "BTC/USDT", "BTCUSD"):
             logging.info("BTC regime NEUTRAL [%s] — altcoin BUY blocked (only BTC in choppy market)", symbol)
             rule_signal = "HOLD"
+
+    # Per-symbol trend regime — SMA20 vs SMA50 cross.
+    # SMA20 < SMA50 = short-term momentum below long-term = local downtrend.
+    # Block Setup B breakouts + Setup C recoveries in downtrend (only allow Setup A deep dips).
+    # Avoids entering trend-following trades against the current symbol's own momentum.
+    if rule_signal == "BUY" and sma_20 > 0 and sma > 0:
+        if sma_20 < sma * 0.995:  # SMA20 clearly below SMA50 (0.5% gap = confirmed cross)
+            if rsi >= oversold:    # RSI not deep oversold — allow Setup A bounce off extreme lows
+                logging.info(
+                    "Symbol regime [%s]: SMA20(%.2f) < SMA50(%.2f) — local downtrend, BUY blocked (RSI=%.1f)",
+                    symbol, sma_20, sma, rsi,
+                )
+                rule_signal = "HOLD"
 
     # Multi-timeframe filter: selectively block BUYs when 1h trend is bearish.
     # Rules:
