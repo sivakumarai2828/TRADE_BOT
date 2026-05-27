@@ -516,27 +516,36 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     # Multi-timeframe filter: selectively block BUYs when 1h trend is bearish.
     # Rules:
     #   Setup B (breakout, RSI 50-65) — ALWAYS blocked in downtrend (fighting trend = bad)
-    #   Setup A (deep dip, RSI < oversold) — ALLOWED in downtrend (bounce trades off extreme lows)
-    #   Setup C (recovery, RSI 40-50) — ALLOWED in downtrend (RSI emerging = potential reversal)
+    #   Setup A (deep dip, RSI < oversold) — in downtrend: require RSI < 35 (extreme dip only)
+    #                                         in neutral:   require RSI < 38 (tighter floor)
+    #   Setup C (recovery, RSI 40-50) — blocked in downtrend and neutral (no trend to ride)
+    # Root cause: RSI 38-44 "dip buys" in choppy/down market kept hitting SL at -3%.
+    # Fix: tighten dip-buy floor from 35 → 38 in neutral, and require RSI < 35 in downtrend.
     # SELL signals never blocked — exits always allowed.
     if rule_signal == "BUY" and exchange is not None:
         htf = _htf_early  # already fetched above — reuse cached result
         if htf == "down":
-            # Confirmed downtrend — block ALL new longs (catching knives).
-            logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f — BUY blocked", symbol, rsi)
-            rule_signal = "HOLD"
+            # Confirmed 1h downtrend:
+            # Only allow extreme panic dips (RSI < 35) — most bounce attempts fail in downtrend.
+            if rsi >= 35.0:
+                logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f ≥ 35 — BUY blocked (not extreme enough)", symbol, rsi)
+                rule_signal = "HOLD"
+            else:
+                logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f < 35 — extreme dip BUY allowed", symbol, rsi)
         elif htf == "neutral":
-            # Neutral trend: allow Setup A (deep dip RSI<oversold) and Setup B (breakout above SMA).
-            # Block Setup C (recovery RSI oversold-50 with no price confirmation) — no trend to ride.
+            # Neutral/choppy market:
+            # Allow Setup B breakout (RSI 50+ with price above SMA — trend unclear, momentum there)
+            # Tighten Setup A floor to RSI < 38 (RSI 38-45 in choppy market = noise, not real dip)
+            # Block Setup C (RSI recovering without trend = chop)
             if rsi >= oversold and price > sma * 1.001:
                 # Setup B breakout: price already above SMA = price confirming the move.
                 logging.info("MTF filter [%s]: 1h neutral RSI=%.1f price above SMA — Setup B breakout allowed", symbol, rsi)
-            elif rsi >= oversold:
-                # Setup C: RSI recovering but price not above SMA — sideways chop, skip.
-                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f price flat — BUY blocked (Setup C in sideways)", symbol, rsi)
+            elif rsi >= 38.0:
+                # RSI 38-45 in choppy market = weak dip, not worth -3% SL risk.
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f (38-45 in chop) — BUY blocked (tighter floor)", symbol, rsi)
                 rule_signal = "HOLD"
             else:
-                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f — deep dip BUY allowed", symbol, rsi)
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f < 38 — deep dip BUY allowed", symbol, rsi)
         else:
             logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f — BUY allowed", symbol, rsi)
 

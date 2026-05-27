@@ -425,8 +425,30 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         pos = bot_state.get_position(symbol)
         if pos is not None:
             signal_pnl_pct = float((current_price - Decimal(str(pos.entry))) / Decimal(str(pos.entry)) * 100)
+
+            # ── Minimum profit gate ────────────────────────────────────────────
+            # RSI overbought at tiny profit (+0.4-1.2%) destroys R:R.
+            # SL = -3%. Need avg win ≥ 1.5% to approach break-even.
+            # If profit too small: defer signal_sell — ATR trailing stop will
+            # protect gains and capture a larger exit when RSI stays elevated.
+            # Exception: if RSI was very overbought (confidence ≥ 85%), respect
+            # the strong reversal signal even at smaller profit.
+            _MIN_SIGNAL_PROFIT_PCT = 1.5
+            if 0 < signal_pnl_pct < _MIN_SIGNAL_PROFIT_PCT:
+                sig_data = bot_state.signals.get(symbol)
+                sig_confidence = getattr(sig_data, "confidence", 0) if sig_data else 0
+                if sig_confidence < 85:
+                    logging.info(
+                        "SELL deferred [%s] — pnl=+%.1f%% < %.1f%% min target, "
+                        "confidence=%d%% (holding for better exit via trailing stop)",
+                        symbol, signal_pnl_pct, _MIN_SIGNAL_PROFIT_PCT, sig_confidence,
+                    )
+                    return
+
+            # ── Loss guard ────────────────────────────────────────────────────
+            # Don't exit at a loss on weak signals — let SL handle downside.
+            # Allow high-confidence exits (≥70%) even when losing.
             if signal_pnl_pct < -0.5:
-                # Check signal confidence from shared state (set by generate_signal before execute_trade)
                 sig_data = bot_state.signals.get(symbol)
                 sig_confidence = getattr(sig_data, "confidence", 0) if sig_data else 0
                 if sig_confidence < 70:
