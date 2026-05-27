@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from .state import options_state, OptionsPosition
+from .db import save_trade as db_save_trade
 
 _stop_event = threading.Event()
 _bot_thread: Optional[threading.Thread] = None
@@ -348,6 +349,20 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     pos.symbol, sell_qty, current, pnl_pct, partial_pnl, p.qty - sell_qty,
                 )
                 state._save()  # persist updated qty + tp1_hit + sl_price + balance
+                db_save_trade(
+                    symbol=pos.symbol,
+                    contract_symbol=pos.contract_symbol,
+                    option_type=pos.option_type,
+                    strike=pos.strike,
+                    expiry=pos.expiry,
+                    qty=sell_qty,
+                    entry_premium=pos.entry_premium,
+                    exit_premium=current,
+                    pnl=partial_pnl,
+                    pnl_pct=pnl_pct,
+                    exit_reason="tp1_partial",
+                    tp1_hit=True,
+                )
             continue  # skip full-exit check this cycle
 
         # Exit decision (using updated sl_price after trailing)
@@ -391,6 +406,20 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     state.metrics.total_trades, state.metrics.total_wins,
                     state.metrics.total_losses, state.metrics.win_rate,
                     state.metrics.balance,
+                )
+                db_save_trade(
+                    symbol=pos.symbol,
+                    contract_symbol=pos.contract_symbol,
+                    option_type=pos.option_type,
+                    strike=pos.strike,
+                    expiry=pos.expiry,
+                    qty=pos.qty,
+                    entry_premium=pos.entry_premium,
+                    exit_premium=current,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    exit_reason=reason,
+                    tp1_hit=pos.tp1_hit,
                 )
 
     # ── ENTRY CHECK ─────────────────────────────────────────────────────────
