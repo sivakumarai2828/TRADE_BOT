@@ -56,14 +56,14 @@ class DayMetrics:
     daily_loss_halted: bool = False
     market_open: bool = False
     # Compounding / house money
-    trade_mode: str = "compound"        # "fixed" | "compound" | "house_money"
-    position_size_pct: float = 0.25     # runtime size (may shrink during shield)
+    trade_mode: str = "fixed"           # "fixed" | "compound" | "house_money"
+    position_size_pct: float = 0.33     # runtime size (may shrink during shield) — 33% × 3 = 99% of $1000
     profit_pool: float = 0.0            # cumulative realised profit (house money source)
     # Shield
     consecutive_losses: int = 0
     consecutive_wins: int = 0
     shield_active: bool = False
-    pre_shield_mode: str = "compound"   # mode to restore when shield lifts
+    pre_shield_mode: str = "fixed"      # mode to restore when shield lifts
     # Adaptive mode
     current_mode: str = "SAFE"          # SAFE | AGGRESSIVE | SHIELD
 
