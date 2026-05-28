@@ -256,7 +256,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _rule_based_signal(rsi: float, price: float, sma: float,
-                       oversold: float = 43.0, overbought: float = 70.0,
+                       oversold: float = 38.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0,
                        allow_breakout: bool = True,
                        macd_hist: float = 0.0) -> Signal:
@@ -515,39 +515,40 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
 
     # Multi-timeframe filter: selectively block BUYs when 1h trend is bearish.
     # Rules:
-    #   Setup B (breakout, RSI 50-65) — ALWAYS blocked in downtrend (fighting trend = bad)
-    #   Setup A (deep dip, RSI < oversold) — in downtrend: require RSI < 35 (extreme dip only)
-    #                                         in neutral:   require RSI < 38 (tighter floor)
-    #   Setup C (recovery, RSI 40-50) — blocked in downtrend and neutral (no trend to ride)
-    # Root cause: RSI 38-44 "dip buys" in choppy/down market kept hitting SL at -3%.
-    # Fix: tighten dip-buy floor from 35 → 38 in neutral, and require RSI < 35 in downtrend.
+    #   1h downtrend : RSI < 30 only (extreme panic dip)
+    #   1h neutral   : RSI < 35 only (deep dip, not mid-range noise)
+    #   1h uptrend   : RSI < 42 only (still need real oversold, not RSI 42-46 mid-range)
+    #   Setup B breakout in neutral: price > SMA × 1.001 still allowed (momentum confirmed)
+    # Root cause: rsi_oversold=45 + old MTF floors let bot buy at RSI 38-45 in downtrend.
+    # Fix: lower all floors so only genuinely oversold entries are allowed.
     # SELL signals never blocked — exits always allowed.
     if rule_signal == "BUY" and exchange is not None:
         htf = _htf_early  # already fetched above — reuse cached result
         if htf == "down":
-            # Confirmed 1h downtrend:
-            # Only allow extreme panic dips (RSI < 35) — most bounce attempts fail in downtrend.
-            if rsi >= 35.0:
-                logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f ≥ 35 — BUY blocked (not extreme enough)", symbol, rsi)
+            # Confirmed 1h downtrend — only extreme panic dips (RSI < 30).
+            if rsi >= 30.0:
+                logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f ≥ 30 — BUY blocked (not extreme enough)", symbol, rsi)
                 rule_signal = "HOLD"
             else:
-                logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f < 35 — extreme dip BUY allowed", symbol, rsi)
+                logging.info("MTF filter [%s]: 1h downtrend RSI=%.1f < 30 — extreme panic dip BUY allowed", symbol, rsi)
         elif htf == "neutral":
             # Neutral/choppy market:
-            # Allow Setup B breakout (RSI 50+ with price above SMA — trend unclear, momentum there)
-            # Tighten Setup A floor to RSI < 38 (RSI 38-45 in choppy market = noise, not real dip)
-            # Block Setup C (RSI recovering without trend = chop)
+            # Allow Setup B breakout (RSI 50+ with price above SMA — momentum there)
+            # Require RSI < 35 for dip buys (RSI 35-45 in chop = noise, not real dip)
             if rsi >= oversold and price > sma * 1.001:
-                # Setup B breakout: price already above SMA = price confirming the move.
                 logging.info("MTF filter [%s]: 1h neutral RSI=%.1f price above SMA — Setup B breakout allowed", symbol, rsi)
-            elif rsi >= 38.0:
-                # RSI 38-45 in choppy market = weak dip, not worth -3% SL risk.
-                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f (38-45 in chop) — BUY blocked (tighter floor)", symbol, rsi)
+            elif rsi >= 35.0:
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f ≥ 35 (chop) — BUY blocked (tighter floor)", symbol, rsi)
                 rule_signal = "HOLD"
             else:
-                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f < 38 — deep dip BUY allowed", symbol, rsi)
+                logging.info("MTF filter [%s]: 1h neutral RSI=%.1f < 35 — deep dip BUY allowed", symbol, rsi)
         else:
-            logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f — BUY allowed", symbol, rsi)
+            # 1h uptrend — still require RSI < 42 (RSI 42-46 in mid-range = not a real dip)
+            if rsi >= 42.0 and rsi < oversold:
+                logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f ≥ 42 (mid-range) — BUY blocked (not oversold enough)", symbol, rsi)
+                rule_signal = "HOLD"
+            else:
+                logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f — BUY allowed", symbol, rsi)
 
     # Volume gate — Setup B breakout (RSI 50-65) requires real volume confirmation.
     # Deep dip Setup A (RSI < oversold) allowed even on low volume (panic dips dry up volume).
