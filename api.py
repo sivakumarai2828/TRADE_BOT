@@ -654,7 +654,11 @@ def health():
 @app.get("/status")
 def status():
     """Return the complete bot state."""
-    return jsonify(bot_state.to_dict())
+    d = bot_state.to_dict()
+    if _crypto_mode_manager is not None:
+        d["settings"]["current_mode"] = _crypto_mode_manager.mode
+        d["metrics"]["shield_active"] = (_crypto_mode_manager.mode == "SHIELD")
+    return jsonify(d)
 
 
 @app.get("/signals")
