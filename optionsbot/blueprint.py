@@ -24,7 +24,7 @@ from .db import save_trade as db_save_trade
 _stop_event = threading.Event()
 _bot_thread: Optional[threading.Thread] = None
 
-SYMBOLS = ["NVDA", "AMD", "TSLA", "META", "AAPL", "SPY", "QQQ"]
+SYMBOLS = ["SPY", "QQQ", "IWM", "AAPL", "AMD"]  # ETFs first (cheap premiums); AAPL/AMD as mid-price stocks
 POLL_SECONDS = int(os.getenv("OPTIONS_POLL_SECONDS", "300"))   # 5 min
 MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "4"))   # 4 × $125 = $500 full capital
 _OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% per contract
