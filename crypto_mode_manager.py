@@ -63,7 +63,14 @@ class CryptoModeManager:
         trades_done = metrics.total_trades
         since_switch = trades_done - self._trades_at_switch
 
-        if since_switch < self._min_trades:
+        # SHIELD is an emergency — bypass min_trades cooldown guard so it fires immediately.
+        # Only SAFE→AGGRESSIVE transitions need the cooldown (to prevent oscillation).
+        shield_emergency = (
+            metrics.consecutive_losses >= self._shield_loss
+            or (metrics.daily_start_balance > 0 and
+                (metrics.daily_start_balance - metrics.balance) / metrics.daily_start_balance * 100 >= self._shield_day)
+        )
+        if since_switch < self._min_trades and not shield_emergency:
             return self._mode, None
 
         new_mode = self._compute(metrics, btc_trend)
