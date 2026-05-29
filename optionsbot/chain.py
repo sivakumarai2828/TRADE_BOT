@@ -87,33 +87,37 @@ def pick_contract(
                 "chain: %s IV=%.1f%% RV=%.1f%% ratio=%.2f",
                 underlying, avg_iv * 100, rv * 100, iv_rv,
             )
-            if iv_rv > 1.4:
+            if iv_rv > 2.0:
+                # Raised 1.4 → 2.0: deeper OTM contracts naturally carry higher IV
+                # (volatility smile). 1.4× blocked valid cheap OTM setups.
+                # 2.0× still filters truly overpriced premium spikes (earnings, events).
                 logging.warning(
-                    "chain: %s IV/RV=%.2f > 1.4 — options overpriced, skip (IV=%.1f%% RV=%.1f%%)",
+                    "chain: %s IV/RV=%.2f > 2.0 — options overpriced, skip (IV=%.1f%% RV=%.1f%%)",
                     underlying, iv_rv, avg_iv * 100, rv * 100,
                 )
                 return None
 
-    # Prefer 2-6% OTM — $250 budget ($1000 × 25%) fits near-ATM contracts
-    # Better delta (~0.35-0.45) = more responsive to underlying move = bigger % gain
+    # Prefer 4-12% OTM — cheaper premiums ($0.20-0.80), more contracts per $200 budget.
+    # Near-ATM (2-6%) was too expensive ($1.50+ each) — less flexibility, big losses per contract.
+    # Deeper OTM = smaller cost per contract = can buy more = better risk management.
     # For calls: OTM means strike > current_price  |  For puts: OTM means strike < current_price
-    otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 6.0]
+    otm = [r for r in candidates if r.get("otm_pct", 0) >= 4.0 and r.get("otm_pct", 0) <= 12.0]
     if not otm:
-        # Fallback: any OTM contract 1-10%
-        otm = [r for r in candidates if r.get("otm_pct", 0) >= 1.0 and r.get("otm_pct", 0) <= 10.0]
+        # Fallback: any OTM contract 2-15%
+        otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 15.0]
     pool = otm if otm else candidates  # last resort: any affordable
 
-    # Delta targeting — prefer delta 0.25-0.45 (directional leverage sweet spot).
-    # Real delta > OTM% proxy: captures actual option sensitivity to underlying move.
+    # Delta targeting — prefer delta 0.15-0.35 (cheaper OTM leverage zone).
+    # Adjusted down from 0.20-0.50 to match deeper OTM target range.
     # Only apply when chain provides delta data (not always available via yfinance).
-    delta_pool = [r for r in pool if 0.20 <= r.get("delta", 0) <= 0.50]
+    delta_pool = [r for r in pool if 0.10 <= r.get("delta", 0) <= 0.35]
     if len(delta_pool) >= 2:
         pool = delta_pool
-        pool.sort(key=lambda r: abs(r.get("delta", 0.35) - 0.35))  # target delta 0.35
-        logging.info("chain: delta filter → %d contracts, targeting delta ~0.35", len(pool))
+        pool.sort(key=lambda r: abs(r.get("delta", 0.25) - 0.25))  # target delta 0.25
+        logging.info("chain: delta filter → %d contracts, targeting delta ~0.25", len(pool))
     else:
-        # Fallback: sort by OTM% proximity to 3%
-        pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 3.0))
+        # Fallback: sort by OTM% proximity to 7% (cheaper range)
+        pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 7.0))
 
     best = pool[0]
 
@@ -181,8 +185,9 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
         df = df.copy()
         df["dist"] = abs(df["strike"] - current_price)
 
-        # Look at wider range: nearest 20 strikes — captures 6-10% OTM on high-price stocks
-        nearest = df.nsmallest(20, "dist")
+        # Look at wider range: nearest 40 strikes — captures deeper OTM (cheaper contracts)
+        # 20 was too narrow: missed 5-12% OTM strikes where cheap premiums live
+        nearest = df.nsmallest(40, "dist")
 
         rows = []
         for _, row in nearest.iterrows():
