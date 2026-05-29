@@ -254,9 +254,12 @@ def _update_trailing_sl(pos: OptionsPosition, current: float) -> str | None:
     """Upgrade SL as position profits. Returns log message if SL changed, else None.
 
     Ladder:
-      current ≥ entry × 1.5  (+50%)  → SL = entry       (breakeven)
+      current ≥ entry × 1.4  (+40%)  → SL = entry       (breakeven)
       current ≥ entry × 2.0  (+100%) → SL = entry × 1.5 (+50% locked)
       current ≥ entry × 2.5  (+150%) → SL = entry × 2.0 (+100% locked)
+
+    Breakeven at +40% (was +50%) — options lose theta fast; lock sooner.
+    AAPL CALL peaked +47% and reversed to -29% under old +50% threshold.
     """
     entry = pos.entry_premium
     msg   = None
@@ -267,9 +270,9 @@ def _update_trailing_sl(pos: OptionsPosition, current: float) -> str | None:
     elif current >= entry * 2.0 and pos.sl_price < entry * 1.5:
         pos.sl_price = round(entry * 1.5, 2)
         msg = f"SL → +50% locked ${pos.sl_price:.2f} (option at +100%)"
-    elif current >= entry * 1.5 and pos.sl_price < entry:
+    elif current >= entry * 1.4 and pos.sl_price < entry:
         pos.sl_price = round(entry, 2)
-        msg = f"SL → breakeven ${pos.sl_price:.2f} (option at +50%)"
+        msg = f"SL → breakeven ${pos.sl_price:.2f} (option at +40%)"
 
     return msg
 
