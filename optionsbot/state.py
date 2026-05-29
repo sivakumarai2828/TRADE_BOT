@@ -65,6 +65,17 @@ class OptionsState:
         self.metrics = OptionsMetrics()
         self.running = False
         self._logs: list[dict] = []
+
+        # Evening pre-analysis (set at 8 PM ET, consumed next trading day)
+        self.evening_approved: list[str] = []
+        self.evening_direction: dict[str, str] = {}        # symbol → CALL | PUT
+        self.evening_strike_pct: dict[str, float] = {}    # symbol → target OTM%
+        self.evening_conviction: dict[str, str] = {}      # symbol → high | medium | low
+        self.evening_iv_regime: str = ""                   # low | normal | high | extreme
+        self.evening_regime: str = ""                      # trending_up | sideways | trending_down
+        self.evening_notes: dict[str, str] = {}
+        self.evening_analysis_date: str = ""               # YYYY-MM-DD of next trading day
+
         self._load()
 
     # ------------------------------------------------------------------

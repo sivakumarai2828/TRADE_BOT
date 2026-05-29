@@ -467,8 +467,28 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
     spy = _spy_trend()
     state.add_log("Market", f"SPY trend: {spy.upper()}", "neutral")
 
+    # ── EVENING PRE-ANALYSIS GATE ─────────────────────────────────────────────
+    # If evening analysis ran last night and targets today, use it as primary filter.
+    # Only scan pre-approved symbols + enforce pre-planned direction + use target OTM%.
+    from datetime import date as _date
+    _today_str = str(_date.today())
+    _evening_active = (
+        bool(state.evening_approved) and
+        state.evening_analysis_date == _today_str
+    )
+    if _evening_active:
+        _scan_symbols = [s for s in state.evening_approved if s in SYMBOLS]
+        state.add_log(
+            "Evening plan",
+            f"Using pre-analysis: {', '.join(_scan_symbols)} | "
+            f"IV:{state.evening_iv_regime} market:{state.evening_regime}",
+            "neutral",
+        )
+    else:
+        _scan_symbols = SYMBOLS
+
     # ── SCAN SYMBOLS ─────────────────────────────────────────────────────────
-    for symbol in SYMBOLS:
+    for symbol in _scan_symbols:
         with state._lock:
             if len(state.positions) >= MAX_POSITIONS:
                 break
@@ -481,6 +501,23 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
 
         if action == "HOLD" or confidence < MIN_CONFIDENCE:
             continue
+
+        # ── Evening direction gate: pre-analysis planned direction must match signal ──
+        if _evening_active and symbol in state.evening_direction:
+            planned_dir = state.evening_direction[symbol]   # CALL | PUT
+            signal_dir = "CALL" if action == "BUY" else "PUT"
+            if planned_dir != signal_dir:
+                state.add_log(
+                    "Skipped",
+                    f"{symbol}: signal {signal_dir} ≠ evening plan {planned_dir} — skip",
+                    "neutral",
+                )
+                continue
+            # Raise bar for low conviction pre-plans
+            _conviction = state.evening_conviction.get(symbol, "medium")
+            if _conviction == "low":
+                state.add_log("Skipped", f"{symbol}: evening conviction=low — skip", "neutral")
+                continue
 
         # SPY gate: don't buy calls in bear, don't buy puts in bull
         if spy == "bear" and action == "BUY":
@@ -507,10 +544,11 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             state.add_log("Skipped", f"{symbol}: same sector ({my_sector}) already open in same direction", "neutral")
             continue
 
-        # Pick contract
+        # Pick contract — use evening OTM% target if available
         from .chain import pick_contract
         _budget  = BUDGET if BUDGET > 0 else round(balance * _OPTIONS_BUDGET_PCT, 2)
-        contract = pick_contract(symbol, action, _budget)
+        _target_otm = state.evening_strike_pct.get(symbol) if _evening_active else None
+        contract = pick_contract(symbol, action, _budget, target_otm_pct=_target_otm)
         if not contract:
             state.add_log("Skipped", f"{symbol}: no contract within ${_budget:.0f}", "neutral")
             continue

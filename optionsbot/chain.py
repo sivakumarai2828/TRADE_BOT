@@ -47,13 +47,15 @@ def _fetch_rv(underlying: str) -> float:
 
 def pick_contract(
     underlying: str,
-    direction: str,        # "BUY" → call, "SELL" → put
-    budget: float = 150.0, # max premium cost per contract (premium × 100)
+    direction: str,               # "BUY" → call, "SELL" → put
+    budget: float = 150.0,        # max premium cost per contract (premium × 100)
+    target_otm_pct: float = None, # evening pre-analysis OTM% hint (overrides default range)
 ) -> Optional[dict]:
     """Return best OTM contract within budget, 7-14 DTE.
 
-    Prefers delta 0.25-0.45 (real leverage zone). Falls back to OTM% proxy.
-    IV/RV filter: skips when implied vol > 1.4× realized vol (options overpriced).
+    target_otm_pct: if set by evening analysis, targets contracts near that OTM%.
+                    Overrides default 4-12% range — uses ±3% window around target.
+    IV/RV filter: skips when implied vol > 2.0× realized vol (options overpriced).
     """
     if underlying not in OPTIONABLE:
         logging.warning("chain: %s not in optionable universe", underlying)
@@ -97,18 +99,26 @@ def pick_contract(
                 )
                 return None
 
-    # Prefer 4-12% OTM — cheaper premiums ($0.20-0.80), more contracts per $200 budget.
-    # Near-ATM (2-6%) was too expensive ($1.50+ each) — less flexibility, big losses per contract.
-    # Deeper OTM = smaller cost per contract = can buy more = better risk management.
+    # OTM targeting:
+    #   If evening analysis provided a target_otm_pct → use ±3% window around it
+    #   Otherwise default 4-12% range (cheaper premiums vs old 2-6%)
     # For calls: OTM means strike > current_price  |  For puts: OTM means strike < current_price
-    otm = [r for r in candidates if r.get("otm_pct", 0) >= 4.0 and r.get("otm_pct", 0) <= 12.0]
-    if not otm:
-        # Fallback: any OTM contract 2-15%
-        otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 15.0]
+    if target_otm_pct is not None:
+        lo = max(1.0, target_otm_pct - 3.0)
+        hi = target_otm_pct + 3.0
+        otm = [r for r in candidates if lo <= r.get("otm_pct", 0) <= hi]
+        if not otm:
+            # Relax ±5% if nothing in tight window
+            otm = [r for r in candidates if max(1.0, target_otm_pct - 5.0) <= r.get("otm_pct", 0) <= target_otm_pct + 5.0]
+        logging.info("chain: evening OTM target=%.1f%% window=[%.1f-%.1f%%] → %d candidates", target_otm_pct, lo, hi, len(otm))
+    else:
+        otm = [r for r in candidates if r.get("otm_pct", 0) >= 4.0 and r.get("otm_pct", 0) <= 12.0]
+        if not otm:
+            # Fallback: any OTM contract 2-15%
+            otm = [r for r in candidates if r.get("otm_pct", 0) >= 2.0 and r.get("otm_pct", 0) <= 15.0]
     pool = otm if otm else candidates  # last resort: any affordable
 
     # Delta targeting — prefer delta 0.15-0.35 (cheaper OTM leverage zone).
-    # Adjusted down from 0.20-0.50 to match deeper OTM target range.
     # Only apply when chain provides delta data (not always available via yfinance).
     delta_pool = [r for r in pool if 0.10 <= r.get("delta", 0) <= 0.35]
     if len(delta_pool) >= 2:
@@ -116,8 +126,9 @@ def pick_contract(
         pool.sort(key=lambda r: abs(r.get("delta", 0.25) - 0.25))  # target delta 0.25
         logging.info("chain: delta filter → %d contracts, targeting delta ~0.25", len(pool))
     else:
-        # Fallback: sort by OTM% proximity to 7% (cheaper range)
-        pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - 7.0))
+        # Sort by proximity to target OTM% or default 7%
+        _sort_target = target_otm_pct if target_otm_pct is not None else 7.0
+        pool.sort(key=lambda r: abs(r.get("otm_pct", 0) - _sort_target))
 
     best = pool[0]
 

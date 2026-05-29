@@ -56,6 +56,19 @@ def job_evening_analysis() -> None:
         logging.exception("Scheduler: evening analysis failed: %s", exc)
 
 
+def job_options_evening_analysis() -> None:
+    """8:15 PM ET Mon–Fri — Claude pre-analysis for options bot next-day picks."""
+    try:
+        anthropic_key, _, _ = _get_api_keys()
+        if not anthropic_key:
+            logging.warning("Scheduler: options evening skipped — ANTHROPIC_API_KEY not set")
+            return
+        from optionsbot.evening_agent import run_options_evening_analysis
+        run_options_evening_analysis(anthropic_api_key=anthropic_key)
+    except Exception as exc:
+        logging.exception("Scheduler: options evening analysis failed: %s", exc)
+
+
 def job_premarket() -> None:
     """9:00 AM ET — Price confirmation of evening watchlist (or full scan fallback)."""
     try:
@@ -356,6 +369,11 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         job_evening_analysis, CronTrigger(day_of_week="mon-fri", hour=20, minute=0, timezone=tz),
         id="evening_analysis", name="Evening sub-agent analysis",
+    )
+    # Options evening pre-analysis: 8:15 PM ET, Mon–Fri (15 min after day bot — avoids API contention)
+    _scheduler.add_job(
+        job_options_evening_analysis, CronTrigger(day_of_week="mon-fri", hour=20, minute=15, timezone=tz),
+        id="options_evening_analysis", name="Options evening pre-analysis",
     )
     # Pre-market: 9:00 AM ET, Mon–Fri
     _scheduler.add_job(
