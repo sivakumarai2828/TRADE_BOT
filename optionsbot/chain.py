@@ -18,6 +18,7 @@ OPTIONABLE = {
     "TSLA",   # high beta, big intraday/multiday swings
     "META",   # tech momentum, liquid options
     "AAPL",   # reliable liquidity, steady options chain
+    "MSFT",   # large cap tech, liquid options chain
     "SPY",    # index fallback — always liquid
     "QQQ",    # index fallback — tech-heavy
 }
@@ -26,7 +27,7 @@ OPTIONABLE = {
 _OI_MIN = {
     "SPY": 500, "QQQ": 500,                             # very liquid
     "NVDA": 100, "AMD": 100, "TSLA": 200,               # high activity
-    "META": 100, "AAPL": 200,                            # large cap
+    "META": 100, "AAPL": 200, "MSFT": 200,              # large cap
 }
 
 
