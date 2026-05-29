@@ -463,9 +463,18 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
             _allow_breakout = _crypto_mode_manager.params().allow_breakout
     except Exception:
         pass
-    if not _allow_breakout and price > sma * 1.001:
-        _allow_breakout = True  # 5-min price above SMA = breakout confirmed — allow despite SAFE mode
-        logging.info("Breakout override [%s]: price %.4f > SMA*1.001 — Setup B allowed despite SAFE mode", symbol, price)
+    # SAFE mode only: price > SMA can override the breakout block (momentum confirmed).
+    # SHIELD mode: NO override — SHIELD is emergency, breakouts always blocked.
+    _mode = "SAFE"
+    try:
+        from api import _crypto_mode_manager
+        if _crypto_mode_manager is not None:
+            _mode = _crypto_mode_manager.mode
+    except Exception:
+        pass
+    if not _allow_breakout and _mode != "SHIELD" and price > sma * 1.001:
+        _allow_breakout = True
+        logging.info("Breakout override [%s]: price %.4f > SMA*1.001 — Setup B allowed (SAFE mode only)", symbol, price)
 
     rule_signal = _rule_based_signal(rsi=rsi, price=price, sma=sma,
                                      oversold=oversold, overbought=overbought,
