@@ -183,6 +183,8 @@ def _tool_get_stock_technicals(symbols: list[str]) -> list[dict]:
         return []
 
 
+_ETFS = {"SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLE", "XLK"}  # ETFs have no earnings
+
 def _tool_get_earnings_calendar(symbols: list[str]) -> dict:
     """Flag symbols with earnings within next 2 days — avoid IV crush."""
     result = {}
@@ -192,6 +194,9 @@ def _tool_get_earnings_calendar(symbols: list[str]) -> dict:
 
         today = date.today()
         for sym in symbols:
+            if sym in _ETFS:
+                result[sym] = {"earnings_soon": False}
+                continue
             try:
                 cal = yf.Ticker(sym).calendar
                 if cal is None:
@@ -444,6 +449,8 @@ RULES:
         options_state.evening_regime = result.get("regime", "sideways")
         options_state.evening_notes = notes
         options_state.evening_analysis_date = trade_date
+
+    options_state._save()  # persist so bot restart doesn't lose Friday's plan
 
     summary_parts = []
     for sym in approved:

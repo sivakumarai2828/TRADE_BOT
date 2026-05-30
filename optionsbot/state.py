@@ -103,6 +103,15 @@ class OptionsState:
             m.monitor_start_date = data.get("monitor_start_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
             m.last_trade_date    = data.get("last_trade_date", "")
             m.daily_start_balance = m.balance  # reset daily baseline to current balance
+            # ── Restore evening pre-analysis (persisted so restarts don't lose Friday's plan) ──
+            self.evening_approved       = data.get("evening_approved", [])
+            self.evening_direction      = data.get("evening_direction", {})
+            self.evening_strike_pct     = data.get("evening_strike_pct", {})
+            self.evening_conviction     = data.get("evening_conviction", {})
+            self.evening_iv_regime      = data.get("evening_iv_regime", "")
+            self.evening_regime         = data.get("evening_regime", "")
+            self.evening_notes          = data.get("evening_notes", {})
+            self.evening_analysis_date  = data.get("evening_analysis_date", "")
             # ── Restore open positions ──
             for cs, pd in data.get("positions", {}).items():
                 try:
@@ -167,6 +176,15 @@ class OptionsState:
                 "monitor_start_date": m.monitor_start_date,
                 "last_trade_date":    m.last_trade_date,
                 "positions":          positions_data,
+                # Evening pre-analysis — survive restarts between 8:15 PM ET and market open
+                "evening_approved":       self.evening_approved,
+                "evening_direction":      self.evening_direction,
+                "evening_strike_pct":     self.evening_strike_pct,
+                "evening_conviction":     self.evening_conviction,
+                "evening_iv_regime":      self.evening_iv_regime,
+                "evening_regime":         self.evening_regime,
+                "evening_notes":          self.evening_notes,
+                "evening_analysis_date":  self.evening_analysis_date,
                 "saved_at":           datetime.now(timezone.utc).isoformat(),
             }
             with open(_STATE_FILE, "w") as f:
