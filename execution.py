@@ -98,19 +98,19 @@ def _d(value) -> Decimal:
 
 
 def _dynamic_trade_pct(balance: float, principal: float) -> float:
-    """Return trade size % — Upgraded Option-B: 50% base for 2-position 100% utilization.
+    """Return trade size % — 1-position design: 75% base for ~75% capital utilization.
 
-    Max 2 open positions × 50% each = 100% capital deployed.
-    Scales slightly on strong gains, compresses on drawdown.
+    MAX_OPEN_POSITIONS=1 → single trade at a time.
+    75% base deploys ~$337 of $450 per trade, leaves 25% buffer.
+    Scales up on gains, compresses slightly on drawdown.
     """
     if principal <= 0:
-        return 50.0
+        return 75.0
     ratio = balance / principal  # 1.0 = breakeven, 2.0 = 100% gain
-    if ratio >= 2.0:   return 55.0  # 100%+ gain — scale slightly
-    if ratio >= 1.5:   return 52.0  # 50–100% gain
-    if ratio >= 1.25:  return 50.0  # 25–50% gain
-    if ratio >= 0.95:  return 50.0  # base (at or near starting capital)
-    return 45.0                     # drawdown — compress slightly
+    if ratio >= 1.5:   return 85.0  # 50%+ gain — push harder
+    if ratio >= 1.25:  return 80.0  # 25–50% gain
+    if ratio >= 0.95:  return 75.0  # base (at or near starting capital)
+    return 70.0                     # drawdown — compress slightly, still deploy well
 
 
 def _round_amount(exchange, symbol: str, amount: Decimal) -> Decimal:
