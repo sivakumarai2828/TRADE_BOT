@@ -497,17 +497,30 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
         rule_signal = "HOLD"
 
     # BTC 4h macro regime gate:
-    #   bear   → block ALL longs on all symbols
-    #   neutral → block ETH/SOL longs (alts follow BTC; only trade BTC itself in choppy market)
-    #   bull   → allow all symbols
+    #   bear    → block ALL longs on all symbols
+    #   neutral → block altcoin longs entirely
+    #             block BTC Setup C (recovery RSI 38-50) — only deep dip (Setup A, RSI<38) allowed
+    #             Rationale: Setup C in ranging market = buying a bounce that reverses. All May 27-28
+    #             losses were Setup C entries in NEUTRAL. Deep dips (Setup A) still valid.
+    #   bull    → allow all symbols, all setups
     if rule_signal == "BUY":
         btc_regime = _get_btc_regime()
         if btc_regime == "bear":
             logging.info("BTC regime BEAR [%s] RSI=%.1f — BUY blocked (macro downtrend)", symbol, rsi)
             rule_signal = "HOLD"
-        elif btc_regime == "neutral" and symbol not in ("BTC/USD", "BTC/USDT", "BTCUSD"):
-            logging.info("BTC regime NEUTRAL [%s] — altcoin BUY blocked (only BTC in choppy market)", symbol)
-            rule_signal = "HOLD"
+        elif btc_regime == "neutral":
+            if symbol not in ("BTC/USD", "BTC/USDT", "BTCUSD"):
+                logging.info("BTC regime NEUTRAL [%s] — altcoin BUY blocked (only BTC in choppy market)", symbol)
+                rule_signal = "HOLD"
+            elif rsi >= oversold:
+                # NEUTRAL + BTC + RSI >= oversold threshold → Setup C or B territory.
+                # Only Setup A (deep dip, RSI < oversold) allowed in ranging market.
+                # Setup C (recovery bounce RSI 38-50) in neutral = buying mid-range in a chop = losing trade.
+                logging.info(
+                    "BTC regime NEUTRAL [BTC] RSI=%.1f — only deep-dip (RSI<%.0f) allowed in choppy market, blocking Setup C/B",
+                    rsi, oversold,
+                )
+                rule_signal = "HOLD"
 
     # Per-symbol trend regime — SMA20 vs SMA50 cross.
     # SMA20 < SMA50 = short-term momentum below long-term = local downtrend.

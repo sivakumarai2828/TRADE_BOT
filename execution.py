@@ -221,14 +221,18 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
         bot_state.refresh_paper_balance(symbol, float(price))
 
     bot_state.record_trade_result(float(pnl))
-    # Variable cooldown by exit reason — 60 min base to reduce fee drag.
+    # Variable cooldown by exit reason.
+    # stop_loss: 4h — market moved against us; re-entering same direction too soon = revenge trade.
+    # signal_sell: 2h — exited on overbought signal; price may re-test highs before pulling back.
+    # take_profit/time_exit: 60 min — clean exits, shorter wait OK.
     _cooldown_map = {
-        "stop_loss":    12,  # 60 min — market went wrong, wait full hour
-        "time_exit":    12,  # 60 min — neutral exit, wait full hour
-        "take_profit":  12,  # 60 min — avoid re-entering on same noise
-        "manual_close":  6,  # 30 min — manual override, shorter wait
+        "stop_loss":    48,  # 4h  — market wrong, wait for proper new setup
+        "signal_sell":  24,  # 2h  — allow market to reset before re-entry
+        "time_exit":    12,  # 60 min
+        "take_profit":  12,  # 60 min
+        "manual_close":  6,  # 30 min
     }
-    _cooldown_cycles = _cooldown_map.get(reason, 12)
+    _cooldown_cycles = _cooldown_map.get(reason, 24)  # default 2h for any unknown reason
     bot_state.set_cooldown(symbol, cycles=_cooldown_cycles)
     bot_state.check_daily_loss_limit()
     notify_sell(symbol, float(price), float(pnl), pnl_pct, reason)
