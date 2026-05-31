@@ -664,7 +664,7 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
         confidence,
     )
     if claude_reason:
-        logging.info("Claude reasoning: %s", claude_reason)
+        logging.info("Signal reasoning: %s", claude_reason)
 
     result = SignalResult(
         action=final_action,
