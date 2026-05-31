@@ -15,13 +15,18 @@ import re
 
 
 def _claude_haiku_chat(prompt: str, system: str = "", max_tokens: int = 1500) -> str:
-    """Claude Haiku fallback — used when free LLMs fail."""
+    """Claude Haiku fallback — used when free LLMs fail.
+    System prompt is cached (5-min ephemeral TTL) — 90% cost reduction on input tokens
+    when the same system prompt is reused across rapid consecutive calls.
+    """
     from anthropic import Anthropic
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""), timeout=30.0, max_retries=1)
     messages_arg = [{"role": "user", "content": prompt}]
     kwargs = dict(model="claude-haiku-4-5", max_tokens=max_tokens, temperature=0, messages=messages_arg)
     if system:
-        kwargs["system"] = system
+        # Cache system prompt — 5-min TTL matches typical polling intervals (5-min cycles).
+        # Cache write: 1.25× base cost once. Cache read: 0.10× base — 90% saving on repeated calls.
+        kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
     resp = client.messages.create(**kwargs)
     return "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
 

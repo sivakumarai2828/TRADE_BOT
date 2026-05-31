@@ -366,11 +366,16 @@ RULES:
 
     result = {}
     max_rounds = 8
+    # Wrap system_prompt with 1h cache — same prompt sent across all agentic loop iterations.
+    # Cache writes cost 2× for first call, reads cost 0.1× — breaks even after 2nd iteration.
+    _cached_system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
     for round_num in range(max_rounds):
         response = client.messages.create(
-            model="claude-opus-4-7",
-            max_tokens=2000,
-            system=system_prompt,
+            model="claude-opus-4-8",          # upgraded from 4-7 — same price, newer training
+            max_tokens=4000,
+            thinking={"type": "adaptive"},    # adaptive thinking — deep on complex, fast on simple
+            output_config={"effort": "high"}, # high effort for conviction scoring + IV analysis
+            system=_cached_system,
             tools=TOOLS,
             messages=messages,
         )
@@ -379,18 +384,28 @@ RULES:
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
-            # Extract JSON from final text block
+            # Extract JSON from final text block — try multiple parse strategies
             for block in response.content:
                 if hasattr(block, "text"):
                     text = block.text.strip()
-                    # Find JSON object
-                    start = text.find("{")
-                    end = text.rfind("}") + 1
-                    if start >= 0 and end > start:
-                        try:
+                    # Strategy 1: clean JSON block
+                    try:
+                        start = text.find("{")
+                        end = text.rfind("}") + 1
+                        if start >= 0 and end > start:
                             result = json.loads(text[start:end])
-                        except json.JSONDecodeError:
-                            pass
+                            break
+                    except json.JSONDecodeError:
+                        pass
+                    # Strategy 2: strip markdown fences
+                    try:
+                        import re as _re
+                        m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, _re.DOTALL)
+                        if m:
+                            result = json.loads(m.group(1))
+                            break
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
             break
 
         if response.stop_reason != "tool_use":
