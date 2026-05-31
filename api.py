@@ -60,16 +60,16 @@ app = Flask(__name__)
 CORS(app)  # Allow the Vite dev server (port 5173) to call this API
 
 # ---------------------------------------------------------------------------
-# Route auth — protect all mutation routes with X-Bot-Key header.
+# Route auth — protect ALL routes with X-Bot-Key header.
 # Set BOT_API_KEY in .env. Requests from localhost are always allowed.
-# GET/OPTIONS requests are always public (dashboard reads, health checks).
+# OPTIONS (CORS preflight) always allowed so browser preflight never blocked.
 # ---------------------------------------------------------------------------
 _BOT_API_KEY = os.getenv("BOT_API_KEY", "")
 
 @app.before_request
 def _require_api_key():
-    if request.method in ("GET", "OPTIONS", "HEAD"):
-        return  # read-only routes are public
+    if request.method == "OPTIONS":
+        return  # CORS preflight — never block
     remote = request.remote_addr or ""
     is_localhost = remote in ("127.0.0.1", "::1", "localhost")
     if is_localhost:
