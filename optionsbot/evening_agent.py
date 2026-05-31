@@ -290,6 +290,139 @@ TOOLS = [
 
 
 # ---------------------------------------------------------------------------
+# Batch analysis — pre-fetch all data in Python, then one request per symbol.
+# 50% cheaper than standard API, all symbols analysed in parallel.
+# Falls back to agentic loop if batch fails or times out.
+# ---------------------------------------------------------------------------
+
+_BATCH_SYMBOL_SYSTEM = """You are an expert options trader analysing a single stock for tomorrow.
+Small account ($200-600). Budget: $200 max per contract. PAPER trading.
+
+Given pre-fetched market data, decide:
+- Should we trade this symbol tomorrow? (yes/no)
+- CALL or PUT?
+- Strike OTM%: 4-12% (4-6% high conviction, 7-10% medium)
+- Conviction: high | medium | low (if low → don't trade)
+
+Rules:
+- earnings_soon=true → NEVER trade (IV crush risk)
+- iv_rv_ratio > 1.8 → avoid (premium too expensive)
+- CALL: RSI < 38 OR (RSI < 50 AND trend=up AND ret_5d > 0)
+- PUT: RSI > 68 OR (RSI > 55 AND trend=down AND ret_5d < 0)
+- Match market regime (no calls in trending_down market, no puts in trending_up)
+
+Output ONLY valid JSON, no markdown:
+{"trade": true/false, "direction": "CALL"/"PUT", "strike_pct_otm": 5.0,
+ "conviction": "high"/"medium"/"low", "reason": "one sentence"}"""
+
+
+def _run_batch_analysis(client: anthropic.Anthropic, trade_date: str) -> dict:
+    """Pre-fetch all data in Python, submit one Batch API request per symbol.
+
+    Returns merged result dict in same format as agentic loop output.
+    Batch API is 50% cheaper than standard — all symbols processed in parallel.
+    """
+    import time
+
+    logging.info("Options batch analysis: pre-fetching market data for %d symbols…", len(SYMBOLS))
+
+    # ── Step 1: Fetch all data in Python (no LLM cost) ───────────────────────
+    iv_data    = _tool_get_iv_environment()    # VIX + per-symbol IV/RV
+    regime_data = _tool_get_market_regime()    # SPY/QQQ trend
+    tech_data  = _tool_get_stock_technicals(SYMBOLS)   # RSI, EMA, momentum
+    earn_data  = _tool_get_earnings_calendar(SYMBOLS)  # earnings within 2d
+
+    tech_by_sym = {t["symbol"]: t for t in tech_data}
+    market_regime = regime_data.get("regime", "sideways")
+    iv_regime = iv_data.get("iv_regime", "normal")
+    vix = iv_data.get("vix", 20.0)
+
+    # ── Step 2: Build one batch request per symbol ────────────────────────────
+    # System prompt cached with 1h TTL — all requests in the batch share the cache.
+    cached_system = [{"type": "text", "text": _BATCH_SYMBOL_SYSTEM,
+                      "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
+    requests = []
+    for sym in SYMBOLS:
+        tech   = tech_by_sym.get(sym, {})
+        iv_sym = iv_data.get("symbols", {}).get(sym, {})
+        earn   = earn_data.get(sym, {})
+
+        user_content = (
+            f"Symbol: {sym}\n"
+            f"Market regime: {market_regime} | VIX: {vix:.1f} | IV regime: {iv_regime}\n"
+            f"Technicals: RSI={tech.get('rsi', 50):.1f} trend={tech.get('trend','mixed')} "
+            f"ret_5d={tech.get('ret_5d_pct', 0):.1f}% vol_ratio={tech.get('vol_ratio', 1):.2f}\n"
+            f"IV: iv_pct={iv_sym.get('iv_pct', 0):.1f}% rv_pct={iv_sym.get('rv_pct', 0):.1f}% "
+            f"iv_rv_ratio={iv_sym.get('iv_rv_ratio', 0):.2f} status={iv_sym.get('premium_status', 'unknown')}\n"
+            f"Earnings soon: {earn.get('earnings_soon', False)}\n\n"
+            "Should we trade this symbol tomorrow? Output JSON."
+        )
+        requests.append({
+            "custom_id": f"opts-{sym}-{trade_date}",
+            "params": {
+                "model": "claude-opus-4-8",
+                "max_tokens": 300,
+                "system": cached_system,
+                "messages": [{"role": "user", "content": user_content}],
+            },
+        })
+
+    # ── Step 3: Submit batch ──────────────────────────────────────────────────
+    logging.info("Options batch: submitting %d symbol requests…", len(requests))
+    batch = client.messages.batches.create(requests=requests)
+    logging.info("Options batch submitted: id=%s", batch.id)
+
+    # ── Step 4: Poll until complete (max 20 min) ──────────────────────────────
+    deadline = time.time() + 20 * 60
+    while time.time() < deadline:
+        status = client.messages.batches.retrieve(batch.id)
+        if status.processing_status == "ended":
+            break
+        logging.info("Options batch %s: status=%s — waiting 30s…", batch.id, status.processing_status)
+        time.sleep(30)
+    else:
+        logging.warning("Options batch timed out after 20 min — falling back to agentic loop")
+        return {}
+
+    # ── Step 5: Collect and merge results ─────────────────────────────────────
+    approved, direction, strike_pct, conviction, notes = [], {}, {}, {}, {}
+
+    for result in client.messages.batches.results(batch.id):
+        sym = result.custom_id.split("-")[1]   # opts-{sym}-{date} → sym
+        if result.result.type != "succeeded":
+            logging.warning("Batch result failed for %s: %s", sym, result.result.type)
+            continue
+        try:
+            text = "".join(b.text for b in result.result.message.content if hasattr(b, "text"))
+            start, end = text.find("{"), text.rfind("}") + 1
+            data = json.loads(text[start:end]) if start >= 0 and end > start else {}
+            if data.get("trade") and data.get("conviction", "low") != "low":
+                approved.append(sym)
+                direction[sym]   = data.get("direction", "CALL")
+                strike_pct[sym]  = float(data.get("strike_pct_otm", 6.0))
+                conviction[sym]  = data.get("conviction", "medium")
+                notes[sym]       = data.get("reason", "")
+                logging.info("Batch result %s: %s %s%.0f%% [%s]",
+                             sym, direction[sym], "", strike_pct[sym], conviction[sym])
+        except Exception as exc:
+            logging.warning("Batch result parse failed [%s]: %s", sym, exc)
+
+    logging.info("Options batch analysis done: %d/%d symbols approved — %s",
+                 len(approved), len(SYMBOLS), ", ".join(approved))
+
+    return {
+        "approved": approved,
+        "direction": direction,
+        "strike_pct_otm": strike_pct,
+        "conviction": conviction,
+        "iv_regime": iv_regime,
+        "regime": market_regime,
+        "notes": notes,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main agent
 # ---------------------------------------------------------------------------
 
@@ -309,6 +442,20 @@ def run_options_evening_analysis(anthropic_api_key: str) -> None:
     options_state.add_log("Evening", f"Options pre-analysis starting for {trade_date}…", "neutral")
 
     client = anthropic.Anthropic(api_key=anthropic_api_key)
+
+    # ── Try Batch API first (50% cheaper, parallel) ───────────────────────────
+    try:
+        result = _run_batch_analysis(client, trade_date)
+        if result.get("approved"):
+            logging.info("Options batch analysis succeeded — skipping agentic loop")
+            _save_evening_result(result, trade_date)
+            return
+        logging.warning("Options batch returned no approved symbols — falling back to agentic loop")
+    except Exception as exc:
+        logging.warning("Options batch analysis failed (%s) — falling back to agentic loop", exc)
+
+    # ── Fallback: original agentic loop ──────────────────────────────────────
+    logging.info("Options evening analysis: using agentic loop (batch unavailable)")
 
     system_prompt = """You are an expert options trader preparing tomorrow's trade plan.
 You have a small options account ($200-600 range). Budget per trade: $200 max per contract.
@@ -439,7 +586,11 @@ RULES:
 
         messages.append({"role": "user", "content": tool_results})
 
-    # Validate result
+    _save_evening_result(result, trade_date)
+
+
+def _save_evening_result(result: dict, trade_date: str) -> None:
+    """Validate and persist evening analysis result to options_state. Shared by batch + agentic paths."""
     approved = [s for s in result.get("approved", []) if s in SYMBOLS]
     direction = {s: v for s, v in result.get("direction", {}).items() if s in approved}
     strike_pct = {s: float(v) for s, v in result.get("strike_pct_otm", {}).items() if s in approved}
@@ -454,7 +605,6 @@ RULES:
         options_state.add_log("Evening", "Options analysis: no symbols approved — will scan all tomorrow", "warning")
         return
 
-    # Save to state
     with options_state._lock:
         options_state.evening_approved = approved
         options_state.evening_direction = direction
@@ -465,15 +615,12 @@ RULES:
         options_state.evening_notes = notes
         options_state.evening_analysis_date = trade_date
 
-    options_state._save()  # persist so bot restart doesn't lose Friday's plan
+    options_state._save()
 
-    summary_parts = []
-    for sym in approved:
-        d = direction.get(sym, "?")
-        otm = strike_pct.get(sym, 0)
-        c = conviction.get(sym, "?")
-        summary_parts.append(f"{sym} {d} {otm:.0f}%OTM [{c}]")
-
+    summary_parts = [
+        f"{s} {direction.get(s,'?')} {strike_pct.get(s,0):.0f}%OTM [{conviction.get(s,'?')}]"
+        for s in approved
+    ]
     iv_reg = result.get("iv_regime", "?")
     regime = result.get("regime", "?")
     options_state.add_log(
@@ -481,7 +628,5 @@ RULES:
         f"Options plan for {trade_date} | IV:{iv_reg} market:{regime} | " + " | ".join(summary_parts),
         "positive",
     )
-    logging.info(
-        "Options evening analysis done: %d symbols for %s — %s",
-        len(approved), trade_date, ", ".join(summary_parts),
-    )
+    logging.info("Options evening analysis done: %d symbols for %s — %s",
+                 len(approved), trade_date, ", ".join(summary_parts))
