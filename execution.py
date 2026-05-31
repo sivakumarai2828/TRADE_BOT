@@ -787,9 +787,10 @@ def monitor_positions(exchange, config: BotConfig) -> None:
                         )
                         p.stop_loss = atr_trail_sl
 
-        # Upgraded Option-B: NO partial TP1 exit.
-        # Hold full position → single clean exit at TP (6.5%) or SL (3%).
-        # Breakeven SL already fired at +1% above — position is risk-free from there.
+        # TP1 partial exit at +3% — sell 50%, lock profit, SL → breakeven, let 50% run to TP2.
+        # Breakeven SL already fired at +1% so position is risk-free before TP1 hits.
+        if not pos.tp1_hit and pnl_pct >= 3.0:
+            _partial_close(exchange, config, symbol, current_price, fraction=0.5)
 
         logging.info("Monitor %s | price=%s SL=%s TP=%s pnl=%+.2f", symbol, current_price, pos.stop_loss, pos.take_profit, pnl)
 

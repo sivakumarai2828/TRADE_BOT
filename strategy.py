@@ -231,7 +231,7 @@ def _calculate_macd(prices: pd.Series, fast: int = 12, slow: int = 26, signal: i
 
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add RSI(14), SMA(50), ATR(14), MACD(12,26,9), and 20-bar average volume columns."""
+    """Add RSI(14), SMA(50), ATR(14), MACD(12,26,9), ADX(14), and 20-bar average volume columns."""
 
     if "close" not in df.columns:
         raise ValueError("DataFrame must contain a close column")
@@ -248,6 +248,11 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     result["macd"] = macd_line
     result["macd_signal"] = macd_sig
     result["macd_hist"] = macd_hist
+    # ADX(14) — measures trend strength. >20 = trending, <20 = ranging/choppy.
+    adx_ind = ta.trend.ADXIndicator(
+        high=result["high"], low=result["low"], close=result["close"], window=14
+    )
+    result["adx"] = adx_ind.adx()
     return result
 
 
@@ -259,13 +264,17 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
                        oversold: float = 38.0, overbought: float = 70.0,
                        volume: float = 0.0, avg_volume: float = 0.0,
                        allow_breakout: bool = True,
-                       macd_hist: float = 0.0) -> Signal:
+                       macd_hist: float = 0.0,
+                       adx: float = 0.0) -> Signal:
     import datetime as _dt
     _hour_utc = _dt.datetime.now(_dt.timezone.utc).hour
-    _is_overnight = 0 <= _hour_utc < 6  # low vol window UTC 00-06
-    _vol_mult = 1.5 if _is_overnight else 2.0  # relaxed threshold overnight
+    # Dead zone: 22:00–06:00 UTC — Asia low-volume hours, worst signal quality.
+    # Setup A (deep dip, RSI<oversold) stays active 24/7 — panic dips happen any hour.
+    # Setup B and C blocked in dead zone — no momentum/recovery trades in thin market.
+    _is_dead_zone = _hour_utc >= 22 or _hour_utc < 6
+    _vol_mult = 1.5 if _is_dead_zone else 2.0  # relaxed volume threshold in thin hours
 
-    # Volume confirmation: 2× avg (1.5× overnight to handle thin crypto hours)
+    # Volume confirmation: 2× avg (1.5× in thin hours)
     vol_confirmed = avg_volume <= 0 or volume >= avg_volume * _vol_mult
 
     # MACD confirmation: histogram > 0 means short-term momentum turning bullish.
@@ -273,18 +282,25 @@ def _rule_based_signal(rsi: float, price: float, sma: float,
     # Deep dips: MACD lags too much, RSI<oversold is already strong enough signal.
     macd_confirmed = macd_hist > 0
 
+    # ADX gate: ADX < 20 = ranging/choppy market, momentum/recovery trades fail.
+    # Setup A (deep dip) allowed even in ranging markets — panic dips are real regardless.
+    # Setup B and C need trend energy (ADX ≥ 20) to produce follow-through.
+    adx_trending = adx <= 0 or adx >= 20.0  # adx=0 means not computed — allow through
+
     # Setup A: Dip buy — RSI oversold, above SMA support, volume confirmed.
     # RSI floor at 35 prevents catching falling knives (RSI<35 = crash, not dip).
-    # No MACD gate — at RSI 35-45 MACD still negative (lags), would block all dip entries.
+    # No MACD, ADX, or session gate — deep dips valid 24/7 in any regime.
     if 35.0 <= rsi < oversold and price > sma * 0.99 and vol_confirmed:
         return "BUY"
 
     # Setup C: Recovery — RSI emerging from oversold zone, price holding near SMA, MACD turning up.
-    if oversold <= rsi <= 50.0 and price > sma * 0.98 and macd_confirmed:
+    # Blocked in dead zone (22–06 UTC) and ranging market (ADX < 20).
+    if not _is_dead_zone and adx_trending and oversold <= rsi <= 50.0 and price > sma * 0.98 and macd_confirmed:
         return "BUY"
 
     # Setup B: Momentum breakout — gated by allow_breakout (disabled in SAFE/SHIELD mode).
-    if allow_breakout and 50.0 <= rsi <= 65.0 and price > sma * 1.001:
+    # Blocked in dead zone (22–06 UTC) and ranging market (ADX < 20).
+    if not _is_dead_zone and adx_trending and allow_breakout and 50.0 <= rsi <= 65.0 and price > sma * 1.001:
         return "BUY"
 
     # SELL: RSI overbought — no volume gate (overbought tops often have lower volume).
@@ -446,6 +462,7 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
     volume = float(latest["volume"]) if "volume" in latest else 0.0
     avg_volume = float(latest["vol_avg_20"]) if "vol_avg_20" in latest and not pd.isna(latest["vol_avg_20"]) else 0.0
     macd_hist = float(latest["macd_hist"]) if "macd_hist" in latest.index and not pd.isna(latest["macd_hist"]) else 0.0
+    adx = float(latest["adx"]) if "adx" in latest.index and not pd.isna(latest["adx"]) else 0.0
 
     oversold = bot_state.settings.rsi_oversold
     overbought = bot_state.settings.rsi_overbought
@@ -480,7 +497,8 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                                      oversold=oversold, overbought=overbought,
                                      volume=volume, avg_volume=avg_volume,
                                      allow_breakout=_allow_breakout,
-                                     macd_hist=macd_hist)
+                                     macd_hist=macd_hist,
+                                     adx=adx)
 
     # Claude availability gate — block BUY when AI has failed repeatedly.
     # Prevents bad entries when the AI confirmation layer is down (e.g. 529 overload).
