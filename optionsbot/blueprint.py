@@ -29,8 +29,23 @@ POLL_SECONDS = int(os.getenv("OPTIONS_POLL_SECONDS", "300"))   # 5 min
 MAX_POSITIONS = int(os.getenv("OPTIONS_MAX_POSITIONS", "4"))   # 4 × $125 = $500 full capital
 _OPTIONS_BUDGET_PCT = float(os.getenv("OPTIONS_BUDGET_PCT", "0.25"))  # 25% per contract
 BUDGET = float(os.getenv("OPTIONS_BUDGET", "0"))               # 0 = dynamic
-SL_PCT = 0.50          # initial SL: −50% (overridden by trailing stop as trade profits)
-TP_PCT = 2.00          # take profit: +200% = 3× exit
+SL_PCT = 0.50          # initial SL: −50% (base; overridden by IV regime + trailing stop)
+TP_PCT = 1.50          # take profit: +150% = 2.5× exit (was 200% — too greedy for 0DTE/weekly)
+
+# IV-adaptive SL — fixed 50% fires prematurely in high-IV (IV crush alone can drop premium 50%).
+# Widen SL in high-IV environments to give trade room; tighten TP too (IV mean-reverts fast).
+_IV_REGIME_SL: dict[str, float] = {
+    "low":     0.40,   # cheap premium, tighten SL
+    "normal":  0.50,   # standard
+    "high":    0.65,   # wider — IV crush risk at open
+    "extreme": 0.75,   # widest — premium inflated, needs breathing room
+}
+_IV_REGIME_TP: dict[str, float] = {
+    "low":     1.50,   # normal target
+    "normal":  1.50,   # normal target
+    "high":    1.25,   # tighten TP — IV crush will erase gains fast
+    "extreme": 1.00,   # take money quickly in extreme IV
+}
 IV_MAX = 0.90          # skip contracts where IV > 90% (too expensive)
 EARNINGS_AVOID_DAYS = 3  # skip stock if earnings within N days
 DAILY_LOSS_HALT_PCT = 10.0
@@ -463,6 +478,37 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
     if open_count >= MAX_POSITIONS:
         return
 
+    # ── FILTER 0a: Day-of-week gate ───────────────────────────────────────────
+    # Mon/Wed/Fri only — Tue/Thu consistently underperform (Option Alpha: 230K trades).
+    # Tuesday/Thursday are low-conviction drift days with no reliable catalysts.
+    _now_et = datetime.now(timezone.utc) - timedelta(hours=4)
+    _weekday = _now_et.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+    if _weekday in (1, 3):  # Tuesday=1, Thursday=3
+        state.add_log("Skipped", f"Day-of-week gate: Tue/Thu — no new entries (low-conviction days)", "neutral")
+        return
+
+    # ── FILTER 0b: Entry time gate ────────────────────────────────────────────
+    # No new entries before 10:00 AM ET — IV highest, spreads widest at open.
+    # Optimal window: 10:00–11:30 AM ET (IV settled, trend direction clear).
+    _et_hour = _now_et.hour
+    _et_minute = _now_et.minute
+    _et_minutes_total = _et_hour * 60 + _et_minute
+    if _et_minutes_total < 10 * 60:  # before 10:00 AM ET
+        state.add_log("Skipped", f"Entry time gate: {_et_hour:02d}:{_et_minute:02d} ET — no entries before 10:00 AM (high IV/spreads)", "neutral")
+        return
+
+    # ── FILTER 0c: VIX gate ───────────────────────────────────────────────────
+    # Skip all new entries when VIX > 30 — premiums too expensive, gamma risk too high for $1K.
+    try:
+        import yfinance as _yf
+        _vix_hist = _yf.Ticker("^VIX").fast_info
+        _vix_now = float(getattr(_vix_hist, "last_price", 0.0) or 0.0)
+        if _vix_now > 30:
+            state.add_log("Skipped", f"VIX gate: VIX {_vix_now:.1f} > 30 — premium too expensive, skip all entries", "neutral")
+            return
+    except Exception:
+        pass  # fail open — don't block on VIX fetch error
+
     # ── FILTER 1: SPY market regime ──────────────────────────────────────────
     spy = _spy_trend()
     state.add_log("Market", f"SPY trend: {spy.upper()}", "neutral")
@@ -594,8 +640,12 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
         from .executor import buy_contract
         ok = buy_contract(contract["contract_symbol"], buy_qty, api_key, secret_key, paper)
         if ok:
-            sl = round(contract["premium"] * (1 - SL_PCT), 2)
-            tp = round(contract["premium"] * (1 + TP_PCT), 2)
+            # Use IV-regime-adaptive SL/TP — wider SL in high-IV to survive IV crush at open.
+            _iv_reg = state.evening_iv_regime or "normal"
+            _sl_pct = _IV_REGIME_SL.get(_iv_reg, SL_PCT)
+            _tp_pct = _IV_REGIME_TP.get(_iv_reg, TP_PCT)
+            sl = round(contract["premium"] * (1 - _sl_pct), 2)
+            tp = round(contract["premium"] * (1 + _tp_pct), 2)
             pos = OptionsPosition(
                 symbol          = symbol,
                 contract_symbol = contract["contract_symbol"],
@@ -619,7 +669,7 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                 f"{symbol} {contract['option_type'].upper()} ${contract['strike']} "
                 f"exp {contract['expiry']} IV={contract['iv']:.0%} OTM={contract.get('otm_pct',0):.1f}% "
                 f"@ ${contract['premium']:.2f} × {buy_qty} | cost=${total_cost:.0f} "
-                f"SL=${sl:.2f} TP=${tp:.2f} | open={open_count}/{MAX_POSITIONS}",
+                f"SL=${sl:.2f}(-{_sl_pct:.0%}) TP=${tp:.2f}(+{_tp_pct:.0%}) iv_regime={_iv_reg} | open={open_count}/{MAX_POSITIONS}",
                 "positive",
             )
             state._save()  # persist position so restart doesn't lose it
