@@ -473,11 +473,15 @@ def _load_fallback_watchlist(trade_date: str) -> dict:
 
 def _run_claude_loop(client, messages, max_iterations, trade_date, alpaca_api_key, alpaca_secret_key):
     result = {}
+    # Cache _SYSTEM with 1h TTL — same 300-line prompt sent on every loop iteration.
+    # Cache reads cost 10% of base — 90% saving on iterations 2-N.
+    _cached_system = [{"type": "text", "text": _SYSTEM,
+                       "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
     for iteration in range(max_iterations):
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            system=_SYSTEM,
+            system=_cached_system,
             tools=TOOLS,
             messages=messages,
         )

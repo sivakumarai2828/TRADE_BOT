@@ -600,113 +600,53 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
         else:
             logging.info("Volume gate [%s]: vol=%.0f ≥ 1.5×avg=%.0f — volume confirmed ✓", symbol, volume, avg_volume)
 
-    claude_confidence = 0.0
-    claude_reason = ""
-    last = _last_claude_input.get(symbol, {})
+    # --- Rule-based confidence scoring (replaces Claude haiku) ---
+    # Claude haiku analysis (14 days, 54 signals) showed formulaic responses:
+    # it mapped RSI→confidence tiers (0.72/0.82/0.85) without adding new information.
+    # ADX, session block, MTF filters already provide stronger quality gates.
+    # Rule-based scoring uses ALL available indicator data: RSI depth, ADX strength,
+    # volume confirmation, and SMA distance — more signal than haiku ever had.
+    def _rule_based_confidence() -> tuple[Signal, float, str]:
+        if rule_signal == "HOLD":
+            return "HOLD", 0.0, "rule=HOLD"
+        if rule_signal == "SELL":
+            sell_conf = min(0.95, 0.70 + (rsi - overbought) / 100)
+            return "SELL", round(sell_conf, 2), f"RSI {rsi:.1f} overbought"
+        # BUY confidence — composite of RSI depth, ADX, volume, SMA proximity
+        conf = 0.60  # base: rule engine already vetted this
+        # RSI depth below oversold → stronger signal
+        rsi_depth = max(0.0, oversold - rsi) / oversold  # 0→1
+        conf += rsi_depth * 0.20
+        # ADX strength → trend conviction
+        if adx >= 25:  conf += 0.10
+        elif adx >= 20: conf += 0.05
+        # Volume confirmation
+        if avg_volume > 0:
+            vol_mult = volume / avg_volume
+            if vol_mult >= 2.0:   conf += 0.10
+            elif vol_mult >= 1.5: conf += 0.05
+        # SMA proximity — price close to SMA = better risk/reward
+        sma_dist = abs(price - sma) / sma if sma > 0 else 0.0
+        if sma_dist < 0.01: conf += 0.05  # within 1% of SMA
+        reason = (f"RSI={rsi:.1f} ADX={adx:.1f} vol={volume/max(avg_volume,1):.1f}x "
+                  f"conf={min(conf,1.0):.2f}")
+        return "BUY", round(min(conf, 1.0), 2), reason
 
-    # --- Cost optimisation: skip Claude call when it won't change the outcome ---
-    # 1. Rule is HOLD → Claude can't flip the final signal (requires agreement).
-    # 2. Rule matches last cycle AND RSI/price barely moved → reuse cached response.
-    _rsi_delta = abs(rsi - last.get("rsi", rsi + 999))
-    _price_delta_pct = abs(price - last.get("price", 0)) / max(last.get("price", price), 1) * 100
+    claude_signal, claude_confidence, claude_reason = _rule_based_confidence()
+    _claude_consecutive_failures = 0  # no LLM = no failures
 
-    # Timestamp gate: if last real call was < 10 minutes ago with the same rule_signal, reuse.
-    _called_at_str = last.get("called_at", "")
-    _age_minutes = float("inf")
-    if _called_at_str:
-        try:
-            _called_at = datetime.fromisoformat(_called_at_str.replace("Z", "+00:00"))
-            _age_minutes = (datetime.now(timezone.utc) - _called_at).total_seconds() / 60
-        except Exception:
-            pass
-
-    _reuse_cache = (
-        last
-        and last.get("rule_signal") == rule_signal
-        and (
-            _age_minutes < 10                              # called within last 10 min
-            or (_rsi_delta < 2.0 and _price_delta_pct < 0.3)  # or conditions barely moved
-        )
-    )
-
-    if rule_signal == "HOLD":
-        # No point asking Claude — final can only be HOLD regardless.
-        claude_signal: Signal = "HOLD"
-        claude_reason = "Skipped (rule=HOLD)"
-        logging.debug("Claude skipped for %s — rule signal is HOLD", symbol)
-    elif _reuse_cache:
-        # Conditions barely changed; reuse the last Claude response.
-        claude_signal = last.get("claude_signal", "HOLD")
-        claude_confidence = last.get("claude_confidence", 0.0)
-        claude_reason = last.get("claude_reason", "") + " [cached]"
-        logging.debug(
-            "Claude reused cache for %s — RSI Δ=%.2f price Δ=%.2f%%",
-            symbol, _rsi_delta, _price_delta_pct,
-        )
-    else:
-        try:
-            claude_signal, claude_confidence, claude_reason = _claude_signal(
-                config=config, rsi=rsi, price=price, sma=sma,
-                oversold=oversold, overbought=overbought, symbol=symbol,
-            )
-            # Require confidence >= 0.65 for BUY — low-confidence = HOLD (no trade).
-            if claude_confidence < 0.65 and claude_signal != "HOLD":
-                logging.info(
-                    "Claude signal %s overridden to HOLD — confidence %.2f < 0.65 | reason: %s",
-                    claude_signal, claude_confidence, claude_reason,
-                )
-                claude_signal = "HOLD"
-            # Successful call — reset failure counter.
-            _claude_consecutive_failures = 0
-            # Update in-memory and Supabase cache after a real API call.
-            _now = datetime.now(timezone.utc).isoformat()
-            _last_claude_input[symbol] = {
-                "rsi": rsi,
-                "price": price,
-                "rule_signal": rule_signal,
-                "claude_signal": claude_signal,
-                "claude_confidence": claude_confidence,
-                "claude_reason": claude_reason,
-                "called_at": _now,
-            }
-            save_claude_cache_entry(
-                symbol=symbol, rsi=rsi, price=price,
-                rule_signal=rule_signal, claude_signal=claude_signal,
-                claude_confidence=claude_confidence, claude_reason=claude_reason,
-            )
-        except Exception as exc:
-            _claude_consecutive_failures += 1
-            logging.exception("Claude decision failed (%d consecutive); final signal forced to HOLD: %s",
-                              _claude_consecutive_failures, exc)
-            claude_signal = "HOLD"
-            bot_state.add_log("Claude error", str(exc)[:120], tone="negative")
-
-    # Rule is primary. Claude is advisory:
-    #   - Rule=HOLD → always HOLD regardless
-    #   - Both agree → use that signal
-    #   - Claude=HOLD (uncertain) → trust the rule
-    #   - Claude=opposite with confidence >0.70 → strong veto, HOLD
-    #   - Claude=opposite with confidence <=0.70 → weak disagreement, trust rule
+    # Rule-based confidence always agrees with rule signal — final = rule signal.
+    # Confidence threshold: BUY requires score ≥ 0.65 (base 0.60 + at least one confirming factor).
     if rule_signal == "HOLD":
         final_action: Signal = "HOLD"
-    elif claude_signal == rule_signal:
-        final_action = rule_signal
-    elif claude_signal == "HOLD":
-        # Upgraded Option-B: BUY requires Claude confirmation ≥65%.
-        # Claude uncertain on BUY → skip (quality over quantity).
-        # SELL still executes — exits always allowed, don't trap positions.
-        if rule_signal == "BUY":
-            final_action = "HOLD"
-            logging.info("Claude uncertain for %s — BUY skipped (need ≥65%% confidence, got HOLD)", symbol)
-        else:
-            final_action = rule_signal  # SELL: Claude uncertain → trust rule
-            logging.info("Claude uncertain (HOLD) for %s rule=%s SELL — proceeding with rule", symbol, rule_signal)
-    elif claude_confidence > 0.70:
-        final_action = "HOLD"  # Claude strongly disagrees — veto
-        logging.info("Claude strong veto for %s (conf=%.2f) rule=%s claude=%s — HOLD", symbol, claude_confidence, rule_signal, claude_signal)
+    elif rule_signal == "SELL":
+        final_action = "SELL"  # exits always allowed
+    elif claude_confidence >= 0.65:
+        final_action = "BUY"
+        logging.info("Rule-based BUY confirmed [%s]: conf=%.2f %s", symbol, claude_confidence, claude_reason)
     else:
-        final_action = rule_signal  # Weak disagreement — rule wins
-        logging.info("Claude weak disagreement for %s (conf=%.2f) — proceeding with rule %s", symbol, claude_confidence, rule_signal)
+        final_action = "HOLD"
+        logging.info("Rule-based BUY skipped [%s]: conf=%.2f < 0.65 — weak setup %s", symbol, claude_confidence, claude_reason)
     confidence = _compute_confidence(final_action, rsi)
     trend = _compute_trend(price, sma)
     explanation = _build_explanation(final_action, rule_signal, claude_signal, rsi, price, sma,
