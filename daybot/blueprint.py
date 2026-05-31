@@ -222,8 +222,11 @@ def _fetch_bars_impl(symbol: str) -> dict | None:
         et_tz = ZoneInfo("America/New_York")
         today_et = datetime.now(et_tz).date()
         idx_et = df.index.tz_convert(et_tz)
+        # 5-min ORB window (9:30–9:34): research shows 5-min nearly doubles return
+        # vs 15-min (55.2% vs 29.2%) with lower drawdown (7.6% vs 10.8%).
+        # Range set after first 5 candles — faster signal, cleaner breakout level.
         orb_mask = [
-            t.date() == today_et and dtime(9, 30) <= t.time() <= dtime(9, 44)
+            t.date() == today_et and dtime(9, 30) <= t.time() <= dtime(9, 34)
             for t in idx_et
         ]
         orb_df = df.iloc[[i for i, m in enumerate(orb_mask) if m]]
@@ -699,8 +702,36 @@ def _run_cycle() -> None:
             vwap = data.get("vwap", 0.0)
             if vwap > 0:
                 vwap_pct = (sig.price - vwap) / vwap * 100
-                if vwap_pct < -3.0:  # loosened: was -1.5% (too tight, IEX VWAP lags)
-                    day_state.add_log("Skipped", f"{symbol}: price {vwap_pct:.1f}% below VWAP ${vwap:.2f} — too bearish", "neutral")
+                # ORB long: price must be at or near VWAP (≥ -0.5%) — breakout below VWAP is invalid.
+                # RSI/EMA entries: allow up to 3% below VWAP (broader, less precision needed).
+                _vwap_threshold = -0.5 if use_orb else -3.0
+                if vwap_pct < _vwap_threshold:
+                    day_state.add_log(
+                        "Skipped",
+                        f"{symbol}: price {vwap_pct:.1f}% below VWAP ${vwap:.2f} — "
+                        f"{'ORB needs price ≥ VWAP' if use_orb else 'too bearish'}",
+                        "neutral",
+                    )
+                    continue
+
+            # VIX gate — skip ORB when VIX < 13 (no volatility = no ORB edge).
+            # Low VIX = choppy, tight-range days where ORB ranges are too narrow to follow through.
+            if use_orb and sig.action == "BUY":
+                try:
+                    from .filters import get_vix
+                    _vix = get_vix()
+                    if 0 < _vix < 13:
+                        day_state.add_log("Skipped", f"{symbol}: ORB skipped — VIX {_vix:.1f} < 13 (low vol, no ORB edge)", "neutral")
+                        continue
+                except Exception:
+                    pass  # fail open — don't block trades on VIX fetch error
+
+            # Gap gate — ORB long requires stock to be "in play" (gap ≥ +0.5% on the day).
+            # Low-gap days = no institutional interest, breakouts often reverse quickly.
+            if use_orb and sig.action == "BUY":
+                _day_gap = data.get("day_change_pct", 0.0)
+                if _day_gap < 0.5:
+                    day_state.add_log("Skipped", f"{symbol}: ORB long needs gap ≥ +0.5% — only {_day_gap:.1f}% today", "neutral")
                     continue
 
             ok, reason = _risk.can_trade(symbol, portfolio_value)
@@ -748,9 +779,10 @@ def _run_cycle() -> None:
                 _executor.place_buy_order(symbol, qty)
                 # ORB: use range-based SL/TP (natural levels); RSI/EMA: use mode % params
                 if use_orb and orb_high and orb_low:
+                    _orb_range = orb_high - orb_low
                     sl = round(orb_low, 2)
-                    tp = round(orb_high + 2 * (orb_high - orb_low), 2)
-                    tp1_price = 0.0
+                    tp1_price = round(orb_high + 1 * _orb_range, 2)  # TP1: 1× range above breakout
+                    tp = round(orb_high + 2 * _orb_range, 2)         # TP2: 2× range (full target)
                     entry_atr = 0.0
                     _orb_fired.add(symbol)
                 else:

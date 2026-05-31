@@ -8,6 +8,34 @@ from datetime import datetime, timezone, timedelta
 _earnings_cache: dict[str, tuple[float, bool]] = {}
 _EARNINGS_TTL = 3600
 
+# VIX cache — 15-min TTL to avoid hammering yfinance on every cycle
+_vix_cache: list = [0.0, 0.0]  # [timestamp, value]
+_VIX_TTL = 900
+
+
+def get_vix() -> float:
+    """Fetch current VIX from yfinance. Returns 0.0 on failure (fail open — don't block trades).
+
+    VIX < 13 = low vol, no ORB edge (choppy, tight ranges).
+    VIX 13–35 = normal trading zone.
+    VIX > 35 = extreme — reduce size, widen stops.
+    """
+    now = time.time()
+    if now - _vix_cache[0] < _VIX_TTL and _vix_cache[1] > 0:
+        return _vix_cache[1]
+    try:
+        import yfinance as yf
+        info = yf.Ticker("^VIX").fast_info
+        vix = float(getattr(info, "last_price", 0.0) or 0.0)
+        if vix > 0:
+            _vix_cache[0] = now
+            _vix_cache[1] = vix
+            logging.info("VIX fetched: %.1f", vix)
+        return vix
+    except Exception as exc:
+        logging.warning("VIX fetch failed: %s — fail open", exc)
+        return 0.0
+
 
 def has_earnings_soon(symbol: str, days_ahead: int = 2) -> bool:
     """Return True if symbol has earnings within the next N calendar days.

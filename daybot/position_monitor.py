@@ -98,8 +98,35 @@ class PositionMonitor:
                         self._state.positions[symbol].pnl = round(pnl, 2)
                         self._state.positions[symbol].pnl_pct = round(pnl_pct, 2)
 
-                logging.info("Monitor %s | $%.2f | SL $%.2f TP $%.2f | pnl %+.2f%%",
-                             symbol, price, pos.stop_loss, pos.take_profit, pnl_pct)
+                logging.info("Monitor %s | $%.2f | SL $%.2f TP1 $%.2f TP $%.2f | pnl %+.2f%%",
+                             symbol, price, pos.stop_loss,
+                             pos.tp1 if pos.tp1 > 0 else 0.0,
+                             pos.take_profit, pnl_pct)
+
+                # TP1 partial close — sell 50% at TP1, move SL → breakeven, let 50% run to TP2.
+                if not pos.tp1_hit and pos.tp1 > 0 and price >= pos.tp1:
+                    half_qty = round(pos.qty / 2, 6)
+                    if half_qty >= 0.001:
+                        try:
+                            self._executor.place_sell_order(symbol, half_qty)
+                            partial_pnl = (price - pos.entry_price) * half_qty
+                            partial_pct = (price - pos.entry_price) / pos.entry_price * 100
+                            with self._state._lock:
+                                if symbol in self._state.positions:
+                                    self._state.positions[symbol].qty -= half_qty
+                                    self._state.positions[symbol].tp1_hit = True
+                                    self._state.positions[symbol].stop_loss = pos.entry_price  # breakeven
+                                    self._state.metrics.daily_pnl += round(partial_pnl, 2)
+                            self._state.add_log(
+                                "TP1 hit 🎯",
+                                f"{symbol} +{partial_pct:.1f}% — sold 50% @ ${price:.2f} "
+                                f"| +${partial_pnl:.2f} locked | SL → breakeven",
+                                "positive",
+                            )
+                            logging.info("TP1 partial %s: %.4f units @ $%.2f | +$%.2f | SL→breakeven",
+                                         symbol, half_qty, price, partial_pnl)
+                        except Exception as exc:
+                            logging.error("TP1 partial sell failed [%s]: %s", symbol, exc)
 
                 if price <= pos.stop_loss:
                     self._close(symbol, pos, "stop_loss")
