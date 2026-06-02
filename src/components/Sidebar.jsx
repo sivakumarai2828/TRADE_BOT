@@ -20,11 +20,13 @@ const navItems = [
 ];
 
 export default function Sidebar({ exchangeName, paperMode, activePage, onNavigate }) {
-  const modeLabel = paperMode === false ? "Live trading" : "Paper trading";
+  // paper_mode=false means bot makes real Alpaca API calls (but Alpaca account may still be paper)
+  // paper_mode=true means bot simulates trades internally (dry run)
+  const modeLabel = paperMode === false ? "Alpaca API mode" : "Dry run mode";
   const modeNote =
     paperMode === false
-      ? "Real orders are being placed."
-      : "Simulated orders — no real money at risk.";
+      ? "Calling Alpaca API — check account type (paper vs live)."
+      : "Simulated orders — no Alpaca API calls.";
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 border-r border-neutral-800 bg-neutral-950/95 px-4 py-5 shadow-premium lg:block">
