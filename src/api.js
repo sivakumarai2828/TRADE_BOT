@@ -6,15 +6,16 @@
  *   VITE_API_URL=http://192.168.1.10:5000  npm run dev
  */
 
-// Crypto bot VM URL (34.67.95.221) — serves /status, /positions, /logs, /signals
+// All API calls use relative paths — Vercel rewrites proxy to correct VM server-side.
+// /status, /positions etc → crypto VM (34.67.95.221)
+// /daybot/*, /optionsbot/* → day/options VM (34.171.182.46)
+// /health → day VM (has APScheduler for day/options bots)
+// This avoids Mixed Content: browser only talks to https://mytradebot2828.vercel.app
 const BASE = import.meta.env.VITE_API_URL ?? "";
-// Day/options bot VM URL (34.171.182.46) — serves /daybot/*, /optionsbot/*, /health with scheduler
-// Set VITE_DAY_API_URL in Vercel env vars to http://34.171.182.46:8000
-const DAY_BASE = import.meta.env.VITE_DAY_API_URL ?? BASE;
 const BOT_KEY = import.meta.env.VITE_BOT_API_KEY ?? "";
 
-async function request(path, options = {}, base = BASE) {
-  const res = await fetch(`${base}${path}`, {
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
       ...(BOT_KEY ? { "X-Bot-Key": BOT_KEY } : {}),
@@ -28,12 +29,8 @@ async function request(path, options = {}, base = BASE) {
   return res.json();
 }
 
-function dayRequest(path, options = {}) {
-  return request(path, options, DAY_BASE);
-}
-
 /** Lightweight server liveness check — uses day VM (has APScheduler for day/options bots). */
-export const fetchHealth = () => dayRequest("/health");
+export const fetchHealth = () => request("/health");
 
 /** Full bot state — metrics, signal, position, logs, settings. */
 export const fetchStatus = () => request("/status");
@@ -84,41 +81,41 @@ export const updateSettings = (settings) =>
 // ---------------------------------------------------------------------------
 
 /** Full day bot state — metrics, positions, signals, watchlist, logs. */
-export const fetchDayStatus = () => dayRequest("/daybot/status");
+export const fetchDayStatus = () => request("/daybot/status");
 
 /** Start the day bot. */
-export const startDayBot = () => dayRequest("/daybot/start", { method: "POST" });
+export const startDayBot = () => request("/daybot/start", { method: "POST" });
 
 /** Stop the day bot. */
-export const stopDayBot = () => dayRequest("/daybot/stop", { method: "POST" });
+export const stopDayBot = () => request("/daybot/stop", { method: "POST" });
 
 /** Day bot open positions. */
-export const fetchDayPositions = () => dayRequest("/daybot/positions");
+export const fetchDayPositions = () => request("/daybot/positions");
 
 /** Day bot signals (per symbol). */
-export const fetchDaySignals = () => dayRequest("/daybot/signals");
+export const fetchDaySignals = () => request("/daybot/signals");
 
 /** Day bot watchlist. */
-export const fetchDayWatchlist = () => dayRequest("/daybot/watchlist");
+export const fetchDayWatchlist = () => request("/daybot/watchlist");
 
 /** Day bot activity logs. */
-export const fetchDayLogs = () => dayRequest("/daybot/logs");
+export const fetchDayLogs = () => request("/daybot/logs");
 
 /** Update day bot settings (trade_mode, position_size_pct, shield thresholds). */
 export const updateDaySettings = (settings) =>
-  dayRequest("/daybot/settings", { method: "POST", body: JSON.stringify(settings) });
+  request("/daybot/settings", { method: "POST", body: JSON.stringify(settings) });
 
 /** AI stock suggestions from evening analysis (entry zone, SL, target). */
-export const fetchSuggestions = () => dayRequest("/daybot/suggestions");
+export const fetchSuggestions = () => request("/daybot/suggestions");
 
 /** AI options picks from 9:15 AM morning run. */
-export const fetchOptionsSuggestions = () => dayRequest("/daybot/options-suggestions");
+export const fetchOptionsSuggestions = () => request("/daybot/options-suggestions");
 
 /** Indian NSE stock suggestions from 4:30 PM IST evening analysis. */
-export const fetchIndiaSuggestions = () => dayRequest("/daybot/india-suggestions");
+export const fetchIndiaSuggestions = () => request("/daybot/india-suggestions");
 
 /** Trigger India analysis on demand. */
-export const runIndiaAnalysis = () => dayRequest("/daybot/run-india-analysis", { method: "POST" });
+export const runIndiaAnalysis = () => request("/daybot/run-india-analysis", { method: "POST" });
 
 /** Trigger US evening analysis on demand. */
 export const runEveningAnalysis = () => request("/daybot/run-evening-analysis", { method: "POST" });
@@ -127,9 +124,9 @@ export const runEveningAnalysis = () => request("/daybot/run-evening-analysis", 
 export const runOptionsPicker = () => request("/daybot/run-options-picker", { method: "POST" });
 
 /** Options bot — automated SPY/QQQ options trading. */
-export const fetchOptionsBotStatus = () => dayRequest("/optionsbot/status");
-export const startOptionsBot = () => dayRequest("/optionsbot/start", { method: "POST" });
-export const stopOptionsBot = () => dayRequest("/optionsbot/stop", { method: "POST" });
+export const fetchOptionsBotStatus = () => request("/optionsbot/status");
+export const startOptionsBot = () => request("/optionsbot/start", { method: "POST" });
+export const stopOptionsBot = () => request("/optionsbot/stop", { method: "POST" });
 
 /** Open user-logged manual positions (Robinhood stocks + options). */
 export const fetchUserPositions = () => request("/daybot/user-positions");
