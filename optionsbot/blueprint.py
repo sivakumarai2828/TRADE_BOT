@@ -526,7 +526,17 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             "neutral",
         )
     else:
-        _scan_symbols = SYMBOLS
+        # No evening analysis for today → skip all new entries.
+        # Today (Jun 2): fallback scan bought MSFT CALL + AAPL PUT without direction context.
+        # Both lost -$218. Evening analysis provides RSI direction + IV regime + conviction.
+        # Without it we're guessing. Better to hold cash than enter blind.
+        state.add_log(
+            "Skipped",
+            f"No evening analysis for {_today_str} — holding cash until tonight's analysis runs",
+            "neutral",
+        )
+        logging.info("Options: no evening analysis for %s — skipping all new entries", _today_str)
+        return
 
     # ── SCAN SYMBOLS ─────────────────────────────────────────────────────────
     for symbol in _scan_symbols:

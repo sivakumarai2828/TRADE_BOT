@@ -666,6 +666,22 @@ def _run_cycle() -> None:
                 symbol, sig.action, ai_dec.confidence,
             )
             continue
+        # Block AI=HOLD when 4-week trend is negative — AI is right to be cautious.
+        # Today (Jun 2): GOOGL/UBER entered despite AI=HOLD + "despite short-term downtrend".
+        # Both lost. Rule: if AI says HOLD AND 4-week return is negative → trust the AI.
+        if ai_dec.decision == "HOLD" and sig.action == "BUY":
+            _4w_return = (weekly_ctx or {}).get("four_week_return_pct", 0.0)
+            if _4w_return < -2.0:  # stock down >2% over 4 weeks = genuine downtrend
+                day_state.add_log(
+                    "Skipped",
+                    f"{symbol}: AI=HOLD + 4w_return={_4w_return:.1f}% — downtrend, trusting AI",
+                    "neutral",
+                )
+                logging.info(
+                    "%s: AI=HOLD + 4w_return=%.1f%% < -2%% — skipping (downtrend overrides rule)",
+                    symbol, _4w_return,
+                )
+                continue
         if ai_dec.decision != sig.action:
             logging.info(
                 "%s: rule=%s AI=%s conf=%.2f — AI uncertain, proceeding with rule",
@@ -793,8 +809,13 @@ def _run_cycle() -> None:
                     sl_atr = round(sig.price - 1.0 * risk, 2)
                     sl_pct = round(sig.price * (1 - _config.stop_loss_pct), 2)
                     sl = min(sl_atr, sl_pct)  # lower price = more buffer from entry
-                    tp1_price = round(sig.price + 1.5 * risk, 2)
-                    tp = round(sig.price + 3.0 * risk, 2)
+                    # Enforce minimum 2:1 R:R — TP must be at least 2× the SL distance.
+                    # Today (Jun 2): PYPL TP was 0.2% gain vs 1% SL = 0.2:1 R:R → tiny wins, big losses.
+                    sl_distance = sig.price - sl
+                    tp_atr = round(sig.price + 3.0 * risk, 2)
+                    tp_min_rr = round(sig.price + 2.0 * sl_distance, 2)  # 2:1 floor
+                    tp = max(tp_atr, tp_min_rr)
+                    tp1_price = round(sig.price + 1.0 * sl_distance, 2)  # TP1 at 1:1
                 pos = DayPosition(
                     symbol=symbol, qty=qty, entry_price=sig.price,
                     current_price=sig.price, stop_loss=sl, take_profit=tp,
