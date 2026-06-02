@@ -57,7 +57,12 @@ logging.basicConfig(
 )
 
 app = Flask(__name__)
-CORS(app)  # Allow the Vite dev server (port 5173) to call this API
+CORS(app, resources={r"/*": {
+    "origins": "*",
+    "allow_headers": ["Content-Type", "X-Bot-Key", "Authorization"],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "supports_credentials": False,
+}})
 
 # ---------------------------------------------------------------------------
 # Route auth — protect ALL routes with X-Bot-Key header.
