@@ -478,14 +478,9 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
     if open_count >= MAX_POSITIONS:
         return
 
-    # ── FILTER 0a: Day-of-week gate ───────────────────────────────────────────
-    # Mon/Wed/Fri only — Tue/Thu consistently underperform (Option Alpha: 230K trades).
-    # Tuesday/Thursday are low-conviction drift days with no reliable catalysts.
+    # ── FILTER 0a: Day-of-week gate DISABLED (all weekdays allowed) ──────────────
+    # Research: Tue/Thu underperform but removing to allow more trade opportunities.
     _now_et = datetime.now(timezone.utc) - timedelta(hours=4)
-    _weekday = _now_et.weekday()  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
-    if _weekday in (1, 3):  # Tuesday=1, Thursday=3
-        state.add_log("Skipped", f"Day-of-week gate: Tue/Thu — no new entries (low-conviction days)", "neutral")
-        return
 
     # ── FILTER 0b: Entry time gate ────────────────────────────────────────────
     # No new entries before 10:00 AM ET — IV highest, spreads widest at open.
