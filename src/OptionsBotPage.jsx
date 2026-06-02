@@ -181,7 +181,7 @@ export default function OptionsBotPage() {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <MetricCard
           label="Balance"
-          value={`$${(m.balance ?? 500).toFixed(2)}`}
+          value={m.balance != null ? `$${m.balance.toFixed(2)}` : "—"}
           sub="paper account"
         />
         <MetricCard
