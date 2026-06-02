@@ -298,22 +298,25 @@ TOOLS = [
 _BATCH_SYMBOL_SYSTEM = """You are an expert options trader analysing a single stock for tomorrow.
 Small account ($200-600). Budget: $200 max per contract. PAPER trading.
 
-Given pre-fetched market data, decide:
-- Should we trade this symbol tomorrow? (yes/no)
-- CALL or PUT?
-- Strike OTM%: 4-12% (4-6% high conviction, 7-10% medium)
-- Conviction: high | medium | low (if low → don't trade)
+Given pre-fetched market data, decide whether to trade this symbol tomorrow.
 
 Rules:
 - earnings_soon=true → NEVER trade (IV crush risk)
 - iv_rv_ratio > 1.8 → avoid (premium too expensive)
-- CALL: RSI < 38 OR (RSI < 50 AND trend=up AND ret_5d > 0)
-- PUT: RSI > 68 OR (RSI > 55 AND trend=down AND ret_5d < 0)
-- Match market regime (no calls in trending_down market, no puts in trending_up)
+- CALL setup: RSI < 38 OR (RSI < 50 AND trend=up AND ret_5d > 0)
+- PUT setup: RSI > 68 OR (RSI > 55 AND trend=down AND ret_5d < 0)
+- Match market regime (no calls in trending_down, no puts in trending_up)
+- If no clear setup → trade=false
 
-Output ONLY valid JSON, no markdown:
-{"trade": true/false, "direction": "CALL"/"PUT", "strike_pct_otm": 5.0,
- "conviction": "high"/"medium"/"low", "reason": "one sentence"}"""
+CRITICAL: Respond with EXACTLY this JSON structure, no other format, no markdown fences:
+{"trade": true, "direction": "CALL", "strike_pct_otm": 5.0, "conviction": "high", "reason": "RSI oversold at 32, trend up, IV cheap"}
+
+OR if not trading:
+{"trade": false, "direction": "CALL", "strike_pct_otm": 6.0, "conviction": "low", "reason": "no clear setup"}
+
+The field "trade" MUST be a boolean (true or false, not a string).
+The field "direction" MUST be exactly "CALL" or "PUT" (uppercase).
+The field "conviction" MUST be exactly "high", "medium", or "low"."""
 
 
 def _run_batch_analysis(client: anthropic.Anthropic, trade_date: str) -> dict:
@@ -395,18 +398,41 @@ def _run_batch_analysis(client: anthropic.Anthropic, trade_date: str) -> dict:
             continue
         try:
             text = "".join(b.text for b in result.result.message.content if hasattr(b, "text"))
+            logging.info("Batch raw [%s]: %s", sym, text[:200])
             start, end = text.find("{"), text.rfind("}") + 1
             data = json.loads(text[start:end]) if start >= 0 and end > start else {}
-            if data.get("trade") and data.get("conviction", "low") != "low":
+
+            # Normalise: handle both {"trade": true} and {"decision": "trade"}
+            _trade_val = data.get("trade")
+            if _trade_val is None:
+                _dec = str(data.get("decision", "")).lower()
+                _trade_val = _dec in ("trade", "yes", "true", "buy")
+            elif isinstance(_trade_val, str):
+                _trade_val = _trade_val.lower() in ("true", "yes", "trade")
+
+            # Normalise direction: "bullish"→"CALL", "bearish"→"PUT"
+            _dir = str(data.get("direction", "CALL")).upper()
+            if _dir in ("BULLISH", "LONG", "UP"):  _dir = "CALL"
+            if _dir in ("BEARISH", "SHORT", "DOWN"): _dir = "PUT"
+            if _dir not in ("CALL", "PUT"):          _dir = "CALL"
+
+            # Normalise conviction from confidence float if needed
+            _conv = str(data.get("conviction", data.get("confidence_level", ""))).lower()
+            if not _conv or _conv not in ("high", "medium", "low"):
+                _conf_float = float(data.get("confidence", 0.5))
+                _conv = "high" if _conf_float >= 0.7 else "medium" if _conf_float >= 0.5 else "low"
+
+            if _trade_val and _conv != "low":
                 approved.append(sym)
-                direction[sym]   = data.get("direction", "CALL")
-                strike_pct[sym]  = float(data.get("strike_pct_otm", 6.0))
-                conviction[sym]  = data.get("conviction", "medium")
-                notes[sym]       = data.get("reason", "")
-                logging.info("Batch result %s: %s %s%.0f%% [%s]",
-                             sym, direction[sym], "", strike_pct[sym], conviction[sym])
+                direction[sym]   = _dir
+                strike_pct[sym]  = float(data.get("strike_pct_otm", data.get("strike_pct", 6.0)))
+                conviction[sym]  = _conv
+                notes[sym]       = data.get("reason", data.get("rationale", {}) if isinstance(data.get("rationale"), str) else "")
+                logging.info("Batch approved %s: %s %.0f%%OTM [%s]", sym, direction[sym], strike_pct[sym], conviction[sym])
+            else:
+                logging.info("Batch skipped %s: trade=%s conv=%s", sym, _trade_val, _conv)
         except Exception as exc:
-            logging.warning("Batch result parse failed [%s]: %s", sym, exc)
+            logging.warning("Batch result parse failed [%s]: %s — raw: %s", sym, exc, text[:100] if 'text' in dir() else "?")
 
     logging.info("Options batch analysis done: %d/%d symbols approved — %s",
                  len(approved), len(SYMBOLS), ", ".join(approved))

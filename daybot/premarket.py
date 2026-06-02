@@ -82,7 +82,24 @@ def run_premarket_analysis(anthropic_api_key: str, alpaca_api_key: str, alpaca_s
         return STOCK_UNIVERSE[:15]
 
     stock_summaries = _build_summaries(snapshots)
+    if not stock_summaries:
+        # Snapshots returned data but summaries empty (pre-market hours, no daily_bar yet).
+        # Fall back to full universe so bot has something to scan at open.
+        logging.warning("Pre-market: summaries empty (pre-market hours?) — using full universe")
+        day_state.add_log("Pre-market", "Summaries empty — using full universe as watchlist", "warning")
+        fallback = STOCK_UNIVERSE[:15]
+        with day_state._lock:
+            day_state.premarket_approved = fallback
+            day_state.premarket_time = datetime.now(timezone.utc).isoformat()
+        return fallback
+
     approved = _ask_claude(anthropic_api_key, stock_summaries)
+
+    # If LLM returned empty (both Llama and Claude failed), use top movers from snapshots directly.
+    if not approved:
+        logging.warning("Pre-market: LLM returned empty — falling back to top movers from snapshot")
+        approved = [s["symbol"] for s in stock_summaries[:12]]
+        day_state.add_log("Pre-market", f"LLM empty — using top {len(approved)} movers: {', '.join(approved[:6])}", "warning")
 
     with day_state._lock:
         day_state.premarket_approved = approved
