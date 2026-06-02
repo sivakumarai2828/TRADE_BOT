@@ -728,6 +728,32 @@ def _bot_loop(api_key: str, secret_key: str, paper: bool) -> None:
         if not _is_market_hours(api_key, secret_key, paper):
             _stop_event.wait(60)
             continue
+
+        # ── Friday EOD close — close all positions before weekend ────────────
+        # Options hold over weekends bleed theta for 2 days with no chance to react.
+        # Close all open positions by 3:30 PM ET on Fridays (before market gets thin).
+        _now_et = datetime.now(timezone.utc) - timedelta(hours=4)
+        _is_friday = _now_et.weekday() == 4  # Friday=4
+        _et_minutes = _now_et.hour * 60 + _now_et.minute
+        if _is_friday and _et_minutes >= 15 * 60 + 30 and options_state.positions:
+            logging.info("Options Friday EOD: closing all %d positions before weekend", len(options_state.positions))
+            options_state.add_log("Friday EOD", "Closing all options before weekend — theta decay risk", "warning")
+            for cs in list(options_state.positions.keys()):
+                pos = options_state.positions.get(cs)
+                if pos:
+                    try:
+                        from .executor import sell_contract
+                        sell_contract(cs, pos.qty, api_key, secret_key, paper)
+                        pnl = (pos.current_premium - pos.entry_premium) * pos.qty * 100
+                        options_state.record_trade_close(pnl)
+                        options_state.add_log("Friday close", f"{pos.symbol} closed before weekend | pnl=${pnl:+.2f}", "neutral")
+                        with options_state._lock:
+                            options_state.positions.pop(cs, None)
+                            options_state.metrics.balance = round(options_state.metrics.balance + pos.current_premium * pos.qty * 100, 2)
+                    except Exception as exc:
+                        logging.error("Friday EOD close failed [%s]: %s", cs, exc)
+            options_state._save()
+
         try:
             _run_cycle(api_key, secret_key, paper)
         except Exception as exc:
