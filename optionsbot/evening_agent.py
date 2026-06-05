@@ -456,8 +456,12 @@ def run_options_evening_analysis(anthropic_api_key: str) -> None:
     """Claude-powered evening analysis for options bot. Saves results to options_state."""
     from datetime import date
     import calendar as cal_mod
+    from zoneinfo import ZoneInfo
 
-    today = date.today()
+    # Use ET date — analysis runs at 8:15 PM ET which crosses UTC midnight (becomes Jun+1 UTC).
+    # Using UTC date.today() caused next_day = today+2 instead of today+1.
+    _et_tz = ZoneInfo("America/New_York")
+    today = datetime.now(_et_tz).date()
     # Find next trading day (skip weekends)
     next_day = today + timedelta(days=1)
     while next_day.weekday() >= 5:  # Sat=5, Sun=6
