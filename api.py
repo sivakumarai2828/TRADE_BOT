@@ -1085,6 +1085,88 @@ def profit_report():
     return jsonify({"ok": True, "message": "Profit status sent to Telegram"})
 
 
+# ---------------------------------------------------------------------------
+# Capital Manager endpoints — $5K split across all 3 bots
+# ---------------------------------------------------------------------------
+
+@app.get("/capital/status")
+def capital_status():
+    """Full capital allocation status across all 3 bots."""
+    from capital_manager import capital_manager
+    return jsonify({"ok": True, "capital": capital_manager.status()})
+
+
+@app.post("/capital/rebalance")
+def capital_rebalance():
+    """Manually trigger capital rebalance (also runs automatically weekly)."""
+    from capital_manager import capital_manager
+    result = capital_manager.rebalance(force=True)
+    return jsonify({"ok": True, "rebalance": result})
+
+
+@app.post("/capital/daily-reset")
+def capital_daily_reset():
+    """Reset daily counters across all bots. Called automatically at market open."""
+    from capital_manager import capital_manager
+    capital_manager.daily_reset()
+    return jsonify({"ok": True, "message": "Capital daily counters reset"})
+
+
+@app.post("/capital/withdraw")
+def capital_withdraw():
+    """Check and execute monthly profit withdrawal if conditions met."""
+    from capital_manager import capital_manager
+    result = capital_manager.check_monthly_withdrawal()
+    if result:
+        return jsonify({"ok": True, "withdrawal": result})
+    return jsonify({"ok": False, "message": "Withdrawal conditions not met (need >10% monthly gain)"})
+
+
+@app.post("/capital/set")
+def capital_set():
+    """Update total capital amount (e.g. when adding more real money)."""
+    from capital_manager import capital_manager
+    data = request.get_json(silent=True) or {}
+    new_total = data.get("total_capital")
+    if not new_total or not isinstance(new_total, (int, float)) or new_total <= 0:
+        return jsonify({"ok": False, "message": "Provide total_capital > 0"}), 400
+    with capital_manager._lock:
+        capital_manager._state.total_capital = float(new_total)
+    capital_manager._save()
+    return jsonify({"ok": True, "message": f"Total capital updated to ${new_total:,.2f}"})
+
+
+@app.get("/capital/summary")
+def capital_summary():
+    """Quick summary card — total balance, daily P&L, progress to $50K goal."""
+    from capital_manager import capital_manager
+    s = capital_manager.status()
+    return jsonify({
+        "ok": True,
+        "total_capital":   s["total_capital"],
+        "total_balance":   s["total_balance"],
+        "total_pnl":       s["total_pnl"],
+        "total_pnl_pct":   s["total_pnl_pct"],
+        "daily_pnl":       s["daily_pnl"],
+        "daily_pnl_pct":   s["daily_pnl_pct"],
+        "monthly_pnl":     s["monthly_pnl"],
+        "monthly_pnl_pct": s["monthly_pnl_pct"],
+        "monthly_withdrawn": s["monthly_withdrawn"],
+        "global_halted":   s["global_halted"],
+        "target_6m":       50000,
+        "progress_pct":    s["progress_pct"],
+        "bots": {
+            name: {
+                "balance":    b["balance"],
+                "daily_pnl":  b["daily_pnl"],
+                "win_rate":   b["win_rate"],
+                "paused":     b["paused"],
+            }
+            for name, b in s["bots"].items()
+        },
+    })
+
+
 @app.get("/", defaults={"path": ""})
 @app.get("/<path:path>")
 def serve_react(path):

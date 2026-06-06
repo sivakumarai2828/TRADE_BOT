@@ -20,6 +20,7 @@ from typing import Optional
 
 from .state import options_state, OptionsPosition
 from .db import save_trade as db_save_trade
+from capital_manager import capital_manager
 
 _stop_event = threading.Event()
 _bot_thread: Optional[threading.Thread] = None
@@ -409,6 +410,7 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
                     else:
                         state.metrics.losses_today += 1
                 state.record_trade_close(pnl)
+                capital_manager.record_trade("options", pnl)
                 tone = "positive" if pnl >= 0 else "negative"
                 state.add_log(
                     "Closed",
@@ -450,6 +452,11 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
         wins       = state.metrics.wins_today
 
     if halted:
+        return
+
+    # Global capital halt check (cross-bot stop-loss)
+    if capital_manager.is_halted("options"):
+        state.add_log("Capital halt", capital_manager.halt_reason("options"), "negative")
         return
 
     # Daily loss halt — use current market VALUE of open positions, not unrealized pnl.
@@ -597,7 +604,8 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
 
         # Pick contract — use evening OTM% target if available
         from .chain import pick_contract
-        _budget  = BUDGET if BUDGET > 0 else round(balance * _OPTIONS_BUDGET_PCT, 2)
+        _cap_alloc = capital_manager.get_allocation("options")
+        _budget  = BUDGET if BUDGET > 0 else round((_cap_alloc if _cap_alloc > 0 else balance) * _OPTIONS_BUDGET_PCT, 2)
         _target_otm = state.evening_strike_pct.get(symbol) if _evening_active else None
         contract = pick_contract(symbol, action, _budget, target_otm_pct=_target_otm)
         if not contract:
@@ -751,6 +759,7 @@ def _bot_loop(api_key: str, secret_key: str, paper: bool) -> None:
                         sell_contract(cs, pos.qty, api_key, secret_key, paper)
                         pnl = (pos.current_premium - pos.entry_premium) * pos.qty * 100
                         options_state.record_trade_close(pnl)
+                        capital_manager.record_trade("options", pnl)
                         options_state.add_log("Friday close", f"{pos.symbol} closed before weekend | pnl=${pnl:+.2f}", "neutral")
                         with options_state._lock:
                             options_state.positions.pop(cs, None)

@@ -192,9 +192,38 @@ def job_daily_reset() -> None:
             day_state.metrics.daily_pnl = 0.0
             day_state.metrics.daily_pnl_pct = 0.0
         day_state.add_log("Scheduler", "Daily reset — counters cleared", "neutral")
+        # Capital manager daily reset (cross-bot)
+        try:
+            from capital_manager import capital_manager
+            capital_manager.daily_reset()
+        except Exception as ce:
+            logging.warning("Capital manager daily reset failed: %s", ce)
         logging.info("Scheduler: daily reset complete")
     except Exception as exc:
         logging.exception("Scheduler: daily reset failed: %s", exc)
+
+
+def job_capital_rebalance() -> None:
+    """Monday 9:00 AM ET — rebalance capital allocation across all 3 bots."""
+    try:
+        from capital_manager import capital_manager
+        result = capital_manager.rebalance()
+        logging.info("Scheduler: capital rebalance complete — %s", result)
+    except Exception as exc:
+        logging.exception("Scheduler: capital rebalance failed: %s", exc)
+
+
+def job_monthly_withdrawal() -> None:
+    """1st of each month 00:01 UTC — extract 20% of profits if monthly gain > 10%."""
+    try:
+        from capital_manager import capital_manager
+        result = capital_manager.check_monthly_withdrawal()
+        if result:
+            logging.info("Scheduler: monthly withdrawal $%.2f", result["withdrawn"])
+        else:
+            logging.info("Scheduler: monthly withdrawal skipped — conditions not met")
+    except Exception as exc:
+        logging.exception("Scheduler: monthly withdrawal failed: %s", exc)
 
 
 def job_options_picker() -> None:
@@ -410,10 +439,20 @@ def start_scheduler() -> None:
         job_market_close_reminder, CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=tz),
         id="market_close_reminder", name="Market close reminder",
     )
-    # Daily reset: midnight UTC
+    # Daily reset: midnight UTC (also resets capital manager)
     _scheduler.add_job(
         job_daily_reset, CronTrigger(hour=0, minute=0, timezone="UTC"),
         id="daily_reset", name="Daily reset",
+    )
+    # Capital rebalance: Monday 9:00 AM ET (shift $ to best-performing bot each week)
+    _scheduler.add_job(
+        job_capital_rebalance, CronTrigger(day_of_week="mon", hour=9, minute=0, timezone=tz),
+        id="capital_rebalance", name="Weekly capital rebalance",
+    )
+    # Monthly profit withdrawal: 1st of month 00:01 UTC
+    _scheduler.add_job(
+        job_monthly_withdrawal, CronTrigger(day=1, hour=0, minute=1, timezone="UTC"),
+        id="monthly_withdrawal", name="Monthly profit withdrawal",
     )
     # Weekly report: Sunday 8:00 AM ET
     _scheduler.add_job(

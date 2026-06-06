@@ -22,6 +22,7 @@ import ccxt
 
 from config import BotConfig
 from persistence import save_state as _save_state_raw, save_trade
+from capital_manager import capital_manager
 
 
 def _save() -> None:
@@ -221,6 +222,7 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
         bot_state.refresh_paper_balance(symbol, float(price))
 
     bot_state.record_trade_result(float(pnl))
+    capital_manager.record_trade("crypto", float(pnl))
     # Variable cooldown by exit reason.
     # stop_loss: 4h — market moved against us; re-entering same direction too soon = revenge trade.
     # signal_sell: 2h — exited on overbought signal; price may re-test highs before pulling back.
@@ -260,6 +262,11 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
 
     current_price = _d(price)
     if not _validate_trade(config, signal, current_price):
+        return
+
+    if capital_manager.is_halted("crypto"):
+        logging.warning("Crypto trade blocked — capital halt: %s", capital_manager.halt_reason("crypto"))
+        bot_state.add_log("Capital halt", capital_manager.halt_reason("crypto"), tone="negative")
         return
 
     base = symbol.split("/")[0]

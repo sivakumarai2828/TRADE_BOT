@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify
 from .ai_validator import AIValidator
 from .config import load_config
 from .db import build_ai_history_context, save_trade as db_save_trade, upsert_market_session
+from capital_manager import capital_manager
 from .executor import TradeExecutor
 from .filters import StockFilter, has_earnings_soon
 from .indicators import add_indicators
@@ -439,6 +440,11 @@ def _run_cycle() -> None:
     except Exception as exc:
         logging.warning("Position monitor error: %s", exc)
 
+    # --- Check global capital halt (cross-bot stop-loss) ---
+    if capital_manager.is_halted("day"):
+        day_state.add_log("Risk", f"Capital halt: {capital_manager.halt_reason('day')}", "negative")
+        return
+
     # --- Check daily loss limit ---
     if _risk.check_daily_loss(portfolio_value):
         with day_state._lock:
@@ -847,6 +853,7 @@ def _run_cycle() -> None:
                         day_state.metrics.daily_pnl += round(pnl, 2)
                     _risk.deregister_trade(symbol)
                     day_state.record_trade_result(pnl)
+                    capital_manager.record_trade("day", pnl)
                     _logger.log_trade(symbol, "SELL", sig.price, pos.qty, sig.reason)
                     db_save_trade(
                         symbol=symbol, entry_price=pos.entry_price,
@@ -968,7 +975,8 @@ def start():
 
     _scanner = MarketScanner(_config.alpaca_api_key, _config.alpaca_secret_key)
     _ai = AIValidator(_config.anthropic_api_key, _config.claude_model)
-    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=True, budget=_config.paper_budget)
+    _day_budget = capital_manager.get_allocation("day") or _config.paper_budget
+    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=True, budget=_day_budget)
     _risk = RiskManager(
         max_trades_per_day=_config.max_trades_per_day,
         max_concurrent=_config.max_concurrent_trades,
@@ -1018,7 +1026,8 @@ def _start_bot_internal() -> None:
 
     _scanner = MarketScanner(_config.alpaca_api_key, _config.alpaca_secret_key)
     _ai = AIValidator(_config.anthropic_api_key, _config.claude_model)
-    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=True, budget=_config.paper_budget)
+    _day_budget = capital_manager.get_allocation("day") or _config.paper_budget
+    _executor = TradeExecutor(_config.alpaca_api_key, _config.alpaca_secret_key, paper=True, budget=_day_budget)
     _risk = RiskManager(
         max_trades_per_day=_config.max_trades_per_day,
         max_concurrent=_config.max_concurrent_trades,
