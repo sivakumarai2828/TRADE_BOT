@@ -1,0 +1,53 @@
+{
+  "total_capital": 5000.0,
+  "global_halted": false,
+  "global_halt_reason": "",
+  "daily_start_total": 5000.0,
+  "monthly_start_total": 5000.0,
+  "monthly_withdrawn": 0.0,
+  "last_rebalance_date": "",
+  "last_reset_date": "2026-06-06",
+  "created_at": "2026-06-06T20:19:25.984169+00:00",
+  "saved_at": "2026-06-06T20:19:32.830571+00:00",
+  "allocations": {
+    "day": {
+      "allocated": 1000.0,
+      "initial": 1000.0,
+      "realized_pnl": 0.0,
+      "unrealized_pnl": 0.0,
+      "daily_start": 1000.0,
+      "daily_pnl": 0.0,
+      "trades_today": 0,
+      "wins_total": 0,
+      "losses_total": 0,
+      "paused": false,
+      "paused_reason": ""
+    },
+    "options": {
+      "allocated": 2500.0,
+      "initial": 2500.0,
+      "realized_pnl": 0.0,
+      "unrealized_pnl": 0.0,
+      "daily_start": 2500.0,
+      "daily_pnl": 0.0,
+      "trades_today": 0,
+      "wins_total": 0,
+      "losses_total": 0,
+      "paused": false,
+      "paused_reason": ""
+    },
+    "crypto": {
+      "allocated": 1500.0,
+      "initial": 1500.0,
+      "realized_pnl": 0.0,
+      "unrealized_pnl": 0.0,
+      "daily_start": 1500.0,
+      "daily_pnl": 0.0,
+      "trades_today": 0,
+      "wins_total": 0,
+      "losses_total": 0,
+      "paused": false,
+      "paused_reason": ""
+    }
+  }
+}
