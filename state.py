@@ -141,15 +141,17 @@ class BotState:
         self._cooldowns: dict[str, int] = {}  # symbol → cycles remaining
 
     def add_log(self, log_type: str, message: str, tone: str = "neutral") -> None:
+        import threading
+        time_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
         with self._lock:
-            entry = LogEntry(
-                time=datetime.now(timezone.utc).strftime("%H:%M:%S"),
-                type=log_type,
-                message=message,
-                tone=tone,
-            )
+            entry = LogEntry(time=time_str, type=log_type, message=message, tone=tone)
             self.logs.insert(0, entry)
             self.logs = self.logs[:100]
+        try:
+            from persistence import save_log
+            threading.Thread(target=save_log, args=(time_str, log_type, message, tone), daemon=True).start()
+        except Exception:
+            pass
 
     def update_signal(self, symbol: str, **kwargs) -> None:
         with self._lock:

@@ -196,14 +196,18 @@ class DayBotState:
     # ------------------------------------------------------------------
 
     def _add_log_unlocked(self, log_type: str, message: str, tone: str = "neutral") -> None:
-        entry = DayLogEntry(
-            time=datetime.now(timezone.utc).strftime("%H:%M:%S"),
-            type=log_type,
-            message=message,
-            tone=tone,
-        )
+        import threading
+        time_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        entry = DayLogEntry(time=time_str, type=log_type, message=message, tone=tone)
         self.logs.insert(0, entry)
         self.logs = self.logs[:100]
+        try:
+            import sys, os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+            from persistence import save_log
+            threading.Thread(target=save_log, args=(time_str, log_type, message, tone), daemon=True).start()
+        except Exception:
+            pass
 
     def add_log(self, log_type: str, message: str, tone: str = "neutral") -> None:
         with self._lock:
