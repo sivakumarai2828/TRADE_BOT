@@ -173,7 +173,9 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
             bot_state.metrics.total_fees_paid = round(bot_state.metrics.total_fees_paid + sell_fee, 4)
             bot_state.metrics.daily_fees_paid = round(bot_state.metrics.daily_fees_paid + sell_fee, 4)
 
-    pnl = (price - entry) * amount
+    buy_fee = float(entry * amount) * 0.0015
+    gross_pnl = (price - entry) * amount
+    pnl = gross_pnl - Decimal(str(round(buy_fee + sell_fee, 8)))
     pnl_pct = float((price - entry) / entry * 100)
     is_house_trade = pos.is_house_trade
 
@@ -187,10 +189,11 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
 
     tone = "positive" if pnl >= 0 else "negative"
     label = "House trade" if is_house_trade else "Trade executed"
+    net_pnl_pct = float(pnl / (entry * amount) * 100) if float(entry * amount) > 0 else pnl_pct
     bot_state.add_log(
         label,
         f"Sold {amount} {symbol} @ ${float(price):,.2f} | "
-        f"reason={reason} PnL={float(pnl):+.2f} ({pnl_pct:+.2f}%)"
+        f"reason={reason} PnL={float(pnl):+.2f} ({net_pnl_pct:+.2f}% net, fees=${buy_fee+sell_fee:.3f})"
         + (" [house money]" if is_house_trade else ""),
         tone=tone,
     )
@@ -663,7 +666,8 @@ def _partial_close(exchange, config: BotConfig, symbol: str, price: Decimal, fra
     base = symbol.split("/")[0]
     sell_value = float(price * sell_amount)
     sell_fee = sell_value * 0.0015
-    partial_pnl = float((price - entry) * sell_amount)
+    buy_fee_partial = float(entry * sell_amount) * 0.0015
+    partial_pnl = float((price - entry) * sell_amount) - buy_fee_partial - sell_fee
     partial_pnl_pct = float((price - entry) / entry * 100)
 
     if config.dry_run:
