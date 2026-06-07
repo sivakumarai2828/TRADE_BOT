@@ -75,9 +75,9 @@ class TestCryptoModeManagerInit:
     def test_params_safe(self):
         p = CryptoModeManager().params()
         assert p.size_multiplier == 1.0
-        assert p.stop_loss_pct == 2.0
-        assert p.take_profit_pct == 6.0
-        assert p.allow_breakout is False
+        assert p.stop_loss_pct == 3.0
+        assert p.take_profit_pct == 6.5
+        assert p.allow_breakout is True
 
 
 class TestCryptoModeManagerAntiFlip:
@@ -91,8 +91,8 @@ class TestCryptoModeManagerAntiFlip:
     def test_switches_after_min_trades(self):
         mgr = CryptoModeManager()
         m = _crypto_metrics(consecutive_wins=3, total_trades=0)
-        _advance(mgr, m, 2, btc_trend="up")
-        # Switch happens on the 2nd evaluate call inside _advance
+        _advance(mgr, m, 3, btc_trend="up")
+        # Switch happens after min_trades (3) evaluate calls
         assert mgr.mode == "AGGRESSIVE"
 
 
@@ -100,19 +100,19 @@ class TestCryptoModeManagerAggressive:
     def test_aggressive_requires_win_streak_and_btc_up(self):
         mgr = CryptoModeManager()
         m = _crypto_metrics(consecutive_wins=3, total_trades=0)
-        _advance(mgr, m, 2, btc_trend="up")
+        _advance(mgr, m, 3, btc_trend="up")
         assert mgr.mode == "AGGRESSIVE"
 
     def test_aggressive_blocked_when_btc_neutral(self):
         mgr = CryptoModeManager()
         m = _crypto_metrics(consecutive_wins=3, total_trades=0)
-        _advance(mgr, m, 2, btc_trend="neutral")
+        _advance(mgr, m, 3, btc_trend="neutral")
         assert mgr.mode == "SAFE"
 
     def test_aggressive_blocked_when_btc_down(self):
         mgr = CryptoModeManager()
         m = _crypto_metrics(consecutive_wins=3, total_trades=0)
-        _advance(mgr, m, 2, btc_trend="down")
+        _advance(mgr, m, 3, btc_trend="down")
         assert mgr.mode == "SAFE"
 
     def test_aggressive_params(self):
@@ -120,7 +120,7 @@ class TestCryptoModeManagerAggressive:
         mgr._mode = "AGGRESSIVE"
         p = mgr.params()
         assert p.size_multiplier == 1.5
-        assert p.take_profit_pct == 8.0
+        assert p.take_profit_pct == 6.5
         assert p.allow_breakout is True
 
     def test_win_streak_below_threshold_stays_safe(self):
@@ -156,7 +156,7 @@ class TestCryptoModeManagerShield:
         mgr._mode = "SHIELD"
         p = mgr.params()
         assert p.size_multiplier == 0.3
-        assert p.stop_loss_pct == 1.5
+        assert p.stop_loss_pct == 2.0
         assert p.take_profit_pct == 4.0
         assert p.allow_breakout is False
 
@@ -173,7 +173,7 @@ class TestCryptoModeManagerSafe:
         mgr = CryptoModeManager()
         mgr._mode = "AGGRESSIVE"
         mgr._trades_at_switch = 0
-        m = _crypto_metrics(consecutive_losses=1, total_trades=2)
+        m = _crypto_metrics(consecutive_losses=1, total_trades=3)  # 3 >= min_trades(3)
         mode, old = mgr.evaluate(m)
         assert mode == "SAFE"
         assert old == "AGGRESSIVE"
@@ -206,10 +206,10 @@ class TestDayModeManagerInit:
 
     def test_params_safe(self):
         p = DayModeManager().params()
-        assert p.position_size_pct == 0.15
-        assert p.stop_loss_pct == 0.010
-        assert p.take_profit_pct == 0.025
-        assert p.allow_breakout is False
+        assert p.position_size_pct == 0.10
+        assert p.stop_loss_pct == 0.015
+        assert p.take_profit_pct == 0.030
+        assert p.allow_breakout is True
 
 
 class TestDayModeManagerAntiFlip:
@@ -244,7 +244,7 @@ class TestDayModeManagerAggressive:
         mgr = DayModeManager()
         mgr._mode = "AGGRESSIVE"
         p = mgr.params()
-        assert p.position_size_pct == 0.25
+        assert p.position_size_pct == 0.15
         assert p.stop_loss_pct == 0.015
         assert p.take_profit_pct == 0.050
         assert p.allow_breakout is True

@@ -32,11 +32,9 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    # Upgraded Option-B params: single 6.5% TP, 3% SL, breakout always allowed.
-    # Base trade size is 50% of balance (set in _dynamic_trade_pct).
     "SAFE":       ModeParams(1.0, 3.0,  6.5, True,  "SAFE"),
-    "AGGRESSIVE": ModeParams(1.0, 3.0,  6.5, True,  "AGGRESSIVE"),
-    "SHIELD":     ModeParams(0.5, 2.0,  6.5, False, "SHIELD"),  # 25% size in shield
+    "AGGRESSIVE": ModeParams(1.5, 3.0,  6.5, True,  "AGGRESSIVE"),  # 50% bigger size
+    "SHIELD":     ModeParams(0.3, 2.0,  4.0, False, "SHIELD"),       # tiny size, tight rules
 }
 
 
@@ -45,11 +43,11 @@ class CryptoModeManager:
         self._mode: Mode = "SAFE"
         self._trades_at_switch: int = 0
 
-        self._min_trades  = int(os.getenv("MODE_MIN_TRADES_BEFORE_SWITCH", "4"))
+        self._min_trades  = int(os.getenv("MODE_MIN_TRADES_BEFORE_SWITCH", "3"))
         self._agg_streak  = int(os.getenv("MODE_AGGRESSIVE_WIN_STREAK", "3"))
         self._shield_loss = int(os.getenv("MODE_SHIELD_LOSS_STREAK", "3"))
         self._shield_day  = float(os.getenv("MODE_SHIELD_DAILY_LOSS_PCT", "5.0"))
-        self._safe_loss   = int(os.getenv("MODE_SAFE_LOSS_STREAK", "2"))
+        self._safe_loss   = int(os.getenv("MODE_SAFE_LOSS_STREAK", "1"))  # 1 loss exits AGGRESSIVE immediately
 
     # ------------------------------------------------------------------
     # Public API
