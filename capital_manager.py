@@ -101,13 +101,13 @@ class CapitalManager:
     }
 
     def _ensure_bots_initialized(self) -> None:
-        """Create bot allocations if they don't exist yet."""
+        """Create bot allocations if they don't exist yet.
+        For real-money bots, always sync balance from env var if set."""
         allocs = self._state.allocations
         today = date.today().isoformat()
 
         for bot, cfg in self._BOT_DEFAULTS.items():
             if bot not in allocs:
-                # For real-money crypto, use CRYPTO_REAL_BALANCE env var or default to 0
                 if cfg["mode"] == "real":
                     amount = float(os.getenv("CRYPTO_REAL_BALANCE", "0"))
                 else:
@@ -119,6 +119,15 @@ class CapitalManager:
                     mode=cfg["mode"],
                     daily_start=amount,
                 )
+            elif cfg["mode"] == "real":
+                # Always re-sync real-money balance from env var on startup
+                # so setting CRYPTO_REAL_BALANCE takes effect without manual JSON edits
+                env_balance = float(os.getenv("CRYPTO_REAL_BALANCE", "0"))
+                if env_balance > 0 and allocs[bot].allocated == 0.0:
+                    allocs[bot].allocated = env_balance
+                    allocs[bot].initial = env_balance
+                    allocs[bot].daily_start = env_balance
+                    logging.info("Crypto real balance synced from env: $%.2f", env_balance)
 
         if not self._state.daily_start_total:
             self._state.daily_start_total = self._state.total_capital
