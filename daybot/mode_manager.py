@@ -32,9 +32,9 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(0.20, 0.015, 0.030, True,  "SAFE"),       # 20% = $200 budget → buys 1 share of NVDA/AMD/TSLA
-    "AGGRESSIVE": ModeParams(0.25, 0.015, 0.050, True,  "AGGRESSIVE"), # 25% = $250 budget
-    "SHIELD":     ModeParams(0.05, 0.010, 0.020, False, "SHIELD"),     # 5% = $50 — capital protection, breakouts blocked
+    "SAFE":       ModeParams(0.10, 0.015, 0.030, True,  "SAFE"),       # 10% = $100 on $1K — standard risk
+    "AGGRESSIVE": ModeParams(0.15, 0.015, 0.050, True,  "AGGRESSIVE"), # 15% = $150 — sized up on hot streak
+    "SHIELD":     ModeParams(0.03, 0.010, 0.020, False, "SHIELD"),     # 3%  = $30  — capital protection only
 }
 
 
@@ -111,7 +111,7 @@ class DayModeManager:
             return "SAFE"
 
         trades_done = metrics.wins_today + metrics.losses_today
-        if trades_done >= 5:
+        if trades_done >= 3:
             wr = metrics.wins_today / trades_done * 100
             if wr < 50:
                 return "SAFE"

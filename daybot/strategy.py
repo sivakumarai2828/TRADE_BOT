@@ -32,7 +32,9 @@ def generate_signal(
     pct_from_ema = (price - ema) / ema * 100 if ema > 0 else 0.0
     # vol_data_available: False when IEX feed returns 0 volume (known data gap)
     vol_data_available = avg_volume > 1 and volume > 0
-    vol_rising = not vol_data_available or volume >= avg_volume * 1.2
+    # When data is unavailable, vol_rising=False — Setup B (breakout) requires confirmed volume.
+    # Setup A (pullback dip) doesn't check vol_rising directly, so missing data doesn't block dips.
+    vol_rising = vol_data_available and volume >= avg_volume * 1.2
 
     # --- SELL logic (only when position is open) ---
     # EMA-break exit removed — was firing at -0.5% and preventing TP/SL from being reached.
@@ -51,11 +53,11 @@ def generate_signal(
                             trend, "Volume below average — no conviction")
 
     # --- BUY conditions ---
-    # Setup A: Pullback dip — RSI recovering from oversold, price near EMA
-    # Allow slight EMA undercut (-0.5%) on deep oversold (RSI<38) for bounce entries
-    ema_low = -0.5 if rsi < 38.0 else 0.0
+    # Setup A: Pullback dip — RSI recovering from oversold, price at or above EMA
+    # EMA undercut removed: price below EMA = downtrend still in control (falling knife risk).
+    # Only enter when price has already recovered to EMA support level.
     if (
-        ema_low <= pct_from_ema <= 3.0
+        0.0 <= pct_from_ema <= 3.0
         and 28.0 <= rsi <= 66.0
         and not has_position
     ):
@@ -107,7 +109,7 @@ def generate_orb_signal(
         return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
                             "uptrend", "ORB: position open")
 
-    if range_width_pct > 4.0:  # raised: large caps regularly open 2-4% wide
+    if range_width_pct > 2.5:  # tightened from 4.0: wide ranges = volatile opens, no reliable edge
         return SignalResult(symbol, "HOLD", price, orb_high, 50.0, volume, avg_volume,
                             "neutral", f"ORB range {range_width_pct:.1f}% too wide — skip")
 

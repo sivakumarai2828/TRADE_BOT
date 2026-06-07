@@ -144,7 +144,8 @@ class MarketScanner:
         if len(candidates) < 6:
             logging.warning("Scanner: only %d candidates after filters — padding with defaults", len(candidates))
             for sym in ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "AMD", "GOOGL"]:
-                candidates.add(sym)
+                if sym not in candidates:   # dedup: avoid adding what's already there
+                    candidates.add(sym)
                 if len(candidates) >= 12:
                     break
 

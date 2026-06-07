@@ -89,12 +89,12 @@ def pick_contract(
                 "chain: %s IV=%.1f%% RV=%.1f%% ratio=%.2f",
                 underlying, avg_iv * 100, rv * 100, iv_rv,
             )
-            if iv_rv > 2.0:
-                # Raised 1.4 → 2.0: deeper OTM contracts naturally carry higher IV
-                # (volatility smile). 1.4× blocked valid cheap OTM setups.
-                # 2.0× still filters truly overpriced premium spikes (earnings, events).
+            if iv_rv > 1.5:
+                # Threshold 1.5×: options always carry some premium over RV (risk premium).
+                # Above 1.5× = overpriced — theta decay dominates, direction must be very strong
+                # to overcome premium erosion. Reverted from 2.0× (too permissive).
                 logging.warning(
-                    "chain: %s IV/RV=%.2f > 2.0 — options overpriced, skip (IV=%.1f%% RV=%.1f%%)",
+                    "chain: %s IV/RV=%.2f > 1.5 — options overpriced, skip (IV=%.1f%% RV=%.1f%%)",
                     underlying, iv_rv, avg_iv * 100, rv * 100,
                 )
                 return None

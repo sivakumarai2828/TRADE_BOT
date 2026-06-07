@@ -490,13 +490,13 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
     _now_et = datetime.now(timezone.utc) - timedelta(hours=4)
 
     # ── FILTER 0b: Entry time gate ────────────────────────────────────────────
-    # No new entries before 10:00 AM ET — IV highest, spreads widest at open.
-    # Optimal window: 10:00–11:30 AM ET (IV settled, trend direction clear).
+    # No new entries before 9:45 AM ET — IV settling, spreads tightening from 9:30 open.
+    # Optimal window: 9:45–11:30 AM ET (IV settling fast, direction established, best premiums).
     _et_hour = _now_et.hour
     _et_minute = _now_et.minute
     _et_minutes_total = _et_hour * 60 + _et_minute
-    if _et_minutes_total < 10 * 60:  # before 10:00 AM ET
-        state.add_log("Skipped", f"Entry time gate: {_et_hour:02d}:{_et_minute:02d} ET — no entries before 10:00 AM (high IV/spreads)", "neutral")
+    if _et_minutes_total < 9 * 60 + 45:  # before 9:45 AM ET
+        state.add_log("Skipped", f"Entry time gate: {_et_hour:02d}:{_et_minute:02d} ET — no entries before 9:45 AM", "neutral")
         return
 
     # ── FILTER 0c: VIX gate ───────────────────────────────────────────────────
@@ -642,11 +642,11 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             state.add_log("Skipped", f"{symbol}: balance ${balance:.0f} < cost ${contract['cost']:.0f}", "neutral")
             continue
 
-        # Buy 2 contracts when balance >= 2× cost AND remaining slots allow it
-        # 2 contracts → sell 1 at +100% (lock profit), let 1 ride to 3×
+        # Buy 2 contracts only when: balance allows AND slots available AND not on loss streak.
+        # On 2+ losses today: stick to 1 contract — protect capital, not time to double up.
         with state._lock:
             slots_left = MAX_POSITIONS - len(state.positions)
-        buy_qty = 2 if (balance >= contract["cost"] * 2 and slots_left >= 2) else 1
+        buy_qty = 2 if (balance >= contract["cost"] * 2 and slots_left >= 2 and losses < 2) else 1
         total_cost = contract["cost"] * buy_qty
 
         # Execute BUY

@@ -528,8 +528,13 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
             rule_signal = "HOLD"
         elif btc_regime == "neutral":
             if symbol not in ("BTC/USD", "BTC/USDT", "BTCUSD"):
-                logging.info("BTC regime NEUTRAL [%s] — altcoin BUY blocked (only BTC in choppy market)", symbol)
-                rule_signal = "HOLD"
+                if rsi >= 30.0:
+                    # Allow only extreme panic dips (RSI<30) on alts in neutral BTC market.
+                    # Mid-range alts in choppy BTC = noise entries. But RSI<30 panic = real reversal.
+                    logging.info("BTC regime NEUTRAL [%s] RSI=%.1f — altcoin BUY blocked (need RSI<30 extreme dip)", symbol, rsi)
+                    rule_signal = "HOLD"
+                else:
+                    logging.info("BTC regime NEUTRAL [%s] RSI=%.1f < 30 — extreme panic dip allowed in choppy market", symbol, rsi)
             elif rsi >= oversold:
                 # NEUTRAL + BTC + RSI >= oversold threshold → Setup C or B territory.
                 # Only Setup A (deep dip, RSI < oversold) allowed in ranging market.
@@ -591,8 +596,9 @@ def generate_signal(df: pd.DataFrame, config: BotConfig, symbol: str = None,
                 logging.info("MTF filter [%s]: 1h uptrend RSI=%.1f — BUY allowed", symbol, rsi)
 
     # Volume gate — Setup B breakout (RSI 50-65) requires real volume confirmation.
-    # Deep dip Setup A (RSI < oversold) allowed even on low volume (panic dips dry up volume).
-    if rule_signal == "BUY" and rsi >= oversold and avg_volume > 0:
+    # Deep dip Setup A (RSI < 35) allowed even on low volume — panic dips dry up volume first.
+    # Using hardcoded 35 floor so extreme dips always pass regardless of oversold setting.
+    if rule_signal == "BUY" and rsi >= 35 and avg_volume > 0:
         if volume < avg_volume * 1.5:
             logging.info("Volume gate [%s]: vol=%.0f < 1.5×avg=%.0f — breakout not confirmed, HOLD",
                          symbol, volume, avg_volume)

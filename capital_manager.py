@@ -203,6 +203,7 @@ class CapitalManager:
             for a in self._state.allocations.values():
                 a.daily_start = round(a.allocated, 2)
                 a.daily_pnl = 0.0
+                a.unrealized_pnl = 0.0   # clear yesterday's open position estimates
                 a.trades_today = 0
                 a.paused = False
                 a.paused_reason = ""
@@ -227,21 +228,25 @@ class CapitalManager:
             allocs = self._state.allocations
             total = self._total_balance()
 
-            # Compute performance score per bot (win_rate * avg_pnl)
+            # Compute performance score per bot — win rate × profit magnitude.
+            # Two bots with equal win rate but different profit sizes get different scores.
             scores: dict[str, float] = {}
             for name, a in allocs.items():
                 total_trades = a.wins_total + a.losses_total
-                score = a.win_rate if total_trades >= 5 else 50.0
+                if total_trades >= 5:
+                    pnl_factor = max(0.5, min(2.0, 1.0 + a.realized_pnl / 500))
+                    score = a.win_rate * pnl_factor
+                else:
+                    score = 50.0  # neutral score before enough data
                 scores[name] = score
 
-            # Adjust allocation weights proportionally to performance (±5% max shift)
+            # Adjust allocation weights proportionally to performance (±5% max shift, faster 0.5×).
             base = _DEFAULT_ALLOC.copy()
             total_score = sum(scores.values()) or 1.0
             for name in base:
                 perf_pct = scores[name] / total_score
                 base_pct = _DEFAULT_ALLOC[name]
-                # Shift up to ±5% from base allocation based on performance
-                shift = (perf_pct - base_pct) * 0.25
+                shift = (perf_pct - base_pct) * 0.50   # 0.5× for faster rebalancing
                 shift = max(-0.05, min(0.05, shift))
                 base[name] = round(base_pct + shift, 4)
 
