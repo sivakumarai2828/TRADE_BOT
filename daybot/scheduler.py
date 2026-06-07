@@ -226,6 +226,16 @@ def job_monthly_withdrawal() -> None:
         logging.exception("Scheduler: monthly withdrawal failed: %s", exc)
 
 
+def job_2week_monitor() -> None:
+    """4:00 PM ET Mon–Fri — take daily 2-week monitoring snapshot and send Telegram report."""
+    try:
+        from monitor_2week import print_report
+        print_report()
+        logging.info("Scheduler: 2-week monitor snapshot taken")
+    except Exception as exc:
+        logging.exception("Scheduler: 2-week monitor failed: %s", exc)
+
+
 def job_options_picker() -> None:
     """9:15 AM ET Mon–Fri — AI options suggestions from today's confirmed watchlist."""
     try:
@@ -453,6 +463,11 @@ def start_scheduler() -> None:
     _scheduler.add_job(
         job_monthly_withdrawal, CronTrigger(day=1, hour=0, minute=1, timezone="UTC"),
         id="monthly_withdrawal", name="Monthly profit withdrawal",
+    )
+    # 2-week performance monitor: 4:00 PM ET Mon–Fri (after market close)
+    _scheduler.add_job(
+        job_2week_monitor, CronTrigger(day_of_week="mon-fri", hour=16, minute=0, timezone=tz),
+        id="monitor_2week", name="2-week performance monitor",
     )
     # Weekly report: Sunday 8:00 AM ET
     _scheduler.add_job(

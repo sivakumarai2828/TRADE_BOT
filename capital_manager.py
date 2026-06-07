@@ -1,14 +1,14 @@
-"""Central Capital Manager — splits $5,000 across Day Bot, Options Bot, Crypto Bot.
+"""Central Capital Manager — tracks all 3 bots with mixed paper/real mode.
 
-Split (default):
-    Day Bot      20%  → $1,000   stable base, ORB + VWAP
-    Options Bot  50%  → $2,500   highest return engine (0DTE + swing)
-    Crypto Bot   30%  → $1,500   medium return with leverage
+2-Week Monitoring Setup:
+    Day Bot      $1,000   PAPER  — Alpaca paper trading, safe to run now
+    Options Bot  $1,000   PAPER  — Alpaca paper trading, safe to run now
+    Crypto Bot   REAL     REAL   — Live exchange, real money (use TRADE_SIZE_USDT wisely)
 
 Safety rules:
-    Global daily stop-loss  -15% of total ($750) → ALL bots pause until next day
+    Global daily stop-loss  -15% of real capital → ALL bots pause until next day
     Per-bot stop-loss        -20% of bot allocation → that bot pauses
-    Weekly rebalance         every Monday 9:00 AM ET — shift capital to better performers
+    Weekly rebalance         every Monday 9:00 AM ET — shift toward best performer
     Monthly withdrawal       withdraw 20% of profits when monthly PnL > 10%
 """
 from __future__ import annotations
@@ -41,6 +41,7 @@ class BotAllocation:
     name: str
     allocated: float          # current capital allocated to this bot
     initial: float            # starting capital for this bot
+    mode: str = "paper"       # "paper" or "real" — real money flag
     realized_pnl: float = 0.0        # cumulative closed-trade P&L
     unrealized_pnl: float = 0.0      # open position estimate
     daily_start: float = 0.0         # balance at start of today
@@ -92,18 +93,30 @@ class CapitalManager:
     # Initialization
     # ------------------------------------------------------------------
 
+    # Per-bot fixed amounts and modes (2-week monitoring setup)
+    _BOT_DEFAULTS = {
+        "day":     {"amount": 1000.0, "mode": "paper"},
+        "options": {"amount": 1000.0, "mode": "paper"},
+        "crypto":  {"amount": 0.0,    "mode": "real"},   # 0 = fetch real balance from exchange
+    }
+
     def _ensure_bots_initialized(self) -> None:
         """Create bot allocations if they don't exist yet."""
         allocs = self._state.allocations
         today = date.today().isoformat()
 
-        for bot, pct in _DEFAULT_ALLOC.items():
+        for bot, cfg in self._BOT_DEFAULTS.items():
             if bot not in allocs:
-                amount = round(self._state.total_capital * pct, 2)
+                # For real-money crypto, use CRYPTO_REAL_BALANCE env var or default to 0
+                if cfg["mode"] == "real":
+                    amount = float(os.getenv("CRYPTO_REAL_BALANCE", "0"))
+                else:
+                    amount = cfg["amount"]
                 allocs[bot] = BotAllocation(
                     name=bot,
                     allocated=amount,
                     initial=amount,
+                    mode=cfg["mode"],
                     daily_start=amount,
                 )
 
@@ -329,19 +342,20 @@ class CapitalManager:
             bots = {}
             for name, a in allocs.items():
                 bots[name] = {
-                    "allocated":     round(a.allocated, 2),
-                    "initial":       round(a.initial, 2),
-                    "balance":       round(a.balance, 2),
-                    "realized_pnl":  round(a.realized_pnl, 2),
+                    "allocated":      round(a.allocated, 2),
+                    "initial":        round(a.initial, 2),
+                    "balance":        round(a.balance, 2),
+                    "mode":           a.mode,
+                    "realized_pnl":   round(a.realized_pnl, 2),
                     "unrealized_pnl": round(a.unrealized_pnl, 2),
-                    "total_pnl":     round(a.total_pnl, 2),
-                    "daily_pnl":     round(a.daily_pnl, 2),
-                    "trades_today":  a.trades_today,
-                    "wins":          a.wins_total,
-                    "losses":        a.losses_total,
-                    "win_rate":      a.win_rate,
-                    "paused":        a.paused,
-                    "paused_reason": a.paused_reason,
+                    "total_pnl":      round(a.total_pnl, 2),
+                    "daily_pnl":      round(a.daily_pnl, 2),
+                    "trades_today":   a.trades_today,
+                    "wins":           a.wins_total,
+                    "losses":         a.losses_total,
+                    "win_rate":       a.win_rate,
+                    "paused":         a.paused,
+                    "paused_reason":  a.paused_reason,
                     "allocation_pct": round(a.allocated / total * 100, 1) if total > 0 else 0,
                 }
 
@@ -423,10 +437,12 @@ class CapitalManager:
             s.created_at            = data.get("created_at", "")
 
             for name, bd in data.get("allocations", {}).items():
+                default_mode = self._BOT_DEFAULTS.get(name, {}).get("mode", "paper")
                 s.allocations[name] = BotAllocation(
                     name          = name,
                     allocated     = float(bd.get("allocated", 0)),
                     initial       = float(bd.get("initial", 0)),
+                    mode          = bd.get("mode", default_mode),
                     realized_pnl  = float(bd.get("realized_pnl", 0)),
                     unrealized_pnl= float(bd.get("unrealized_pnl", 0)),
                     daily_start   = float(bd.get("daily_start", 0)),
@@ -465,6 +481,7 @@ class CapitalManager:
                     name: {
                         "allocated":      a.allocated,
                         "initial":        a.initial,
+                        "mode":           a.mode,
                         "realized_pnl":   a.realized_pnl,
                         "unrealized_pnl": a.unrealized_pnl,
                         "daily_start":    a.daily_start,
