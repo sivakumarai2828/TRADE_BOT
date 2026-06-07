@@ -202,6 +202,15 @@ def job_daily_reset() -> None:
     except Exception as exc:
         logging.exception("Scheduler: daily reset failed: %s", exc)
 
+    # Also reset capital manager daily counters — clears global halt and per-bot daily_pnl.
+    # Without this, capital_manager accumulates daily losses across days → false halt.
+    try:
+        from capital_manager import capital_manager
+        capital_manager.daily_reset()
+        logging.info("Scheduler: capital manager daily reset complete")
+    except Exception as exc:
+        logging.exception("Scheduler: capital manager daily reset failed: %s", exc)
+
 
 def job_capital_rebalance() -> None:
     """Monday 9:00 AM ET — rebalance capital allocation across all 3 bots."""
