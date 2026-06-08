@@ -32,9 +32,9 @@ class ModeParams:
 
 
 _PARAMS: dict[str, ModeParams] = {
-    "SAFE":       ModeParams(0.10, 0.015, 0.030, True,  "SAFE"),       # 10% = $100 on $1K — standard risk
-    "AGGRESSIVE": ModeParams(0.15, 0.015, 0.050, True,  "AGGRESSIVE"), # 15% = $150 — sized up on hot streak
-    "SHIELD":     ModeParams(0.03, 0.010, 0.020, False, "SHIELD"),     # 3%  = $30  — capital protection only
+    "SAFE":       ModeParams(0.25, 0.015, 0.030, True,  "SAFE"),       # 25% = $250 on $1K — meaningful trades
+    "AGGRESSIVE": ModeParams(0.33, 0.015, 0.050, True,  "AGGRESSIVE"), # 33% = $330 — hot streak sizing
+    "SHIELD":     ModeParams(0.08, 0.010, 0.020, False, "SHIELD"),     # 8%  = $80  — capital protection
 }
 
 

@@ -226,6 +226,19 @@ def _close_position(exchange, config: BotConfig, symbol: str, price: Decimal, re
 
     bot_state.record_trade_result(float(pnl))
     capital_manager.record_trade("crypto", float(pnl))
+    # Keep CRYPTO_REAL_BALANCE env var in sync so capital_manager restarts correctly.
+    try:
+        import os, re as _re
+        _env_path = os.path.join(os.path.dirname(__file__), ".env")
+        _new_bal = f"{bot_state.metrics.balance:.2f}"
+        with open(_env_path) as _f: _content = _f.read()
+        if "CRYPTO_REAL_BALANCE=" in _content:
+            _content = _re.sub(r"CRYPTO_REAL_BALANCE=.*", f"CRYPTO_REAL_BALANCE={_new_bal}", _content)
+        else:
+            _content += f"\nCRYPTO_REAL_BALANCE={_new_bal}\n"
+        with open(_env_path, "w") as _f: _f.write(_content)
+    except Exception as _e:
+        logging.debug("CRYPTO_REAL_BALANCE env update failed: %s", _e)
     # Variable cooldown by exit reason.
     # stop_loss: 4h — market moved against us; re-entering same direction too soon = revenge trade.
     # signal_sell: 2h — exited on overbought signal; price may re-test highs before pulling back.
