@@ -98,6 +98,9 @@ def _d(value) -> Decimal:
     return Decimal(str(value))
 
 
+MIN_ORDER_NOTIONAL = 1.0  # exchange minimum cost basis in quote currency (e.g. USDT)
+
+
 def _dynamic_trade_pct(balance: float, principal: float) -> float:
     """Return trade size % — 1-position design: 75% base for ~75% capital utilization.
 
