@@ -1,7 +1,7 @@
 {
   "total_capital": 2000.0,
-  "global_halted": true,
-  "global_halt_reason": "Global daily loss 15.9% ($320) exceeds 15% limit \u2014 all bots halted until tomorrow",
+  "global_halted": false,
+  "global_halt_reason": "",
   "daily_start_total": 2008.5,
   "monthly_start_total": 2000.0,
   "monthly_withdrawn": 0.0,

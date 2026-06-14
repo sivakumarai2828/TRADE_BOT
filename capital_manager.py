@@ -138,6 +138,16 @@ class CapitalManager:
         if not self._state.last_reset_date:
             self._state.last_reset_date = today
 
+        # Auto-heal missed midnight reset: if last_reset_date is stale (bot was
+        # down at midnight), clear any global halt so bots aren't stuck indefinitely.
+        if self._state.last_reset_date and self._state.last_reset_date != today:
+            logging.info(
+                "Startup: stale reset date %s → running daily_reset() to clear any stale halt",
+                self._state.last_reset_date,
+            )
+            self.daily_reset()
+            return  # daily_reset() calls _save() — skip the one below
+
         self._save()
 
     # ------------------------------------------------------------------
