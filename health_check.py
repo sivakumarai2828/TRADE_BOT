@@ -3,8 +3,21 @@
 Bot health checker — runs on VM via cron every 30 min.
 Sends Telegram alerts for logic anomalies (not just service crashes).
 """
-import json, os, sys, requests
+import json, os, sys, requests, time
 from datetime import datetime, timezone
+
+STATE_FILE = os.path.expanduser("~/health_check_state.json")
+
+def _load_state() -> dict:
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_state(state: dict):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
 BOT_URL = "http://localhost:8000"
 ENV_FILE = os.path.expanduser("~/TRADE_BOT/.env")
@@ -65,21 +78,25 @@ def check():
     except Exception as e:
         issues.append(f"⚡ Balance check failed: {e}")
 
-    # 3. Negative or zero stop loss on any position
+    # 3. Stop loss sanity checks
     for sym, pos in positions.items():
         sl = float(pos.get("stop_loss", 1))
         entry = float(pos.get("entry", 1))
+        current = float(pos.get("current", entry))
         if sl <= 0:
             issues.append(f"🚨 {sym}: NEGATIVE stop loss = {sl:.2f} (will never trigger!)")
-        elif sl > entry:
-            issues.append(f"🚨 {sym}: SL={sl:.2f} > entry={entry:.2f} (inverted!)")
-        # SL should be 0.5%-5% below entry
-        sl_pct = (entry - sl) / entry * 100
-        if sl_pct > 10:
-            issues.append(f"⚠️ {sym}: SL is {sl_pct:.0f}% below entry — very wide")
+        elif sl > current:
+            # SL above current price would trigger immediately — actual inversion
+            issues.append(f"🚨 {sym}: SL={sl:.2f} > current={current:.2f} (would trigger now!)")
+        # SL > entry but < current = trailing stop locking in profit — this is correct, skip
+        # Only flag if SL is more than 10% below entry (too wide, risk control)
+        if sl < entry:
+            sl_pct = (entry - sl) / entry * 100
+            if sl_pct > 10:
+                issues.append(f"⚠️ {sym}: SL is {sl_pct:.0f}% below entry — very wide")
 
     # 4. Persistent HOLD loop — only flag outside overnight hours (UTC 00-07)
-    # Phase 1 filters intentionally produce more HOLDs; overnight low vol is normal.
+    # Cooldown: max once per 2h to avoid spam when market is genuinely flat.
     from datetime import timezone as _tz
     _now_h = datetime.now(_tz.utc).hour
     _is_overnight = 0 <= _now_h < 7
@@ -88,7 +105,12 @@ def check():
         sig_logs = [l for l in recent if "Signal" in l.get("type", "")]
         all_hold = sig_logs and all("HOLD" in l.get("message", "") for l in sig_logs)
         if len(sig_logs) >= 20 and all_hold:
-            issues.append(f"⏸ Stuck in HOLD: last {len(sig_logs)} signals all HOLD — check RSI/volume/MTF filter")
+            state = _load_state()
+            last_hold_alert = state.get("last_hold_alert_ts", 0)
+            if time.time() - last_hold_alert >= 7200:  # 2h cooldown
+                issues.append(f"⏸ Stuck in HOLD: last {len(sig_logs)} signals all HOLD — check RSI/volume/MTF filter")
+                state["last_hold_alert_ts"] = time.time()
+                _save_state(state)
 
     # 5. Daily loss halt triggered
     if m.get("daily_loss_halted"):
