@@ -34,7 +34,7 @@ function buildCards(metrics) {
     },
     {
       label: "Total PnL",
-      value: `${pnlPositive ? "+" : ""}$${fmt(Math.abs(metrics.pnl))}`,
+      value: `${pnlPositive ? "+" : "-"}$${fmt(Math.abs(metrics.pnl))}`,
       detail: `${pnlPositive ? "+" : ""}${fmt(metrics.pnl_pct)}% all time`,
       tone: pnlPositive ? "positive" : "negative",
       icon: ArrowUpRight,
