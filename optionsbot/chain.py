@@ -200,13 +200,29 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
         # 20 was too narrow: missed 5-12% OTM strikes where cheap premiums live
         nearest = df.nsmallest(40, "dist")
 
+        def _safe_float(val, default=0.0) -> float:
+            try:
+                v = float(val or default)
+                return v if v == v else default  # NaN check: NaN != NaN
+            except (TypeError, ValueError):
+                return default
+
+        def _safe_int(val, default=0) -> int:
+            try:
+                v = float(val or default)
+                return int(v) if v == v else default  # NaN check
+            except (TypeError, ValueError):
+                return default
+
         rows = []
         for _, row in nearest.iterrows():
-            bid = float(row.get("bid", 0) or 0)
-            ask = float(row.get("ask", 0) or 0)
+            bid = _safe_float(row.get("bid", 0))
+            ask = _safe_float(row.get("ask", 0))
             mid = (bid + ask) / 2 if bid > 0 and ask > 0 else 0.0
             spread_pct = (ask - bid) / mid if mid > 0 else 1.0
-            strike = float(row["strike"])
+            strike = _safe_float(row.get("strike", 0))
+            if strike <= 0:
+                continue
 
             # Calculate OTM %: positive = OTM, negative = ITM
             if option_type == "call":
@@ -214,7 +230,7 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
             else:
                 otm_pct = (current_price - strike) / current_price * 100
 
-            delta_raw = float(row.get("delta", 0) or 0)
+            delta_raw = _safe_float(row.get("delta", 0))
             rows.append({
                 "strike": strike,
                 "expiry": target,
@@ -222,9 +238,9 @@ def _fetch_chain(underlying: str, option_type: str) -> list[dict]:
                 "ask": round(ask, 2),
                 "mid": round(mid, 2),
                 "spread_pct": round(spread_pct, 3),
-                "open_interest": int(row.get("openInterest", 0) or 0),
-                "iv": round(float(row.get("impliedVolatility", 0) or 0), 3),
-                "dist": float(row["dist"]),
+                "open_interest": _safe_int(row.get("openInterest", 0)),
+                "iv": round(_safe_float(row.get("impliedVolatility", 0)), 3),
+                "dist": _safe_float(row.get("dist", 0)),
                 "otm_pct": round(otm_pct, 2),
                 "delta": round(abs(delta_raw), 3),  # absolute delta 0→1
             })

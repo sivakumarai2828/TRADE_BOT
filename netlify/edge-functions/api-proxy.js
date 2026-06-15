@@ -1,4 +1,4 @@
-const VM_BASE = "http://104.155.150.69:8000";
+const VM_BASE = "http://34.171.182.46:8000";
 
 export default async (request) => {
   const url = new URL(request.url);
