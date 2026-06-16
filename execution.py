@@ -407,7 +407,9 @@ def execute_trade(exchange, config: BotConfig, symbol: str, signal: str, price: 
         pct_stop = (current_price * (1 - Decimal(str(_sl_pct)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         if atr > 0:
             atr_stop = (current_price - _d(str(round(atr * 2, 8)))).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
-            stop_loss = min(atr_stop, pct_stop)  # wider stop wins (lower price = more breathing room)
+            # Cap ATR stop at pct_stop — ATR can only tighten, never widen beyond configured max loss.
+            # Old min() gave the wider (lower) stop, letting volatile ATR blow losses to 4-6% on SOL/BTC.
+            stop_loss = max(atr_stop, pct_stop)
         else:
             stop_loss = pct_stop
         take_profit = (current_price * (1 + tp_pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
