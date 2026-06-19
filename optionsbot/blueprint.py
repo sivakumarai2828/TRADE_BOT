@@ -585,6 +585,19 @@ def _run_cycle(api_key: str, secret_key: str, paper: bool) -> None:
             state.add_log("Skipped", f"{symbol}: market bullish — no puts", "neutral")
             continue
 
+        # Evening regime gate: trending_down requires high conviction for calls.
+        # medium-conviction "oversold bounce" plays in a downtrend have 0% hit rate.
+        if _evening_active and action == "BUY":
+            _eve_regime = state.evening_regime or ""
+            _conv = state.evening_conviction.get(symbol, "medium")
+            if _eve_regime == "trending_down" and _conv != "high":
+                state.add_log(
+                    "Skipped",
+                    f"{symbol}: trending_down regime + conviction={_conv} — calls need high conviction",
+                    "neutral",
+                )
+                continue
+
         # FILTER 2: Earnings avoid
         if _has_earnings_soon(symbol):
             state.add_log("Skipped", f"{symbol}: earnings within {EARNINGS_AVOID_DAYS}d — IV crush risk", "neutral")
