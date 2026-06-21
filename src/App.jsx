@@ -13,6 +13,7 @@ import SignalPanel from "./components/SignalPanel.jsx";
 import Topbar from "./components/Topbar.jsx";
 import DayBotPage from "./DayBotPage.jsx";
 import OptionsBotPage from "./OptionsBotPage.jsx";
+import LiveTradingPage from "./LiveTradingPage.jsx";
 
 const POLL_MS = 3_000;
 
@@ -99,6 +100,8 @@ export default function App() {
           <DayBotPage />
         ) : activePage === "optionsbot" ? (
           <OptionsBotPage />
+        ) : activePage === "livetrading" ? (
+          <LiveTradingPage />
         ) : (
           <>
             {apiError && (

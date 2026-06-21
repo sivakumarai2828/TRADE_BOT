@@ -131,6 +131,9 @@ export const stopOptionsBot = () => request("/optionsbot/stop", { method: "POST"
 /** Open user-logged manual positions (Robinhood stocks + options). */
 export const fetchUserPositions = () => request("/daybot/user-positions");
 
+/** Open positions enriched with live price + unrealized PnL + weekly summary. */
+export const fetchUserPositionsLive = () => request("/daybot/user-positions/live");
+
 /**
  * Log a new user manual position.
  * @param {object} position - {symbol, side, asset_type, qty, entry_price, stop_price?, target_price?, notes?, option_type?, strike?, expiry?, underlying_stop?}

@@ -6,13 +6,15 @@ import {
   Settings,
   TrendingUp,
   WalletCards,
+  Wallet,
   Zap,
 } from "lucide-react";
 
 const navItems = [
   { label: "Crypto Bot", icon: Gauge, page: "crypto" },
   { label: "Day Bot", icon: TrendingUp, page: "daybot" },
-  { label: "Options Bot", icon: Zap, page: "optionsbot", badge: "NEW" },
+  { label: "Options Bot", icon: Zap, page: "optionsbot" },
+  { label: "Live Trading", icon: Wallet, page: "livetrading", badge: "NEW" },
   { label: "Trading Bot", icon: Bot, page: null },
   { label: "Signals", icon: Activity, page: null },
   { label: "Positions", icon: WalletCards, page: null },

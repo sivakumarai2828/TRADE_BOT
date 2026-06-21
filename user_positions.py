@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -110,6 +110,122 @@ def get_all_positions(limit: int = 50) -> list[dict]:
     except Exception as exc:
         logging.warning("user_positions fetch_all failed: %s", exc)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Live enrichment — current price + unrealized PnL for the dashboard
+# ---------------------------------------------------------------------------
+
+def _parse_dt(value) -> Optional[datetime]:
+    """Parse an ISO timestamp from Supabase into an aware datetime (UTC)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def enrich_open_positions(api_key: str = "", secret_key: str = "") -> list[dict]:
+    """Open positions decorated with live price + unrealized PnL + progress.
+
+    Each row gains: current_price, unrealized_pnl, unrealized_pnl_pct,
+    days_held, pct_to_target, pct_to_stop. Falls back gracefully when a
+    price can't be fetched (current_price stays None).
+    """
+    positions = get_open_positions()
+    if not positions:
+        return []
+
+    india_syms = list({p["symbol"] for p in positions if p["symbol"].endswith(".NS")})
+    us_syms = list({p["symbol"] for p in positions if not p["symbol"].endswith(".NS")})
+
+    prices: dict[str, float] = {}
+    if us_syms and api_key:
+        prices.update(_fetch_prices(us_syms, api_key, secret_key))
+    if india_syms:
+        prices.update(_fetch_india_prices(india_syms))
+
+    now = datetime.now(timezone.utc)
+    out: list[dict] = []
+    for pos in positions:
+        row = dict(pos)
+        sym = pos["symbol"]
+        price = prices.get(sym)
+        entry = float(pos.get("entry_price") or 0)
+        qty = float(pos.get("qty") or 0)
+        side = (pos.get("side") or "BUY").upper()
+        stop = pos.get("stop_price")
+        target = pos.get("target_price")
+
+        row["current_price"] = price
+        if price is not None and entry > 0:
+            direction = 1 if side == "BUY" else -1
+            row["unrealized_pnl"] = round((price - entry) * qty * direction, 2)
+            row["unrealized_pnl_pct"] = round((price - entry) / entry * 100 * direction, 2)
+            # progress 0–100% from entry toward target / stop
+            if target and target != entry:
+                row["pct_to_target"] = max(0, min(100, round(
+                    (price - entry) / (target - entry) * 100, 1)))
+            if stop and stop != entry:
+                row["pct_to_stop"] = max(0, min(100, round(
+                    (entry - price) / (entry - stop) * 100, 1)))
+        else:
+            row["unrealized_pnl"] = None
+            row["unrealized_pnl_pct"] = None
+
+        created = _parse_dt(pos.get("created_at"))
+        row["days_held"] = (now - created).days if created else None
+        out.append(row)
+    return out
+
+
+def weekly_summary(api_key: str = "", secret_key: str = "") -> dict:
+    """Realized PnL since Monday + live unrealized PnL of open positions."""
+    now = datetime.now(timezone.utc)
+    monday = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+
+    c = _client()
+    realized = 0.0
+    closed_count = 0
+    wins = 0
+    if c:
+        try:
+            res = (c.table("user_positions")
+                   .select("*")
+                   .eq("status", "closed")
+                   .gte("closed_at", monday.isoformat())
+                   .execute())
+            for r in res.data or []:
+                entry = float(r.get("entry_price") or 0)
+                exit_p = float(r.get("exit_price") or 0)
+                qty = float(r.get("qty") or 0)
+                side = (r.get("side") or "BUY").upper()
+                direction = 1 if side == "BUY" else -1
+                pnl = (exit_p - entry) * qty * direction
+                realized += pnl
+                closed_count += 1
+                if pnl > 0:
+                    wins += 1
+        except Exception as exc:
+            logging.warning("weekly_summary realized fetch failed: %s", exc)
+
+    open_live = enrich_open_positions(api_key, secret_key)
+    unrealized = sum(p.get("unrealized_pnl") or 0 for p in open_live)
+
+    return {
+        "week_start": monday.date().isoformat(),
+        "realized_pnl": round(realized, 2),
+        "unrealized_pnl": round(unrealized, 2),
+        "total_pnl": round(realized + unrealized, 2),
+        "closed_trades": closed_count,
+        "wins": wins,
+        "open_count": len(open_live),
+    }
 
 
 # ---------------------------------------------------------------------------

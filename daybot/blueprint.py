@@ -1277,6 +1277,19 @@ def user_positions_get():
     return jsonify({"positions": positions})
 
 
+@daybot_bp.get("/user-positions/live")
+def user_positions_live():
+    """Open positions enriched with live price + unrealized PnL + weekly summary."""
+    import os
+    from user_positions import enrich_open_positions, weekly_summary
+    key = os.getenv("EXCHANGE_API_KEY", "")
+    secret = os.getenv("EXCHANGE_API_SECRET", "")
+    return jsonify({
+        "positions": enrich_open_positions(key, secret),
+        "summary": weekly_summary(key, secret),
+    })
+
+
 @daybot_bp.post("/user-positions")
 def user_positions_post():
     """Log a new user manual position."""
