@@ -172,7 +172,22 @@ class CapitalManager:
         """True if global halt is active, or if the specific bot is paused."""
         with self._lock:
             if self._state.global_halted:
-                return True
+                # Re-evaluate against CURRENT total rather than staying latched all day.
+                # A transient unrealized swing (e.g. a high-gamma options position) could
+                # trip the halt then recover — without this, day+crypto stay frozen until
+                # midnight on a loss that no longer exists. Auto-clear once recovered.
+                if self._state.daily_start_total > 0:
+                    total = self._total_balance()
+                    loss_pct = (self._state.daily_start_total - total) / self._state.daily_start_total
+                    if loss_pct < GLOBAL_DAILY_STOP_PCT:
+                        self._state.global_halted = False
+                        self._state.global_halt_reason = ""
+                        logging.info("Global halt auto-cleared — loss recovered to %.1f%%", loss_pct * 100)
+                        self._save()
+                    else:
+                        return True
+                else:
+                    return True
             if bot:
                 a = self._state.allocations.get(bot)
                 return bool(a and a.paused)
