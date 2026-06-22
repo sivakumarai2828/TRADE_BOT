@@ -54,7 +54,10 @@ class BotAllocation:
 
     @property
     def balance(self) -> float:
-        return self.allocated + self.realized_pnl
+        # allocated is already maintained as initial + realized_pnl (see record_trade),
+        # so balance == allocated. Adding realized_pnl again double-counted every gain/loss
+        # (balance = initial + 2*realized_pnl), distorting daily/global halt math.
+        return self.allocated
 
     @property
     def win_rate(self) -> float:

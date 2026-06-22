@@ -102,7 +102,13 @@ class OptionsState:
             m.win_rate           = float(data.get("win_rate", 0.0))
             m.monitor_start_date = data.get("monitor_start_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
             m.last_trade_date    = data.get("last_trade_date", "")
-            m.daily_start_balance = m.balance  # reset daily baseline to current balance
+            # Restore today's daily baseline so a mid-day restart doesn't defeat the
+            # daily-loss halt. Only reset the baseline to current balance on a NEW day.
+            _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if m.last_trade_date == _today and "daily_start_balance" in data:
+                m.daily_start_balance = float(data["daily_start_balance"])
+            else:
+                m.daily_start_balance = m.balance
             # ── Restore evening pre-analysis (persisted so restarts don't lose Friday's plan) ──
             self.evening_approved       = data.get("evening_approved", [])
             self.evening_direction      = data.get("evening_direction", {})
@@ -168,6 +174,7 @@ class OptionsState:
             data = {
                 "balance":            m.balance,
                 "peak_balance":       m.peak_balance,
+                "daily_start_balance": m.daily_start_balance,
                 "total_trades":       m.total_trades,
                 "total_wins":         m.total_wins,
                 "total_losses":       m.total_losses,

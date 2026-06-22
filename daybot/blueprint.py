@@ -982,6 +982,7 @@ def start():
         max_concurrent=_config.max_concurrent_trades,
         position_size_pct=_config.position_size_pct,
         max_daily_loss_pct=_config.max_daily_loss_pct,
+        daily_start_value=day_state.metrics.daily_start_value,
     )
     _logger = TradeLogger(day_state)
 
@@ -1033,6 +1034,7 @@ def _start_bot_internal() -> None:
         max_concurrent=_config.max_concurrent_trades,
         position_size_pct=_config.position_size_pct,
         max_daily_loss_pct=_config.max_daily_loss_pct,
+        daily_start_value=day_state.metrics.daily_start_value,
     )
     _logger = TradeLogger(day_state)
 

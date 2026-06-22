@@ -623,8 +623,11 @@ def reconcile_positions(exchange, config: BotConfig) -> None:
             current = float(ap.current_price or entry)
             pnl = float(ap.unrealized_pl or 0)
             pnl_pct = (current - entry) / entry * 100 if entry > 0 else 0.0
-            sl = round(entry * (1 - float(config.stop_loss_pct) / 100), 2)
-            tp = round(entry * (1 + float(config.take_profit_pct) / 100), 2)
+            # Use ACTIVE settings (percent form, e.g. 2.0 = 2%) like the live-open path —
+            # config.stop_loss_pct is a fraction (0.02); the old `/ 100` on it produced a
+            # 0.02% stop (effectively no stop) on imported positions.
+            sl = round(entry * (1 - float(bot_state.settings.stop_loss_pct) / 100), 2)
+            tp = round(entry * (1 + float(bot_state.settings.take_profit_pct) / 100), 2)
             imported = PositionData(
                 symbol=ccxt_sym,
                 amount=float(ap.qty),

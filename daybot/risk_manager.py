@@ -11,6 +11,7 @@ class RiskManager:
         max_concurrent: int = 2,
         position_size_pct: float = 0.05,
         max_daily_loss_pct: float = 0.03,
+        daily_start_value: float = 0.0,
     ) -> None:
         self.max_trades_per_day = max_trades_per_day
         self.max_concurrent = max_concurrent
@@ -18,7 +19,10 @@ class RiskManager:
         self.max_daily_loss_pct = max_daily_loss_pct
 
         self._trades_today: int = 0
-        self._daily_start_value: float = 0.0
+        # Seed from today's reconstructed baseline so a mid-day restart keeps the
+        # daily-loss halt armed (was hardcoded 0.0 → check_daily_loss returned early
+        # → halt silently disabled until the next calendar day).
+        self._daily_start_value: float = daily_start_value
         self._daily_loss_halted: bool = False
         self._active_symbols: set[str] = set()
         self._date: date = date.today()

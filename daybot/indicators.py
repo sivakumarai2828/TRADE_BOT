@@ -13,8 +13,11 @@ def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
     avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0, float("inf"))
-    return 100 - (100 / (1 + rs))
+    # avg_loss=0 (no down bars) → rs=NaN → RSI=100 (a no-loss period is max-overbought,
+    # NOT oversold). Old code used inf which made rs=0 → RSI=0 = false oversold BUY signal.
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(100)
 
 
 def get_volume_avg(volumes: pd.Series, period: int = 20) -> float:
