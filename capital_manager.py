@@ -303,8 +303,14 @@ class CapitalManager:
                 summary["before"][name] = round(old, 2)
                 summary["after"][name] = new
                 a.allocated = new
-                a.initial = new   # reset baseline for next period
+                a.initial = new        # reset baseline for next period
+                a.realized_pnl = 0.0   # baseline reset → realized restarts from the new allocation
+                a.daily_start = new    # redistribution is NOT a daily loss — rebaseline per-bot
 
+            # Rebalancing only MOVES capital between bots; total is unchanged, so it must
+            # not register as a daily loss. Rebaseline the global daily start to the post-
+            # rebalance total (otherwise a bot losing allocation looks like a loss → false halt).
+            self._state.daily_start_total = round(total, 2)
             self._state.last_rebalance_date = today
             logging.info("Capital rebalanced: %s", summary)
 
