@@ -62,12 +62,15 @@ function PicksPanel({ picks, regime }) {
   }
   return (
     <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-1 flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-widest text-neutral-500">
-          Today's Picks
+          Suggestions — ideas to consider (NOT owned)
         </h3>
         {regime && <Badge color={regime === "trending_up" ? "positive" : regime === "trending_down" ? "negative" : "neutral"}>{regime}</Badge>}
       </div>
+      <p className="mb-3 text-[11px] text-neutral-600">
+        Engine recommendations only. You don't hold these. Your real positions are in “Open Positions” below.
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -356,7 +359,7 @@ export default function LiveTradingPage() {
 
       <div>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-500">
-          Open Positions
+          Open Positions — what you actually own
         </h3>
         <OpenPositions positions={live?.positions} onClose={close} />
       </div>
