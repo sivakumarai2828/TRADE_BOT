@@ -537,20 +537,21 @@ def _run_cycle() -> None:
             if _pos and _pos.tp1 > 0:
                 _price = data["price"]
                 if not _pos.tp1_hit and _price >= _pos.tp1:
-                    # Fractional-safe half: sell 50% of remaining qty
-                    _half = round(_pos.qty * 0.5, 6) if _pos.qty > 0.001 else _pos.qty
+                    # Sell 1/3 at TP1 (now 2:1 R:R) — let more size run to TP2
+                    _third = round(_pos.qty / 3, 6) if _pos.qty > 0.001 else _pos.qty
                     try:
-                        _executor.place_sell_order(symbol, _half)
-                        _ppnl = round((_price - _pos.entry_price) * _half, 2)
+                        _executor.place_sell_order(symbol, _third)
+                        _ppnl = round((_price - _pos.entry_price) * _third, 2)
+                        _half_risk_sl = round(_pos.entry_price - 0.5 * (_pos.entry_price - _pos.stop_loss), 2)
                         with day_state._lock:
                             if symbol in day_state.positions:
                                 _p = day_state.positions[symbol]
                                 _p.tp1_hit = True
-                                _p.qty = round(_p.qty - _half, 6)
-                                _p.stop_loss = round(_p.entry_price, 2)
+                                _p.qty = round(_p.qty - _third, 6)
+                                _p.stop_loss = _half_risk_sl  # half-risk, not full breakeven — avoids noise whipsaw
                                 _p.highest_price = _price
                         day_state.add_log(
-                            "TP1", f"{symbol}: sold {_half}sh @ ${_price:.2f}, SL→BE, pnl=${_ppnl:.2f}", "positive"
+                            "TP1", f"{symbol}: sold {_third}sh @ ${_price:.2f}, SL→${_half_risk_sl:.2f}, pnl=${_ppnl:.2f}", "positive"
                         )
                     except Exception as _exc:
                         day_state.add_log("Error", f"TP1 sell {symbol} failed: {_exc}", "negative")
@@ -560,7 +561,7 @@ def _run_cycle() -> None:
                         if symbol in day_state.positions:
                             _p = day_state.positions[symbol]
                             _p.highest_price = max(_p.highest_price, _price)
-                            _new_sl = round(_p.highest_price - 1.5 * _p.atr, 2)
+                            _new_sl = round(_p.highest_price - 2.5 * _p.atr, 2)  # wider trail — let winners run
                             if _new_sl > _p.stop_loss:
                                 _p.stop_loss = _new_sl
 
@@ -696,6 +697,11 @@ def _run_cycle() -> None:
 
         # --- BUY ---
         if sig.action == "BUY":
+            # Stopped out earlier today — no revenge re-entry on the same symbol/session
+            if symbol in day_state.stopped_out_today:
+                day_state.add_log("Skipped", f"{symbol}: stopped out earlier today — no re-entry", "neutral")
+                continue
+
             # Per-symbol max 2 trades/day — prevents overtrading same declining stock
             sym_trades = getattr(_run_cycle, "_symbol_trades", {})
             if sym_trades.get(symbol, 0) >= 2:
@@ -803,7 +809,7 @@ def _run_cycle() -> None:
                 if use_orb and orb_high and orb_low:
                     _orb_range = orb_high - orb_low
                     sl = round(orb_low, 2)
-                    tp1_price = round(orb_high + 1 * _orb_range, 2)  # TP1: 1× range above breakout
+                    tp1_price = round(orb_high + 2 * _orb_range, 2)  # TP1: 2× range above breakout (2:1 R:R)
                     tp = round(orb_high + 2 * _orb_range, 2)         # TP2: 2× range (full target)
                     entry_atr = 0.0
                     _orb_fired.add(symbol)
@@ -821,7 +827,7 @@ def _run_cycle() -> None:
                     tp_atr = round(sig.price + 3.0 * risk, 2)
                     tp_min_rr = round(sig.price + 2.0 * sl_distance, 2)  # 2:1 floor
                     tp = max(tp_atr, tp_min_rr)
-                    tp1_price = round(sig.price + 1.0 * sl_distance, 2)  # TP1 at 1:1
+                    tp1_price = round(sig.price + 2.0 * sl_distance, 2)  # TP1 at 2:1 — let winners run further before de-risking
                 pos = DayPosition(
                     symbol=symbol, qty=qty, entry_price=sig.price,
                     current_price=sig.price, stop_loss=sl, take_profit=tp,
@@ -873,6 +879,7 @@ def _bot_loop() -> None:
     _run_cycle._no_trade_alerted = False  # reset no-trade alert for new day
     _run_cycle._watchlist_date = None     # force fresh watchlist build each day
     _run_cycle._symbol_trades = {}        # per-symbol trade count reset each day
+    day_state.stopped_out_today = set()   # stop-loss cooldown reset each day
     _orb_fired = set()                    # reset ORB entries for new trading day
     if hasattr(_run_cycle, "_window_entry_time"):
         del _run_cycle._window_entry_time

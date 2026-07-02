@@ -76,6 +76,7 @@ class DayBotState:
         self.running: bool = False
         self.positions: dict[str, DayPosition] = {}
         self.signals: dict[str, DaySignal] = {}
+        self.stopped_out_today: set[str] = set()  # symbols stopped out — blocked from re-entry until next day
         self.watchlist: list[str] = []
         self.logs: list[DayLogEntry] = []
         self.metrics: DayMetrics = DayMetrics()

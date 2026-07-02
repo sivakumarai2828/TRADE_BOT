@@ -70,6 +70,8 @@ class PositionMonitor:
                     m.daily_pnl_pct = round(m.daily_pnl / m.daily_start_value * 100, 2)
             self._risk.deregister_trade(symbol)
             self._state.record_trade_result(pnl)
+            if reason == "stop_loss":
+                self._state.stopped_out_today.add(symbol)  # block re-entry rest of session
             db_save_trade(
                 symbol=symbol, entry_price=pos.entry_price,
                 exit_price=pos.current_price, qty=pos.qty,
@@ -103,28 +105,31 @@ class PositionMonitor:
                              pos.tp1 if pos.tp1 > 0 else 0.0,
                              pos.take_profit, pnl_pct)
 
-                # TP1 partial close — sell 50% at TP1, move SL → breakeven, let 50% run to TP2.
+                # TP1 partial close — sell 1/3 at TP1 (now 2:1 R:R), SL → half-risk (not full
+                # breakeven, avoids getting whipsawed out at breakeven by normal noise), let
+                # the rest run to TP2.
                 if not pos.tp1_hit and pos.tp1 > 0 and price >= pos.tp1:
-                    half_qty = round(pos.qty / 2, 6)
-                    if half_qty >= 0.001:
+                    third_qty = round(pos.qty / 3, 6)
+                    if third_qty >= 0.001:
                         try:
-                            self._executor.place_sell_order(symbol, half_qty)
-                            partial_pnl = (price - pos.entry_price) * half_qty
+                            self._executor.place_sell_order(symbol, third_qty)
+                            partial_pnl = (price - pos.entry_price) * third_qty
                             partial_pct = (price - pos.entry_price) / pos.entry_price * 100
+                            half_risk_sl = round(pos.entry_price - 0.5 * (pos.entry_price - pos.stop_loss), 2)
                             with self._state._lock:
                                 if symbol in self._state.positions:
-                                    self._state.positions[symbol].qty -= half_qty
+                                    self._state.positions[symbol].qty -= third_qty
                                     self._state.positions[symbol].tp1_hit = True
-                                    self._state.positions[symbol].stop_loss = pos.entry_price  # breakeven
+                                    self._state.positions[symbol].stop_loss = half_risk_sl
                                     self._state.metrics.daily_pnl += round(partial_pnl, 2)
                             self._state.add_log(
                                 "TP1 hit 🎯",
-                                f"{symbol} +{partial_pct:.1f}% — sold 50% @ ${price:.2f} "
-                                f"| +${partial_pnl:.2f} locked | SL → breakeven",
+                                f"{symbol} +{partial_pct:.1f}% — sold 1/3 @ ${price:.2f} "
+                                f"| +${partial_pnl:.2f} locked | SL → ${half_risk_sl:.2f} (half-risk)",
                                 "positive",
                             )
-                            logging.info("TP1 partial %s: %.4f units @ $%.2f | +$%.2f | SL→breakeven",
-                                         symbol, half_qty, price, partial_pnl)
+                            logging.info("TP1 partial %s: %.4f units @ $%.2f | +$%.2f | SL→%.2f",
+                                         symbol, third_qty, price, partial_pnl, half_risk_sl)
                         except Exception as exc:
                             logging.error("TP1 partial sell failed [%s]: %s", symbol, exc)
 
