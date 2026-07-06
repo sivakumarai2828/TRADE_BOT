@@ -35,6 +35,25 @@ def index():
     return send_from_directory(BASE, "dashboard.html")
 
 
+_health_cache = {"checked": 0.0, "alive": False}
+
+
+@app.route("/health")
+def health():
+    """Uptime-monitor endpoint: 200 while the trading bot heartbeat is fresh,
+    503 if the bot has been silent for 2+ minutes. Cached 30s because external
+    monitors poll every ~15s and each check hits the journal backend."""
+    now = time.time()
+    if now - _health_cache["checked"] > 30:
+        try:
+            hb = float(_journal().kv_get("heartbeat", "0") or 0)
+            _health_cache["alive"] = (now - hb) < 120
+        except Exception:
+            _health_cache["alive"] = False
+        _health_cache["checked"] = now
+    return jsonify({"ok": _health_cache["alive"]}), (200 if _health_cache["alive"] else 503)
+
+
 @app.route("/api/summary")
 def summary():
     j = _journal()
