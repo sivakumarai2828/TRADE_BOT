@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Trade Bot V2 (Claude portfolio manager)
+After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+User=__USER__
+WorkingDirectory=/home/__USER__/TRADE_BOT_V2
+EnvironmentFile=/home/__USER__/TRADE_BOT_V2/.env
+Environment=TZ=UTC
+ExecStart=/home/__USER__/venv311/bin/python3 main.py
+Restart=always
+RestartSec=15
+MemoryMax=750M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

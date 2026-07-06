@@ -1,0 +1,7 @@
+.env
+*.db
+__pycache__/
+*.pyc
+.vercel/
+node_modules/
+TRADE_BOT_V1_archive_*.tar.gz

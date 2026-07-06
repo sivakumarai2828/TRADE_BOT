@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Trading Bot V2 — Dashboard</title>
+<style>
+  :root { --bg:#0b0f14; --panel:#11161d; --card:#151c25; --border:#232b36; --text:#e6edf3;
+          --dim:#7d8895; --green:#22c55e; --green-dim:#22c55e22; --red:#ef4444; --red-dim:#ef444422;
+          --amber:#eab308; --amber-dim:#eab30822; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; display:flex; min-height:100vh; }
+  .side { width:230px; background:var(--panel); border-right:1px solid var(--border); padding:20px 14px; display:flex; flex-direction:column; gap:4px; flex-shrink:0; }
+  .brand { display:flex; gap:10px; align-items:center; margin-bottom:22px; }
+  .brand .logo { width:38px; height:38px; border-radius:9px; background:var(--green-dim); display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
+  .brand .t1 { font-size:.72rem; color:var(--dim); }
+  .brand .t2 { font-size:1rem; font-weight:700; }
+  .nav { display:flex; gap:10px; align-items:center; padding:11px 12px; border-radius:9px; color:var(--dim); cursor:pointer; font-size:.9rem; }
+  .nav:hover { background:#ffffff0a; color:var(--text); }
+  .nav.on { background:var(--green-dim); color:var(--green); font-weight:600; }
+  .side .spacer { flex:1; }
+  .sidebox { border:1px solid var(--border); border-radius:9px; padding:12px; margin-top:8px; }
+  .sidebox .l { font-size:.68rem; color:var(--dim); letter-spacing:.08em; text-transform:uppercase; margin-bottom:4px; }
+  .sidebox .v { font-size:.86rem; font-weight:600; }
+  .sidebox.mode { background:var(--amber-dim); border-color:#eab30833; }
+  .sidebox.mode .v { color:var(--amber); }
+  .sidebox.mode .d { font-size:.72rem; color:var(--dim); margin-top:3px; }
+  .main { flex:1; padding:22px 28px; min-width:0; }
+  .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:10px; }
+  .head .bc { font-size:.72rem; color:var(--dim); letter-spacing:.12em; }
+  .head h1 { font-size:1.5rem; }
+  .pills { display:flex; gap:10px; align-items:center; }
+  .pill { font-size:.8rem; padding:7px 14px; border-radius:9px; border:1px solid var(--border); display:flex; gap:7px; align-items:center; }
+  .pill.ok { background:var(--green-dim); color:var(--green); border-color:#22c55e33; }
+  .pill.bad { background:var(--red-dim); color:var(--red); border-color:#ef444433; }
+  .dot { width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .who { font-size:.85rem; padding:7px 14px; border-radius:9px; border:1px solid var(--border); color:var(--dim); }
+  .subhead { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:14px; }
+  .subhead h2 { font-size:1.15rem; }
+  .subhead .d { color:var(--dim); font-size:.8rem; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:18px; }
+  .tab { padding:10px 16px; font-size:.87rem; color:var(--dim); cursor:pointer; border-bottom:2px solid transparent; }
+  .tab.on { color:var(--green); border-bottom-color:var(--green); font-weight:600; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:18px; }
+  .stat { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .stat .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .stat .lbl { font-size:.7rem; color:var(--dim); letter-spacing:.1em; text-transform:uppercase; }
+  .stat .ico { width:34px; height:34px; border-radius:8px; background:var(--green-dim); display:flex; align-items:center; justify-content:center; }
+  .stat .val { font-size:1.5rem; font-weight:700; }
+  .stat .sub { font-size:.76rem; color:var(--dim); margin-top:4px; }
+  .row2 { display:grid; grid-template-columns:1.6fr 1fr; gap:14px; margin-bottom:14px; }
+  @media (max-width:1000px){ .row2 { grid-template-columns:1fr; } .side{display:none;} }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .panel h3 { font-size:.72rem; color:var(--dim); letter-spacing:.12em; text-transform:uppercase; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:.83rem; }
+  th { color:var(--dim); text-align:left; font-weight:500; padding:6px; border-bottom:1px solid var(--border); font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; }
+  td { padding:8px 6px; border-bottom:1px solid #1c232d; }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  .empty { color:var(--dim); font-size:.85rem; font-style:italic; padding:22px; text-align:center; }
+  .feed-item { display:flex; gap:10px; padding:9px 0; border-bottom:1px solid #1c232d; font-size:.82rem; }
+  .feed-item .ic { flex-shrink:0; }
+  .feed-item .tx { color:#c9d1d9; }
+  .feed-item .tm { color:var(--dim); font-size:.72rem; margin-top:2px; }
+  .memo { font-size:.83rem; color:#c9d1d9; white-space:pre-wrap; line-height:1.5; max-height:300px; overflow-y:auto; }
+  .viewbox { background:var(--bg); border-left:3px solid var(--green); border-radius:8px; padding:12px; font-size:.86rem; color:#c9d1d9; margin-bottom:14px; }
+</style>
+</head>
+<body>
+
+<aside class="side">
+  <div class="brand">
+    <div class="logo">🤖</div>
+    <div><div class="t1">Claude Strategy</div><div class="t2">AI Trading Bot</div></div>
+  </div>
+  <div class="nav" data-market="US" onclick="setMarket('US')">🇺🇸&ensp;US Stocks — Swing</div>
+  <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE — Swing</div>
+  <div class="spacer"></div>
+  <div class="sidebox"><div class="l">Broker</div><div class="v" id="side-broker">Paper Ledger</div></div>
+  <div class="sidebox mode"><div class="l">Mode</div><div class="v">Paper trading</div>
+    <div class="d">Simulated orders — hard risk caps enforced in code.</div></div>
+</aside>
+
+<main class="main">
+  <div class="head">
+    <div><div class="bc">DASHBOARD</div><h1>AI Trading Bot V2</h1></div>
+    <div class="pills">
+      <div class="pill" id="pill-bot"><span class="dot"></span><span>Bot …</span></div>
+      <div class="pill" id="pill-api"><span class="dot"></span><span>API …</span></div>
+      <div class="who">Sivakumar Kondapalle</div>
+    </div>
+  </div>
+
+  <div class="subhead">
+    <h2 id="mkt-title">US Stocks — Swing Bot</h2>
+    <div class="d" id="mkt-sub">Daily bars · Claude portfolio manager · <span id="updated"></span></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab on" data-tab="overview" onclick="setTab('overview')">Overview</div>
+    <div class="tab" data-tab="positions" onclick="setTab('positions')">My Positions</div>
+    <div class="tab" data-tab="history" onclick="setTab('history')">Trade History</div>
+    <div class="tab" data-tab="review" onclick="setTab('review')">AI Self-Review</div>
+  </div>
+
+  <div id="content"></div>
+</main>
+
+<script>
+const CUR = { USD:"$", INR:"₹" };
+let MARKET = "US", TAB = "overview", DATA = null, TRADES = [], FEED = [];
+const fmt = (n,c) => n==null ? "—" : (CUR[c]||"")+Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+const cls = n => n>0?"pos":n<0?"neg":"";
+const ts = t => t? new Date(t*1000).toLocaleString():"";
+
+function setMarket(m){ MARKET=m; render(); refresh(); }
+function setTab(t){ TAB=t; render(); }
+
+function render(){
+  document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("on", n.dataset.market===MARKET));
+  document.querySelectorAll(".tab").forEach(n=>n.classList.toggle("on", n.dataset.tab===TAB));
+  document.getElementById("mkt-title").textContent = MARKET==="US" ? "US Stocks — Swing Bot" : "India NSE — Swing Bot";
+  if(!DATA || !DATA[MARKET]) return;
+  const d = DATA[MARKET], c = d.currency, s = d.stats||{};
+  document.getElementById("side-broker").textContent = MARKET==="US" ? "Paper Ledger + Alpaca" : "Paper Ledger (INR)";
+  let html = "";
+
+  if(TAB==="overview"){
+    html += `<div class="cards">
+      <div class="stat"><div class="top"><span class="lbl">Portfolio Value</span><span class="ico">💼</span></div>
+        <div class="val">${fmt(d.equity,c)}</div><div class="sub">Cash: ${fmt(d.cash,c)}</div></div>
+      <div class="stat"><div class="top"><span class="lbl">Daily P&L</span><span class="ico">📈</span></div>
+        <div class="val ${cls(d.day_pnl)}">${d.day_pnl>0?"+":""}${fmt(d.day_pnl,c)}</div>
+        <div class="sub">Total return: <span class="${cls(d.total_return_pct)}">${d.total_return_pct}%</span></div></div>
+      <div class="stat"><div class="top"><span class="lbl">Trades</span><span class="ico">⚡</span></div>
+        <div class="val">${s.closed_trades||0}</div><div class="sub">Win rate: ${s.win_rate_pct ?? "—"}% · P&L ${fmt(s.total_pnl,c)}</div></div>
+      <div class="stat"><div class="top"><span class="lbl">Risk Shield</span><span class="ico">🛡️</span></div>
+        <div class="val" style="color:${d.killed?"var(--red)":"var(--green)"}">${d.killed?"KILLED":"ON"}</div>
+        <div class="sub">${d.killed?"Manual reset required":"-10% kill · -3% day halt · 1.5% risk/trade"}</div></div>
+    </div>`;
+    if(d.market_view) html += `<div class="viewbox">🧠 <b>Claude's market view</b> (${ts(d.market_view_ts)})<br>${d.market_view}</div>`;
+    html += `<div class="row2">
+      <div class="panel"><h3>Open Positions (${d.positions.length})</h3>${posTable(d,c)}</div>
+      <div class="panel"><h3>Activity Log</h3>${feedHtml()}</div>
+    </div>`;
+  }
+  else if(TAB==="positions"){
+    html += `<div class="panel"><h3>Open Positions (${d.positions.length})</h3>${posTable(d,c,true)}</div>`;
+  }
+  else if(TAB==="history"){
+    const closed = TRADES.filter(t=>t.status==="closed");
+    html += `<div class="panel"><h3>Closed Trades · ${s.closed_trades||0} total · win rate ${s.win_rate_pct ?? "—"}% · total <span class="${cls(s.total_pnl)}">${fmt(s.total_pnl,c)}</span></h3>`;
+    html += closed.length ? `<table><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>%</th><th>Reason</th><th>Opened</th><th>Closed</th></tr>`+
+      closed.map(t=>`<tr><td><b>${t.symbol}</b></td><td>${t.qty}</td><td>${fmt(t.entry,c)}</td><td>${fmt(t.exit_price,c)}</td>
+        <td class="${cls(t.pnl)}">${fmt(t.pnl,c)}</td><td class="${cls(t.pnl_pct)}">${t.pnl_pct==null?"—":t.pnl_pct.toFixed(1)}%</td>
+        <td>${(t.exit_reason||"").slice(0,40)}</td><td>${ts(t.ts_open)}</td><td>${ts(t.ts_close)}</td></tr>`).join("")+`</table>`
+      : `<div class="empty">No closed trades yet — the bot is being patient.</div>`;
+    html += `</div>`;
+  }
+  else if(TAB==="review"){
+    html += `<div class="panel"><h3>Latest Weekly Self-Review (written by Claude about its own trading)</h3>`;
+    html += d.memo ? `<div class="memo">${d.memo}</div>`
+      : `<div class="empty">No self-review yet — first one is written after the first week with closed trades (Saturdays).</div>`;
+    html += `</div>`;
+  }
+  document.getElementById("content").innerHTML = html;
+}
+
+function posTable(d,c,full){
+  if(!d.positions.length) return `<div class="empty">No open positions — holding cash is a position too.</div>`;
+  return `<table><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th><th>Stop</th><th>Target</th><th>P&L</th>${full?"<th>Thesis</th>":""}</tr>`+
+    d.positions.map(p=>`<tr><td><b>${p.symbol}</b></td><td>${p.qty}</td><td>${fmt(p.entry,c)}</td><td>${fmt(p.last_price,c)}</td>
+      <td>${fmt(p.stop,c)}</td><td>${fmt(p.target,c)}</td>
+      <td class="${cls(p.unrealized_pnl)}">${fmt(p.unrealized_pnl,c)} (${p.unrealized_pnl_pct}%)</td>
+      ${full?`<td style="color:var(--dim);font-size:.78rem">${p.thesis||""}</td>`:""}</tr>`).join("")+`</table>`;
+}
+
+function feedHtml(){
+  if(!FEED.length) return `<div class="empty">No activity yet — decisions appear after each daily cycle.</div>`;
+  return FEED.map(f=>`<div class="feed-item">
+    <span class="ic">${f.kind==="decision"?"🧠":(f.pnl>=0?"🟢":"🔴")}</span>
+    <div><div class="tx">${f.kind==="decision"?`${f.text||"(no view)"} — ${f.actions} action(s)`:`${f.text} ${f.pnl!=null?`P&L ${f.pnl>=0?"+":""}${f.pnl.toFixed(2)}`:""}`}</div>
+    <div class="tm">${ts(f.ts)}</div></div></div>`).join("");
+}
+
+async function refresh(){
+  const apiPill = document.getElementById("pill-api"), botPill = document.getElementById("pill-bot");
+  try{
+    DATA = await (await fetch("/api/summary")).json();
+    TRADES = await (await fetch("/api/trades?market="+MARKET)).json();
+    FEED = await (await fetch("/api/activity?market="+MARKET)).json();
+    apiPill.className="pill ok"; apiPill.lastElementChild.textContent="API online";
+    const alive = DATA._bot_alive;
+    botPill.className="pill "+(alive?"ok":"bad");
+    botPill.lastElementChild.textContent = alive?"Bot running":"Bot DOWN";
+    document.getElementById("updated").textContent = "updated "+new Date().toLocaleTimeString();
+    render();
+  }catch(e){
+    apiPill.className="pill bad"; apiPill.lastElementChild.textContent="API offline";
+    botPill.className="pill bad"; botPill.lastElementChild.textContent="Bot unknown";
+  }
+}
+setMarket("US");
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>

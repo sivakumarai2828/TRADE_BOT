@@ -1,0 +1,17 @@
+[Unit]
+Description=AI Trade Bot V2 Dashboard API
+After=network.target
+
+[Service]
+User=__USER__
+WorkingDirectory=/home/__USER__/TRADE_BOT_V2
+EnvironmentFile=/home/__USER__/TRADE_BOT_V2/.env
+ExecStart=/home/__USER__/venv311/bin/python3 api_v2.py
+Restart=always
+RestartSec=10
+MemoryMax=300M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
