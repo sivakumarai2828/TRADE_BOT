@@ -44,12 +44,20 @@ class PaperLedger:
         self.journal.kv_set(f"{self.market}_cash", str(round(v, 2)))
 
     def positions(self) -> list[dict]:
-        """Open trades enriched with live price and unrealized P&L."""
+        """Open trades enriched with live price and unrealized P&L.
+
+        price_stale=True means the live fetch failed and last_price is just
+        the entry price — callers must not make stop/target decisions on it.
+        """
         out = []
         for t in self.journal.open_trades(self.market):
-            px = data.fetch_price(t["symbol"]) or t["entry"]
+            px = data.fetch_price(t["symbol"])
+            stale = px is None
+            if stale:
+                px = t["entry"]
             out.append({
                 **t,
+                "price_stale": stale,
                 "last_price": round(px, 2),
                 "market_value": round(px * t["qty"], 2),
                 "unrealized_pnl": round((px - t["entry"]) * t["qty"], 2),

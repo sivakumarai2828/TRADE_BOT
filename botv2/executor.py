@@ -36,6 +36,10 @@ class MarketRunner:
             self._flatten_all(halt)
             return
         for pos in self.ledger.positions():
+            if pos.get("price_stale"):
+                log.warning("%s %s: price fetch failed — skipping stop/target check",
+                            self.market, pos["symbol"])
+                continue
             px = pos["last_price"]
             if pos["stop"] and px <= pos["stop"]:
                 self._exit(pos, "stop_loss")

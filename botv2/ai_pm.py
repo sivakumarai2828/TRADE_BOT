@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 log = logging.getLogger("botv2.ai_pm")
 
@@ -91,15 +92,25 @@ class PortfolioManagerAI:
         self.model = model
         self.max_tokens = max_tokens
 
+    ATTEMPTS = 3  # a transient API error must not silently skip a trading day
+
     def decide(self, prompt: str) -> dict:
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-        decision = _extract_json(text)
+        for attempt in range(1, self.ATTEMPTS + 1):
+            try:
+                resp = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+                decision = _extract_json(text)
+                break
+            except Exception as exc:
+                log.warning("AI decision attempt %d/%d failed: %s", attempt, self.ATTEMPTS, exc)
+                if attempt == self.ATTEMPTS:
+                    raise
+                time.sleep(15 * attempt)
         decision.setdefault("actions", [])
         decision.setdefault("market_view", "")
         decision.setdefault("watch_next", [])
