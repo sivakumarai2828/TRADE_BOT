@@ -31,6 +31,13 @@ at arbitrary percentages.
 losers early with a reason. Partial exits are not supported — SELL closes the whole position.
 - BUY orders without a target above entry, or with reward less than 2x the stop distance, \
 are rejected by code. Always include a realistic stop AND target.
+- BUY orders within 3 days of a scheduled earnings report are rejected by code. Candidate \
+data includes days_to_earnings where known — plan entries around it, and consider earnings \
+risk on positions you already hold.
+- Candidate data includes stage2_uptrend (Minervini trend-template pass), rs_3m_vs_benchmark \
+(3-month relative strength vs the market), and low_20d (recent swing low, a natural stop \
+reference). The regime block includes universe breadth. These are context, not rules — but \
+your documented losses came from entries that failed exactly these checks.
 
 Respond with ONLY a JSON object, no markdown fences, matching:
 {

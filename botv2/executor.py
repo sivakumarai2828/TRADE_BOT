@@ -81,6 +81,17 @@ class MarketRunner:
         wanted = list(dict.fromkeys(symbols + [s for s in extra if s]))
         candidates = [s for sym in wanted if (s := data.fetch_snapshot(sym))]
         regime = data.fetch_market_context(benchmarks)
+
+        # Context enrichment (review 2026-07-19): relative strength vs the
+        # primary benchmark per candidate, and universe breadth in the regime.
+        bench = regime[0] if regime else None
+        for c in candidates:
+            if bench and c.get("ret_3m_pct") is not None and bench.get("ret_3m_pct") is not None:
+                c["rs_3m_vs_benchmark"] = round(c["ret_3m_pct"] - bench["ret_3m_pct"], 2)
+        with_200 = [c for c in candidates if c.get("price") and c.get("sma200")]
+        if with_200:
+            breadth = round(100 * sum(1 for c in with_200 if c["price"] > c["sma200"]) / len(with_200), 1)
+            regime = regime + [{"breadth_pct_of_universe_above_200dma": breadth}]
         positions = self.ledger.positions()
         portfolio = {
             "cash": self.ledger.cash,
@@ -106,14 +117,18 @@ class MarketRunner:
         notify.market_view(self.market, decision.get("market_view", ""))
 
         by_symbol = {p["symbol"]: p for p in positions}
+        earnings = {c["symbol"]: c.get("days_to_earnings") for c in candidates}
         for act in decision.get("actions", []):
             try:
-                self._apply(act, by_symbol, halt)
+                self._apply(act, by_symbol, halt, earnings)
             except Exception as exc:
                 log.exception("action failed %s: %s", act, exc)
         log.info("=== %s decision cycle done ===", self.market)
 
-    def _apply(self, act: dict, by_symbol: dict, halt: str | None) -> None:
+    EARNINGS_BLOCK_DAYS = 3  # no new entries this close to a scheduled report
+
+    def _apply(self, act: dict, by_symbol: dict, halt: str | None,
+               earnings: dict | None = None) -> None:
         kind = str(act.get("action", "")).upper()
         sym = str(act.get("symbol", "")).strip()
 
@@ -139,6 +154,10 @@ class MarketRunner:
                 return
             if sym in by_symbol:
                 log.info("BUY %s skipped — already held (no pyramiding in v2.0)", sym)
+                return
+            days = (earnings or {}).get(sym)
+            if days is not None and days <= self.EARNINGS_BLOCK_DAYS:
+                log.warning("BUY %s rejected — earnings in %d day(s)", sym, days)
                 return
             price = data.fetch_price(sym)
             if not price:
