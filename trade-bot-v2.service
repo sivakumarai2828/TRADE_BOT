@@ -1,8 +1,10 @@
 [Unit]
 Description=AI Trade Bot V2 (Claude portfolio manager)
 After=network.target
-StartLimitIntervalSec=600
-StartLimitBurst=5
+# No start-rate limit: on 2026-08-06 a burst of crashes hit the old limit
+# (5 per 600s) and systemd stopped retrying, leaving the bot down for a week.
+# Always keep trying to bring the trader back up.
+StartLimitIntervalSec=0
 
 [Service]
 User=__USER__
@@ -11,7 +13,7 @@ EnvironmentFile=/home/__USER__/TRADE_BOT_V2/.env
 Environment=TZ=UTC
 ExecStart=/home/__USER__/venv311/bin/python3 main.py
 Restart=always
-RestartSec=15
+RestartSec=30
 MemoryMax=750M
 StandardOutput=journal
 StandardError=journal

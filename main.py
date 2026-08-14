@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 
 from botv2.ai_pm import PortfolioManagerAI
 from botv2.alpaca_mirror import AlpacaMirror
+from botv2 import notify
 from botv2.config import load_config
 from botv2.executor import MarketRunner
 from botv2.storage import make_journal
@@ -103,28 +104,45 @@ def main() -> None:
 
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
     journal = make_journal(cfg.db_path)
+    notify.alert(f"🟢 TRADE_BOT_V2 started (markets: {', '.join(runners)})")
+
+    # A transient network blip (e.g. Supabase 'connection reset by peer') must
+    # never kill the scheduler: on 2026-08-06 one such error crashed the process
+    # and systemd's start-limit left the bot down for a week, unmonitored.
+    fails = 0
     while True:
-        journal.kv_set("heartbeat", str(time.time()))  # dashboard "bot online" signal
-        now_utc = datetime.now(timezone.utc)
-        for market, (tz, decide_at, open_at, close_at) in MARKETS.items():
-            if market not in runners:
-                continue
-            local = now_utc.astimezone(tz)
-            if local.weekday() >= 5:  # weekend in market-local time
-                continue
-            day = local.strftime("%Y-%m-%d")
-            hm = (local.hour, local.minute)
-            # daily AI decision at 10:00 local
-            if hm == decide_at:
-                fire_once(f"{market}_cycle", day, runners[market].run_cycle)
-            # stop/target monitor every 20 min during the session
-            if open_at <= hm <= close_at and local.minute % 20 == 0:
-                fire_once(f"{market}_mon", f"{day}T{local.hour}:{local.minute}",
-                          runners[market].monitor_positions)
-        # weekly self-review: Saturday 08:00 UTC
-        if now_utc.weekday() == 5 and (now_utc.hour, now_utc.minute) == (8, 0):
-            for r in runners.values():
-                fire_once("review", now_utc.strftime("%Y-%m-%d"), r.weekly_review)
+        try:
+            journal.kv_set("heartbeat", str(time.time()))  # dashboard "bot online" signal
+            now_utc = datetime.now(timezone.utc)
+            for market, (tz, decide_at, open_at, close_at) in MARKETS.items():
+                if market not in runners:
+                    continue
+                local = now_utc.astimezone(tz)
+                if local.weekday() >= 5:  # weekend in market-local time
+                    continue
+                day = local.strftime("%Y-%m-%d")
+                hm = (local.hour, local.minute)
+                # daily AI decision at 10:00 local
+                if hm == decide_at:
+                    fire_once(f"{market}_cycle", day, runners[market].run_cycle)
+                # stop/target monitor every 20 min during the session
+                if open_at <= hm <= close_at and local.minute % 20 == 0:
+                    fire_once(f"{market}_mon", f"{day}T{local.hour}:{local.minute}",
+                              runners[market].monitor_positions)
+            # weekly self-review: Saturday 08:00 UTC
+            if now_utc.weekday() == 5 and (now_utc.hour, now_utc.minute) == (8, 0):
+                for r in runners.values():
+                    fire_once("review", now_utc.strftime("%Y-%m-%d"), r.weekly_review)
+            fails = 0
+        except Exception:
+            fails += 1
+            log.exception("scheduler loop iteration failed (%d in a row)", fails)
+            if fails in (5, 30, 180):  # ~2 min, ~10 min, ~1 hour of failure
+                try:
+                    notify.alert(f"⚠️ TRADE_BOT_V2 loop failing — {fails} consecutive "
+                                 f"errors (bot alive, still retrying)")
+                except Exception:
+                    pass
         time.sleep(20)
 
 
