@@ -39,6 +39,8 @@ risk on positions you already hold.
 reference). The regime block includes universe breadth. These are context, not rules — but \
 your documented losses came from entries that failed exactly these checks.
 
+- Your portfolio reports pct_deployed, and target_pct_deployed when a target is set. Idle cash has a real opportunity cost: when the regime is constructive and quality setups exist, work toward that target instead of sitting in cash. This is a PREFERENCE, not permission to lower your standards - a forced entry into a weak setup remains the worst trade you can make. If you finish a cycle below target, state plainly in market_view which specific filter the candidates failed.
+
 Respond with ONLY a JSON object, no markdown fences, matching:
 {
   "market_view": "1-3 sentences on regime and what you're doing about it",

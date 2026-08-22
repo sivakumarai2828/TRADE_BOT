@@ -71,6 +71,10 @@ class V2Config:
     db_path: str = "botv2.db"
     log_level: str = "INFO"
     ai_decision_max_tokens: int = 4000
+    # 0 = AI decides deployment freely. >0 = aim to be this fraction invested
+    # when the regime is constructive. A preference, never a licence to lower
+    # entry standards - the hard caps and 2R rule still reject bad trades.
+    target_deployment_pct: float = 0.0
 
     caps: HardCaps = field(default_factory=HardCaps)
 
@@ -107,5 +111,6 @@ def load_config() -> V2Config:
         db_path=os.getenv("BOTV2_DB", "botv2.db"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         ai_decision_max_tokens=_i("AI_DECISION_MAX_TOKENS", "4000"),
+        target_deployment_pct=_f("TARGET_DEPLOYMENT_PCT", "0"),
         caps=caps,
     )

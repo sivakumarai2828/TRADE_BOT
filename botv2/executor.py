@@ -104,6 +104,11 @@ class MarketRunner:
             ],
         }
 
+        portfolio["pct_deployed"] = round(100 * (equity - self.ledger.cash) / equity, 1) if equity else 0.0
+        _tgt = getattr(self.cfg, "target_deployment_pct", 0.0)
+        if _tgt:
+            portfolio["target_pct_deployed"] = round(_tgt * 100, 1)
+
         prompt = build_prompt(
             self.market, self.currency, regime, candidates, portfolio,
             self.journal.stats(self.market), self.journal.recent_closed(self.market),
