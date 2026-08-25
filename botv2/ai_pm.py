@@ -95,24 +95,58 @@ def _extract_json(text: str) -> dict:
 
 
 class PortfolioManagerAI:
-    def __init__(self, api_key: str, model: str, max_tokens: int = 4000):
-        import anthropic
-        self.client = anthropic.Anthropic(api_key=api_key)
+    """Talks to Claude directly, or through OpenRouter when a key is provided.
+
+    OpenRouter takes an OpenAI-style chat/completions payload, so the system
+    prompt is sent as the first message rather than a separate field.
+    """
+
+    OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self, api_key: str, model: str, max_tokens: int = 4000,
+                 openrouter_key: str = ""):
         self.model = model
         self.max_tokens = max_tokens
+        self.openrouter_key = openrouter_key
+        self.client = None
+        if not openrouter_key:
+            import anthropic
+            self.client = anthropic.Anthropic(api_key=api_key)
+        log.info("AI backend: %s | model: %s",
+                 "OpenRouter" if openrouter_key else "Anthropic API", model)
+
+    def _call(self, system: str | None, user: str, max_tokens: int) -> str:
+        """One completion, returned as plain text. Raises on any API error."""
+        if self.openrouter_key:
+            import requests
+            msgs = ([{"role": "system", "content": system}] if system else [])
+            msgs.append({"role": "user", "content": user})
+            r = requests.post(
+                self.OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {self.openrouter_key}",
+                         "Content-Type": "application/json"},
+                json={"model": self.model, "messages": msgs,
+                      "max_tokens": max_tokens},
+                timeout=180,
+            )
+            r.raise_for_status()
+            data = r.json()
+            if "choices" not in data:
+                raise RuntimeError(f"OpenRouter returned no choices: {str(data)[:300]}")
+            return data["choices"][0]["message"].get("content") or ""
+        resp = self.client.messages.create(
+            model=self.model, max_tokens=max_tokens,
+            **({"system": system} if system else {}),
+            messages=[{"role": "user", "content": user}],
+        )
+        return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
 
     ATTEMPTS = 3  # a transient API error must not silently skip a trading day
 
     def decide(self, prompt: str) -> dict:
         for attempt in range(1, self.ATTEMPTS + 1):
             try:
-                resp = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+                text = self._call(SYSTEM_PROMPT, prompt, self.max_tokens)
                 decision = _extract_json(text)
                 break
             except Exception as exc:
@@ -140,8 +174,4 @@ class PortfolioManagerAI:
               "injected into your future decision prompts, so make every line actionable. "
               "Plain text only."
         )
-        resp = self.client.messages.create(
-            model=self.model, max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+        return self._call(None, prompt, 1000).strip()

@@ -48,6 +48,10 @@ class HardCaps:
 class V2Config:
     # AI
     anthropic_api_key: str = ""
+    # When set, all AI calls go through OpenRouter instead of the Anthropic
+    # API. anthropic_model must then be an OpenRouter slug, e.g.
+    # "anthropic/claude-sonnet-5".
+    openrouter_api_key: str = ""
     anthropic_model: str = "claude-fable-5"
 
     # Markets
@@ -98,6 +102,7 @@ def load_config() -> V2Config:
 
     return V2Config(
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-fable-5"),
         trade_us=_b("TRADE_US", "true"),
         trade_india=_b("TRADE_INDIA", "true"),
