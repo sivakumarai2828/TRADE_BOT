@@ -129,14 +129,28 @@ class PortfolioManagerAI:
                 headers={"Authorization": f"Bearer {self.openrouter_key}",
                          "Content-Type": "application/json"},
                 json={"model": self.model, "messages": msgs,
-                      "max_tokens": max_tokens},
+                      "max_tokens": max_tokens,
+                      # Sonnet 5 enables extended reasoning by default. On
+                      # 2026-08-26 that consumed the entire completion budget
+                      # (4000 reasoning tokens, 0 content) and every cycle
+                      # failed with an empty response. This task is structured
+                      # extraction, not deep reasoning - turn it off.
+                      "reasoning": {"enabled": False}},
                 timeout=180,
             )
             r.raise_for_status()
             data = r.json()
             if "choices" not in data:
                 raise RuntimeError(f"OpenRouter returned no choices: {str(data)[:300]}")
-            return data["choices"][0]["message"].get("content") or ""
+            choice = data["choices"][0]
+            content = choice.get("message", {}).get("content") or ""
+            if not content:
+                raise RuntimeError(
+                    f"OpenRouter returned empty content "
+                    f"(finish_reason={choice.get('finish_reason')}, "
+                    f"reasoning_tokens="
+                    f"{data.get('usage', {}).get('completion_tokens_details', {}).get('reasoning_tokens')})")
+            return content
         resp = self.client.messages.create(
             model=self.model, max_tokens=max_tokens,
             **({"system": system} if system else {}),

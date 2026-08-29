@@ -99,8 +99,16 @@ def main() -> None:
             last_fired[name] = key
             try:
                 fn()
-            except Exception:
+            except Exception as exc:
+                # A failed cycle silently loses a trading day. On 2026-08-26
+                # three cycles died unnoticed for three days. Always alert.
                 log.exception("scheduled job %s failed", name)
+                try:
+                    notify.alert(
+                        "[FAILED] " + name + " - no decision made this cycle\n"
+                        + type(exc).__name__ + ": " + str(exc)[:250])
+                except Exception:
+                    pass
 
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
     journal = make_journal(cfg.db_path)
