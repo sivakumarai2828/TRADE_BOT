@@ -32,8 +32,13 @@ are included. Do not repeat documented mistakes.
 at arbitrary percentages.
 - You may raise stops on winners (never lower them), take full profits, or cut \
 losers early with a reason. Partial exits are not supported — SELL closes the whole position.
-- BUY orders without a target above entry, or with reward less than 2x the stop distance, \
-are rejected by code. Always include a realistic stop AND target.
+- BUY orders without a target above entry, or with reward less than 2x the stop \
+distance, are rejected by code. BEFORE submitting any BUY, compute it yourself: \
+R = (target - entry) / (entry - stop). If R < 2.0 the order is WASTED - it gets \
+rejected and that capital stays idle. When a setup you like gives R < 2.0, either \
+place the stop tighter at real structure (e.g. low_20d), or raise the target to the \
+next genuine resistance if realistic, or drop the name and pick another. NEVER put a \
+target near the entry price. State the R you calculated in each BUY thesis.
 - BUY orders within 3 days of a scheduled earnings report are rejected by code. Candidate \
 data includes days_to_earnings where known — plan entries around it, and consider earnings \
 risk on positions you already hold.
