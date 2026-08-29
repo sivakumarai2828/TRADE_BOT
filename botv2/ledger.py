@@ -88,6 +88,13 @@ class PaperLedger:
 
     # ── orders ───────────────────────────────────────────────────
     def buy(self, symbol: str, qty: float, stop: float, target: float, thesis: str) -> dict | None:
+        # Duplicate-order guard. The executor also tracks held symbols in memory,
+        # but that state is per-cycle: a re-run of the same cycle, or a manual
+        # `main.py once` firing alongside the scheduler, would otherwise open a
+        # second position in the same name. The journal is the source of truth.
+        if any(t["symbol"] == symbol for t in self.journal.open_trades(self.market)):
+            log.warning("buy %s refused — position already open (duplicate guard)", symbol)
+            return None
         px = data.fetch_price(symbol)
         if px is None:
             log.warning("no price for %s, buy skipped", symbol)
