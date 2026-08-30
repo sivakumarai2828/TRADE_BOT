@@ -49,19 +49,48 @@ your documented losses came from entries that failed exactly these checks.
 
 - CAPITAL DEPLOYMENT IS A REQUIREMENT, not a preference. Your portfolio reports pct_deployed and target_pct_deployed. Unless the benchmark regime is clearly bearish (benchmark below its 50DMA and falling) or a halt is active, you MUST work toward the target every cycle: rank every candidate that satisfies the hard caps and BUY the best available, up to the daily entry limit. Do NOT hold cash because no candidate is 'perfect' - a merely good setup that clears the code caps beats idle cash, and your own screen is stricter than the caps require. Finishing below target is acceptable ONLY if the regime is bearish, a halt is active, or no candidate can satisfy the CODE caps (2R reward/risk, stop distance, no earnings within 3 days); say which one in market_view.
 
+SETUP LABEL (required on BUY and WATCH). Classify every entry as exactly one of:
+- BREAKOUT     price is clearing a defined resistance level
+- PULLBACK     strong trend has pulled back into support (EMA20 / SMA50 / prior base)
+- CONTINUATION already trending, no fresh breakout and no clean pullback
+The label is recorded against the trade so performance can be compared by setup
+type. Choose the one that genuinely describes the entry; do not default to one.
+
+WATCH - use this when a stock is strong but the CURRENT price is not a good entry.
+A great stock is not automatically a great trade. WATCH records an ideal entry;
+code arms the trigger, revalidates everything when price arrives, and buys only
+if it still passes. A WATCH expires after 10 trading sessions. Requirements:
+stop < ideal_entry < target, and at least 2R measured AT THE IDEAL ENTRY.
+Prefer WATCH over a marginal BUY at a stretched price.
+
+REPLACE - use when the book is full and a new opportunity is clearly better than
+a specific holding. Name both symbols. Code refuses the swap if the old position
+already has its stop at or above entry (it cannot lose, so it is not given up),
+if it is younger than 5 sessions, or if the new setup does not beat the old
+one's planned R by at least 0.5R. Rotate to upgrade the book, never to churn it.
+
+HOLD - an explicit statement that an existing position remains valid. Optional,
+but it records your reasoning for later review.
+
 Respond with ONLY a JSON object, no markdown fences, matching:
 {
   "market_view": "1-3 sentences on regime and what you're doing about it",
   "actions": [
-    {"action": "BUY",  "symbol": "XYZ", "stop": 123.4, "target": 150.0,
-     "thesis": "one or two sentences", "confidence": 0.0-1.0},
+    {"action": "BUY",  "symbol": "XYZ", "setup": "PULLBACK", "stop": 123.4,
+     "target": 150.0, "thesis": "one or two sentences incl. the R you computed",
+     "confidence": 0.0-1.0},
+    {"action": "WATCH", "symbol": "ABC", "setup": "BREAKOUT", "ideal_entry": 205.0,
+     "stop": 194.0, "target": 230.0, "thesis": "why, and what you are waiting for"},
+    {"action": "REPLACE", "symbol": "NEW", "replace": "OLD", "setup": "PULLBACK",
+     "stop": 90.0, "target": 120.0, "thesis": "why NEW is materially better than OLD"},
+    {"action": "HOLD", "symbol": "DEF", "reason": "thesis intact"},
     {"action": "SELL", "symbol": "XYZ", "reason": "why exiting now"},
     {"action": "ADJUST", "symbol": "XYZ", "stop": 130.0, "target": 155.0,
      "reason": "why moving levels"}
   ],
   "watch_next": ["symbols you want extra data on next cycle (max 5)"]
 }
-An empty actions list is acceptable ONLY when you are at or above target deployment, or the regime is bearish, or a halt is active."""
+An empty actions list is acceptable ONLY when you are at or above target deployment, or the regime is bearish, or a halt is active. If no candidate is worth buying at today's price, WATCH the best of them rather than returning nothing."""
 
 
 def build_prompt(market: str, currency: str, regime: list[dict], candidates: list[dict],

@@ -87,7 +87,8 @@ class PaperLedger:
         return round(self.equity() - start, 2)
 
     # ── orders ───────────────────────────────────────────────────
-    def buy(self, symbol: str, qty: float, stop: float, target: float, thesis: str) -> dict | None:
+    def buy(self, symbol: str, qty: float, stop: float, target: float,
+            thesis: str, meta: dict | None = None) -> dict | None:
         # Duplicate-order guard. The executor also tracks held symbols in memory,
         # but that state is per-cycle: a re-run of the same cycle, or a manual
         # `main.py once` firing alongside the scheduler, would otherwise open a
@@ -106,7 +107,8 @@ class PaperLedger:
             if qty < 1:
                 return None
             cost = px * qty
-        trade_id = self.journal.open_trade(self.market, symbol, qty, px, stop, target, thesis)
+        trade_id = self.journal.open_trade(self.market, symbol, qty, px,
+                                          stop, target, thesis, meta)
         self._set_cash(self.cash - cost)
         return {"trade_id": trade_id, "symbol": symbol, "qty": qty, "fill": px}
 

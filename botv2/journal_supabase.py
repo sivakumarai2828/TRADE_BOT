@@ -57,25 +57,40 @@ class SupabaseJournal:
         return r.data or []
 
     # ── trades ──────────────────────────────────────────────────
-    def open_trade(self, market, symbol, qty, entry, stop, target, thesis) -> int:
-        r = self.c.table("v2_trades").insert({
+    ATTRIBUTION_FIELDS = ("setup_type", "market_regime", "sector", "rsi_entry",
+                          "atr_pct_entry", "vol_ratio_entry", "rs_entry",
+                          "stage2_entry", "planned_r")
+
+    def open_trade(self, market, symbol, qty, entry, stop, target, thesis,
+                   meta: dict | None = None) -> int:
+        row = {
             "ts_open": time.time(), "market": market, "symbol": symbol,
             "side": "long", "qty": qty, "entry": entry,
             "stop": stop, "target": target, "thesis": thesis,
-        }).execute()
+            "initial_stop": stop,
+        }
+        for f in self.ATTRIBUTION_FIELDS:
+            v = (meta or {}).get(f)
+            if v is not None:
+                row[f] = bool(v) if f == "stage2_entry" else v
+        r = self.c.table("v2_trades").insert(row).execute()
         return r.data[0]["id"]
 
     def close_trade(self, trade_id: int, exit_price: float, reason: str) -> bool:
-        row = self.c.table("v2_trades").select("qty, entry, status") \
+        row = self.c.table("v2_trades").select("qty, entry, initial_stop, status") \
             .eq("id", trade_id).execute()
         if not row.data or row.data[0]["status"] != "open":
             return False
         qty, entry = row.data[0]["qty"], row.data[0]["entry"]
+        init = row.data[0].get("initial_stop")
         pnl = (exit_price - entry) * qty
         pnl_pct = (exit_price / entry - 1) * 100 if entry else 0
+        # Measured against the risk taken at ENTRY, not the ratcheted stop.
+        risk = (entry - init) if init else None
+        realized_r = round((exit_price - entry) / risk, 3) if risk else None
         upd = self.c.table("v2_trades").update({
             "ts_close": time.time(), "exit_price": exit_price,
-            "pnl": pnl, "pnl_pct": pnl_pct,
+            "pnl": pnl, "pnl_pct": pnl_pct, "realized_r": realized_r,
             "exit_reason": reason, "status": "closed",
         }).eq("id", trade_id).eq("status", "open").execute()
         return bool(upd.data)
@@ -128,6 +143,44 @@ class SupabaseJournal:
         r = self.c.table("v2_trades").select("id", count="exact") \
             .eq("market", market).gte("ts_open", midnight).execute()
         return r.count or 0
+
+    # ── watches (V3) ────────────────────────────
+    WATCH_EXPIRY_SESSIONS = 10
+
+    def add_watch(self, market, symbol, setup, ideal_entry, stop, target,
+                  thesis, expiry_days=None) -> int:
+        self.cancel_watch_symbol(market, symbol, "superseded")
+        days = self.WATCH_EXPIRY_SESSIONS if expiry_days is None else expiry_days
+        now = time.time()
+        r = self.c.table("v2_watches").insert({
+            "ts_created": now, "ts_expires": now + days * 86400,
+            "market": market, "symbol": symbol, "setup": setup,
+            "ideal_entry": ideal_entry, "stop": stop, "target": target,
+            "thesis": thesis, "status": "active",
+        }).execute()
+        return r.data[0]["id"]
+
+    def active_watches(self, market: str) -> list[dict]:
+        r = (self.c.table("v2_watches").select("*").eq("market", market)
+             .eq("status", "active").order("ts_created").execute())
+        return r.data or []
+
+    def resolve_watch(self, watch_id: int, status: str, resolution: str = "") -> None:
+        (self.c.table("v2_watches").update({
+            "status": status, "resolution": resolution, "ts_resolved": time.time(),
+        }).eq("id", watch_id).eq("status", "active").execute())
+
+    def cancel_watch_symbol(self, market: str, symbol: str, reason: str) -> None:
+        (self.c.table("v2_watches").update({
+            "status": "cancelled", "resolution": reason, "ts_resolved": time.time(),
+        }).eq("market", market).eq("symbol", symbol).eq("status", "active").execute())
+
+    def expire_watches(self, market: str) -> int:
+        now = time.time()
+        r = (self.c.table("v2_watches").update({
+            "status": "expired", "resolution": "expiry", "ts_resolved": now,
+        }).eq("market", market).eq("status", "active").lt("ts_expires", now).execute())
+        return len(r.data or [])
 
     # ── memos ───────────────────────────────────────────────────
     def save_memo(self, market: str, kind: str, body: str) -> None:
