@@ -38,7 +38,8 @@ def build_runners(cfg):
 
     journal = make_journal(cfg.db_path)
     ai = PortfolioManagerAI(cfg.anthropic_api_key, cfg.anthropic_model,
-                            cfg.ai_decision_max_tokens, cfg.openrouter_api_key)
+                            cfg.ai_decision_max_tokens, cfg.openrouter_api_key,
+                            cfg.ai_reasoning_effort)
     runners = {}
     if cfg.trade_us:
         runners["US"] = MarketRunner(

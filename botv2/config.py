@@ -79,6 +79,9 @@ class V2Config:
     # when the regime is constructive. A preference, never a licence to lower
     # entry standards - the hard caps and 2R rule still reject bad trades.
     target_deployment_pct: float = 0.0
+    # Held low deliberately: this task is structured extraction, and an
+    # unbounded reasoning budget starves the answer (see 2026-08-26).
+    ai_reasoning_effort: str = "low"
 
     caps: HardCaps = field(default_factory=HardCaps)
 
@@ -117,5 +120,6 @@ def load_config() -> V2Config:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         ai_decision_max_tokens=_i("AI_DECISION_MAX_TOKENS", "4000"),
         target_deployment_pct=_f("TARGET_DEPLOYMENT_PCT", "0"),
+        ai_reasoning_effort=os.getenv("AI_REASONING_EFFORT", "low"),
         caps=caps,
     )

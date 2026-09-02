@@ -1,7 +1,8 @@
 """Parsing the model's reply.
 
-Every one of these has been seen in production at least once, including the
-empty response that silently killed three days of trading on 2026-08-26.
+Every case here has been seen in production or in a live model evaluation,
+including the empty response that silently killed three days of trading on
+2026-08-26 and the trailing-prose failure found on 2026-09-01.
 """
 from __future__ import annotations
 
@@ -38,8 +39,7 @@ def test_leading_whitespace():
 def test_nested_braces_span_correctly():
     text = ('{"market_view":"v","actions":[{"action":"BUY","symbol":"X",'
             '"stop":1,"target":5}],"watch_next":[]}')
-    d = _extract_json(text)
-    assert d["actions"][0]["symbol"] == "X"
+    assert _extract_json(text)["actions"][0]["symbol"] == "X"
 
 
 def test_empty_response_raises():
@@ -53,8 +53,7 @@ def test_no_braces_raises():
         _extract_json("I could not produce a plan today.")
 
 
-def test_unclosed_json_raises_value_error():
-    """No closing brace at all -> caught before json.loads."""
+def test_unclosed_object_raises():
     with pytest.raises(ValueError, match="no JSON"):
         _extract_json('{"market_view": "cut off", "actions": [')
 
@@ -71,3 +70,40 @@ def test_actions_preserved_verbatim():
     d = _extract_json(text)
     assert [a["action"] for a in d["actions"]] == ["BUY", "SELL"]
     assert d["watch_next"] == ["V"]
+
+
+# ── trailing-content cases, found by the 2026-09-01 model evaluation ──
+# Slicing from the first "{" to the LAST "}" over-spans whenever a model adds
+# a remark after the JSON. Sonnet 5 did exactly that in 1 of 3 trials, which
+# would be a 33% cycle-failure rate in production.
+
+def test_trailing_prose_containing_a_brace():
+    text = GOOD + "\n\nLet me know if you want changes {see above}."
+    assert _extract_json(text)["market_view"] == "ok"
+
+
+def test_trailing_second_json_object_is_ignored():
+    text = GOOD + '\n\n{"note": "ignore me"}'
+    assert _extract_json(text)["market_view"] == "ok"
+
+
+def test_brace_inside_a_string_value():
+    text = '{"market_view":"a } brace in text","actions":[],"watch_next":[]}'
+    assert _extract_json(text)["market_view"] == "a } brace in text"
+
+
+def test_escaped_quote_inside_string():
+    text = json.dumps({"market_view": 'he said "buy" today',
+                       "actions": [], "watch_next": []}) + " trailing words"
+    assert _extract_json(text)["market_view"] == 'he said "buy" today'
+
+
+def test_nested_objects_span_fully_despite_trailing_text():
+    text = ('{"market_view":"v","actions":[{"action":"BUY","symbol":"X",'
+            '"stop":1,"target":5}],"watch_next":[]} trailing words')
+    assert _extract_json(text)["actions"][0]["symbol"] == "X"
+
+
+def test_fenced_json_with_text_after_the_fence():
+    text = "```json\n" + GOOD + "\n```\nHope that helps!"
+    assert _extract_json(text)["market_view"] == "ok"

@@ -119,16 +119,52 @@ def build_prompt(market: str, currency: str, regime: list[dict], candidates: lis
     return "\n".join(parts)
 
 
+def _first_json_object(text: str) -> str | None:
+    """The first brace-balanced object in text, or None.
+
+    Slicing from the first "{" to the LAST "}" (the previous approach) spans
+    too far whenever a model writes valid JSON and then adds a closing remark
+    containing a brace - json.loads then fails with "Extra data". This walks
+    the string with a depth counter instead, ignoring braces inside strings,
+    so trailing prose is simply dropped.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None                      # opened but never closed
+
+
 def _extract_json(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):
-        text = text.split("```")[1]
+        parts = text.split("```")
+        if len(parts) > 1:
+            text = parts[1]
         if text.startswith("json"):
             text = text[4:]
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+    blob = _first_json_object(text)
+    if blob is None:
         raise ValueError(f"no JSON in AI response: {text[:200]}")
-    return json.loads(text[start:end + 1])
+    return json.loads(blob)
 
 
 class PortfolioManagerAI:
@@ -141,10 +177,11 @@ class PortfolioManagerAI:
     OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
     def __init__(self, api_key: str, model: str, max_tokens: int = 4000,
-                 openrouter_key: str = ""):
+                 openrouter_key: str = "", reasoning_effort: str = "low"):
         self.model = model
         self.max_tokens = max_tokens
         self.openrouter_key = openrouter_key
+        self.reasoning_effort = reasoning_effort
         self.client = None
         if not openrouter_key:
             import anthropic
@@ -164,12 +201,13 @@ class PortfolioManagerAI:
                          "Content-Type": "application/json"},
                 json={"model": self.model, "messages": msgs,
                       "max_tokens": max_tokens,
-                      # Sonnet 5 enables extended reasoning by default. On
-                      # 2026-08-26 that consumed the entire completion budget
-                      # (4000 reasoning tokens, 0 content) and every cycle
-                      # failed with an empty response. This task is structured
-                      # extraction, not deep reasoning - turn it off.
-                      "reasoning": {"enabled": False}},
+                      # Reasoning must be held down, not left at its default.
+                      # On 2026-08-26 Sonnet 5's default effort consumed the
+                      # entire completion budget (4000 reasoning tokens, 0
+                      # content) and every cycle failed with an empty reply.
+                      # Some models (GLM 5.3 Flash) make reasoning mandatory,
+                      # so "low" is used rather than off - it satisfies both.
+                      "reasoning": {"effort": self.reasoning_effort}},
                 timeout=180,
             )
             r.raise_for_status()
