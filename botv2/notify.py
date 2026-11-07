@@ -59,3 +59,9 @@ def market_view(market: str, view: str) -> None:
 
 def alert(msg: str) -> None:
     _send(msg)
+
+
+def skeptic_blocked(market, symbol, kind, ruling, summary, reasons) -> None:
+    why = "\n".join(f"• {_esc(r[:160])}" for r in (reasons or [])[:3])
+    _send(f"🧐 <b>[{market}] Skeptic {ruling}: {kind} {symbol}</b>\n"
+          f"{_esc(summary[:200])}" + (f"\n{why}" if why else ""))

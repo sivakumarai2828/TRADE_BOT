@@ -11,6 +11,15 @@ V3 adds three capabilities on top of the V2 buy/sell/adjust loop:
                full revalidation at trigger time.
   REPLACE      when the book is full, a materially better opportunity can take
                the place of the weakest holding instead of being skipped.
+
+Desk release (branch v3) adds two gates in front of every NEW entry
+(BUY, REPLACE, WATCH trigger), after the code risk checks:
+
+  SKEPTIC      a second model argues against the entry and rules BUY / WAIT /
+               SKIP. Anything but BUY blocks it. Fail-closed.
+  APPROVAL     the entry is sent to Telegram and only filled when Siva taps
+               Approve, after a full revalidation at the current price.
+               Exits are never gated.
 """
 
 from __future__ import annotations
@@ -60,7 +69,8 @@ class MarketRunner:
     REPLACE_MIN_EDGE = 0.5       # new R must beat the old position's R by this much
 
     def __init__(self, market: str, currency: str, cfg, journal: Journal,
-                 ai: PortfolioManagerAI, ledger: PaperLedger, alpaca=None):
+                 ai: PortfolioManagerAI, ledger: PaperLedger, alpaca=None,
+                 skeptic=None, approvals=None):
         self.market = market
         self.currency = currency
         self.cfg = cfg
@@ -68,6 +78,8 @@ class MarketRunner:
         self.ai = ai
         self.ledger = ledger
         self.alpaca = alpaca  # AlpacaMirror or None (US only)
+        self.skeptic = skeptic          # Skeptic or None (gate disabled)
+        self.approvals = approvals      # ApprovalDesk or None (fill immediately)
         self.risk = RiskEngine(cfg.caps, journal, market)
         self._snapshots: dict[str, dict] = {}   # symbol -> latest snapshot
         self._regime_label = "UNKNOWN"
@@ -159,6 +171,17 @@ class MarketRunner:
         if not verdict.ok:
             log.warning("watch %s trigger rejected: %s", sym, verdict.reason)
             self.journal.resolve_watch(w["id"], "cancelled", verdict.reason[:120])
+            return
+        proposal = {"kind": "WATCH", "symbol": sym, "price": price,
+                    "stop": float(w["stop"]), "target": float(w["target"]),
+                    "setup": w.get("setup"), "thesis": w.get("thesis", ""),
+                    "watch_id": w["id"], "qty": verdict.qty}
+        gate = self._gate_entry(proposal, snap)
+        if gate == "blocked":
+            self.journal.resolve_watch(w["id"], "cancelled",
+                                       f"skeptic: {proposal.get('skeptic', '')}"[:120])
+            return
+        if gate == "pending":
             return
         meta = self._meta_for(sym, snap, w.get("setup"), price, w["stop"], w["target"])
         fill = self.ledger.buy(sym, verdict.qty, float(w["stop"]),
@@ -395,14 +418,25 @@ class MarketRunner:
                         sym, new_r, old_sym, old_r, self.REPLACE_MIN_EDGE)
             return
 
+        proposal = {"kind": "REPLACE", "symbol": sym, "price": price,
+                    "stop": new_stop, "target": new_target, "replace": old_sym,
+                    "setup": str(act.get("setup", "")).upper(),
+                    "thesis": str(act.get("thesis", ""))}
+        gate = self._gate_entry(proposal, self._snapshots.get(sym))
+        if gate == "blocked":
+            return
+        if gate == "pending":
+            by_symbol[sym] = {"symbol": sym, "pending": True}
+            return
+
         log.info("%s REPLACE %s -> %s (%.2fR)", self.market, old_sym, sym, new_r)
         self._exit(old, f"replaced_by_{sym}")
         by_symbol.pop(old_sym, None)
-        self._buy(act, by_symbol, halt, earnings)
+        self._buy(act, by_symbol, halt, earnings, gated=False)
 
     # ── BUY ──────────────────────────────────────────────────────
     def _buy(self, act: dict, by_symbol: dict, halt: str | None,
-             earnings: dict | None) -> None:
+             earnings: dict | None, gated: bool = True) -> None:
         sym = str(act.get("symbol", "")).strip()
         if halt:
             log.warning("BUY %s rejected — halt active", sym)
@@ -426,20 +460,132 @@ class MarketRunner:
             log.warning("BUY %s rejected by risk: %s", sym, verdict.reason)
             return
         setup = str(act.get("setup", "")).upper()
+        if gated:
+            proposal = {"kind": "BUY", "symbol": sym, "price": price,
+                        "stop": float(act["stop"]), "target": target, "setup": setup,
+                        "thesis": str(act.get("thesis", "")), "qty": verdict.qty}
+            gate = self._gate_entry(proposal, self._snapshots.get(sym))
+            if gate == "blocked":
+                return
+            if gate == "pending":
+                by_symbol[sym] = {"symbol": sym, "pending": True}  # counts toward caps
+                return
         meta = self._meta_for(sym, self._snapshots.get(sym), setup,
                               price, act.get("stop"), target)
-        fill = self.ledger.buy(sym, verdict.qty, float(act["stop"]), target,
-                               str(act.get("thesis", ""))[:300], meta=meta)
-        if fill:
+        if self._fill_buy(sym, verdict.qty, float(act["stop"]), target,
+                          str(act.get("thesis", "")), meta):
             by_symbol[sym] = {"symbol": sym}  # count toward max positions
+
+    def _fill_buy(self, sym: str, qty: float, stop: float, target: float | None,
+                  thesis: str, meta: dict) -> dict | None:
+        fill = self.ledger.buy(sym, qty, stop, target, thesis[:300], meta=meta)
+        if fill:
             self.journal.cancel_watch_symbol(self.market, sym, "bought directly")
             if self.alpaca:
                 self.alpaca.order(sym, fill["qty"], "buy")
             notify.trade_opened(self.market, sym, fill["qty"], fill["fill"],
-                                float(act["stop"]), act.get("target"),
-                                str(act.get("thesis", "")), self.currency)
+                                stop, target, thesis, self.currency)
             log.info("%s BUY %s %.0f @ %.2f (%s)", self.market, sym, fill["qty"],
                      fill["fill"], meta.get("setup_type") or "unlabelled")
+        return fill
+
+    # ── desk gates: Skeptic, then human approval ─────────────────
+    def _gate_entry(self, proposal: dict, snap: dict | None) -> str:
+        """Returns "go" (fill now), "pending" (sent for approval) or "blocked"."""
+        sym = proposal["symbol"]
+        if self.skeptic is not None:
+            v = self.skeptic.review(self.market, self.currency, proposal, snap,
+                                    self._regime_label)
+            self._log_skeptic(proposal, v)
+            proposal["skeptic"] = v.summary
+            if not v.approved:
+                log.warning("%s %s %s blocked by skeptic: %s — %s", self.market,
+                            proposal["kind"], sym, v.ruling, v.summary)
+                notify.skeptic_blocked(self.market, sym, proposal["kind"],
+                                       v.ruling, v.summary, v.reasons)
+                return "blocked"
+        if self.approvals is not None:
+            req = dict(proposal, market=self.market, currency=self.currency)
+            self.approvals.submit(req)
+            return "pending"
+        return "go"
+
+    def _log_skeptic(self, proposal: dict, v) -> None:
+        """Keep the last 100 rulings so refusal rate can be audited."""
+        import json
+        key = f"{self.market}_skeptic_log"
+        try:
+            log_ = json.loads(self.journal.kv_get(key) or "[]")
+        except ValueError:
+            log_ = []
+        log_.append({"ts": time.time(), "symbol": proposal["symbol"],
+                     "kind": proposal["kind"], "ruling": v.ruling,
+                     "summary": v.summary, "reasons": v.reasons, "error": v.error})
+        try:
+            self.journal.kv_set(key, json.dumps(log_[-100:]))
+        except Exception:
+            log.exception("skeptic log write failed")
+
+    def execute_approved(self, req: dict, max_drift_pct: float = 0.015) -> tuple[bool, str]:
+        """Fill an approved request. Everything is re-checked at the current
+        price: minutes or an hour may have passed since the proposal."""
+        sym, stop, target = req["symbol"], float(req["stop"]), req.get("target")
+        target = float(target) if target else None
+        equity = self.ledger.equity()
+        halt = self.risk.check_halts(equity, self.ledger.day_pnl())
+        if halt:
+            return False, halt
+        positions = self.ledger.positions()
+        held = {p["symbol"]: p for p in positions}
+        if sym in held:
+            return False, "already held"
+        price = data.fetch_price(sym)
+        if not price:
+            return False, "no current price"
+        ref = float(req["price"])
+        if price > ref * (1 + max_drift_pct):
+            return False, (f"price ran {100 * (price / ref - 1):.1f}% since proposal "
+                           f"({ref:.2f} -> {price:.2f})")
+        if price <= stop:
+            return False, f"price {price:.2f} already at/below stop {stop:.2f}"
+        snap = self._snapshots.get(sym)
+        if snap is None:
+            try:
+                snap = data.fetch_snapshot(sym)
+            except Exception:
+                snap = None
+        days = (snap or {}).get("days_to_earnings")
+        if days is not None and days <= self.EARNINGS_BLOCK_DAYS:
+            return False, f"earnings in {days}d"
+
+        n_open, cash, old = len(positions), self.ledger.cash, None
+        if req.get("kind") == "REPLACE":
+            old = held.get(req.get("replace"))
+            if old is None:
+                return False, f"{req.get('replace')} no longer held"
+            n_open -= 1
+            cash += float(old["qty"]) * float(old.get("last_price") or old["entry"])
+        verdict = self.risk.validate_buy(sym, price, stop, target, equity, cash, n_open)
+        if not verdict.ok:
+            return False, verdict.reason
+        if old is not None:
+            self._exit(old, f"replaced_by_{sym}")
+        meta = self._meta_for(sym, snap, req.get("setup"), price, stop, target)
+        fill = self._fill_buy(sym, verdict.qty, stop, target,
+                              ("[watch] " if req.get("kind") == "WATCH" else "")
+                              + str(req.get("thesis", "")), meta)
+        if not fill:
+            return False, "ledger refused the fill"
+        if req.get("watch_id"):
+            self.journal.resolve_watch(req["watch_id"], "triggered",
+                                       f"approved, filled @ {fill['fill']}")
+        return True, f"{fill['qty']:.0f} sh @ {fill['fill']:.2f}"
+
+    def on_approval_rejected(self, req: dict, why: str) -> None:
+        """A skipped or expired WATCH is cancelled so it doesn't re-ping
+        every 20 minutes. BUY/REPLACE need no cleanup."""
+        if req.get("watch_id"):
+            self.journal.resolve_watch(req["watch_id"], "cancelled", why[:120])
 
     # ── weekly self-review ───────────────────────────────────────
     def weekly_review(self) -> None:

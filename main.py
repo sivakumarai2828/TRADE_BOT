@@ -15,6 +15,8 @@ CLI:
   python main.py once india run one India cycle now
   python main.py review     run self-review now
   python main.py status     print portfolio state
+  python main.py pending    list entries waiting for approval
+  python main.py approve <id> / reject <id>   decide one from the shell
 """
 
 from __future__ import annotations
@@ -27,32 +29,62 @@ from zoneinfo import ZoneInfo
 
 from botv2.ai_pm import PortfolioManagerAI
 from botv2.alpaca_mirror import AlpacaMirror
+from botv2.approval import ApprovalDesk
 from botv2 import notify
 from botv2.config import load_config
 from botv2.executor import MarketRunner
+from botv2.skeptic import Skeptic
 from botv2.storage import make_journal
 
 
-def build_runners(cfg):
+def build_desk(cfg, journal):
+    """Skeptic + ApprovalDesk from config. Approval mode 'telegram' without
+    Telegram credentials refuses to start: silently trading unapproved would
+    defeat the point, and silently never trading would go unnoticed."""
+    skeptic = None
+    if cfg.skeptic_enabled:
+        backend = PortfolioManagerAI(cfg.anthropic_api_key,
+                                     cfg.skeptic_model or cfg.anthropic_model,
+                                     cfg.ai_decision_max_tokens, cfg.openrouter_api_key,
+                                     cfg.ai_reasoning_effort)
+        skeptic = Skeptic(backend)
+    desk = None
+    if cfg.approval_mode == "telegram":
+        if not (cfg.telegram_token and cfg.telegram_chat_id):
+            raise SystemExit("APPROVAL_MODE=telegram needs TELEGRAM_TOKEN and "
+                             "TELEGRAM_CHAT_ID (or set APPROVAL_MODE=off)")
+        desk = ApprovalDesk(journal, cfg.telegram_token, cfg.telegram_chat_id,
+                            cfg.approval_timeout_min, cfg.approval_max_drift_pct)
+    elif cfg.approval_mode != "off":
+        raise SystemExit(f"APPROVAL_MODE must be telegram or off, got {cfg.approval_mode!r}")
+    return skeptic, desk
+
+
+def build_runners(cfg, journal=None):
     from botv2.ledger import PaperLedger
 
-    journal = make_journal(cfg.db_path)
+    journal = journal or make_journal(cfg.db_path)
     ai = PortfolioManagerAI(cfg.anthropic_api_key, cfg.anthropic_model,
                             cfg.ai_decision_max_tokens, cfg.openrouter_api_key,
                             cfg.ai_reasoning_effort)
+    skeptic, desk = build_desk(cfg, journal)
     runners = {}
     if cfg.trade_us:
         runners["US"] = MarketRunner(
             "US", "USD", cfg, journal, ai,
             PaperLedger(journal, "US", cfg.us_start_cash),
             alpaca=AlpacaMirror(cfg.alpaca_key, cfg.alpaca_secret, cfg.alpaca_base_url),
+            skeptic=skeptic, approvals=desk,
         )
     if cfg.trade_india:
         runners["INDIA"] = MarketRunner(
             "INDIA", "INR", cfg, journal, ai,
             PaperLedger(journal, "INDIA", cfg.india_start_cash),
+            skeptic=skeptic, approvals=desk,
         )
-    return runners
+    if desk:
+        desk.runners = runners
+    return runners, desk
 
 
 NY = ZoneInfo("America/New_York")
@@ -72,7 +104,8 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     log = logging.getLogger("botv2.main")
-    runners = build_runners(cfg)
+    journal = make_journal(cfg.db_path)
+    runners, desk = build_runners(cfg, journal)
 
     args = sys.argv[1:]
     if args[:1] == ["once"]:
@@ -82,6 +115,17 @@ def main() -> None:
     if args[:1] == ["review"]:
         for r in runners.values():
             r.weekly_review()
+        return
+    if args[:1] == ["pending"]:
+        for r in (desk.pending() if desk else []):
+            print(f"{r['id']}  {r['market']} {r['kind']} {r['symbol']} @ {r['price']} "
+                  f"stop {r['stop']} target {r.get('target')}")
+        return
+    if args[:1] in (["approve"], ["reject"]) and len(args) > 1:
+        if not desk:
+            print("APPROVAL_MODE is off")
+            return
+        print(desk.decide(args[1], approve=args[0] == "approve", source="cli"))
         return
     if args[:1] == ["status"]:
         for name, r in runners.items():
@@ -112,8 +156,9 @@ def main() -> None:
                     pass
 
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
-    journal = make_journal(cfg.db_path)
-    notify.alert(f"🟢 TRADE_BOT_V2 started (markets: {', '.join(runners)})")
+    notify.alert(f"🟢 TRADE_BOT_V3 started (markets: {', '.join(runners)}) | "
+                 f"skeptic {'on' if cfg.skeptic_enabled else 'off'} | "
+                 f"approvals {cfg.approval_mode}")
 
     # A transient network blip (e.g. Supabase 'connection reset by peer') must
     # never kill the scheduler: on 2026-08-06 one such error crashed the process
@@ -142,6 +187,8 @@ def main() -> None:
             if now_utc.weekday() == 5 and (now_utc.hour, now_utc.minute) == (8, 0):
                 for r in runners.values():
                     fire_once("review", now_utc.strftime("%Y-%m-%d"), r.weekly_review)
+            if desk:
+                desk.poll()   # Approve/Skip taps, expiry
             fails = 0
         except Exception:
             fails += 1

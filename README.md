@@ -1,5 +1,27 @@
 # TRADE_BOT_V2 — AI Portfolio Manager
 
+## v3 branch: Skeptic + per-trade approval
+
+Every NEW entry (BUY, REPLACE, WATCH trigger) now passes, in order:
+
+1. **Code risk caps** (unchanged) — cheap checks first.
+2. **Skeptic** (`botv2/skeptic.py`) — a second AI call names the three
+   strongest reasons the trade fails and rules BUY / WAIT / SKIP. Only BUY
+   continues. Errors or unparseable replies count as SKIP (fail-closed).
+   Rulings are kept in kv `<MARKET>_skeptic_log` (last 100) — check the
+   refusal rate; a Skeptic that approves everything is not doing its job.
+3. **Your approval** (`botv2/approval.py`) — Telegram message with
+   ✅ Approve / ⏭ Skip. On Approve the bot re-checks halts, earnings, caps
+   and price (cancels if price ran >1.5% or is at the stop) before filling.
+   Unanswered requests expire after 90 min. Exits are never gated.
+
+Telegram commands: `/pending`, `/approve <id>`, `/reject <id>`.
+Shell: `python main.py pending | approve <id> | reject <id>`.
+Turn either gate off with `SKEPTIC_ENABLED=false` / `APPROVAL_MODE=off`.
+The scheduler refuses to start with `APPROVAL_MODE=telegram` and no
+Telegram credentials. Only one process may poll the bot token
+(no webhook, no second bot on the same token).
+
 ## What changed vs V1
 
 | | V1 (old) | V2 (this) |

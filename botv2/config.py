@@ -83,6 +83,19 @@ class V2Config:
     # unbounded reasoning budget starves the answer (see 2026-08-26).
     ai_reasoning_effort: str = "low"
 
+    # ── Desk gates (branch v3) ──
+    # Skeptic: second model that argues against every new entry. Fail-closed.
+    skeptic_enabled: bool = True
+    # Empty = same model as the PM. A different model gives a more
+    # independent second opinion (e.g. "anthropic/claude-sonnet-5").
+    skeptic_model: str = ""
+    # "telegram" = every new entry waits for an Approve tap; "off" = fill
+    # immediately (V2 behaviour). Exits are never gated.
+    approval_mode: str = "telegram"
+    approval_timeout_min: float = 90.0
+    # Cancel an approved entry if price has run this far above the proposal.
+    approval_max_drift_pct: float = 0.015
+
     caps: HardCaps = field(default_factory=HardCaps)
 
 
@@ -121,5 +134,10 @@ def load_config() -> V2Config:
         ai_decision_max_tokens=_i("AI_DECISION_MAX_TOKENS", "4000"),
         target_deployment_pct=_f("TARGET_DEPLOYMENT_PCT", "0"),
         ai_reasoning_effort=os.getenv("AI_REASONING_EFFORT", "low"),
+        skeptic_enabled=_b("SKEPTIC_ENABLED", "true"),
+        skeptic_model=os.getenv("SKEPTIC_MODEL", ""),
+        approval_mode=os.getenv("APPROVAL_MODE", "telegram").strip().lower(),
+        approval_timeout_min=_f("APPROVAL_TIMEOUT_MIN", "90"),
+        approval_max_drift_pct=_f("APPROVAL_MAX_DRIFT_PCT", "0.015"),
         caps=caps,
     )
