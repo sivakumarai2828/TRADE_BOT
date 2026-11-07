@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TRADE_BOT Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Operations console: status first (bots), then what needs you (approvals),
+   then what you own (positions), then context (watches, skeptic, log). */
+:root{
+  --bg:#f2f4f7; --panel:#fff; --ink:#142033; --muted:#5d6879; --line:#dce2ea;
+  --accent:#1f5fbf; --accent-soft:#e3ecfa;
+  --good:#16804a; --good-soft:#e0f3e7; --bad:#b4232c; --bad-soft:#fbe4e5;
+  --warn:#9a6200; --warn-soft:#fbf0d8; --idle:#6b7587; --idle-soft:#eceff3;
+  --display:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e141e; --panel:#161e2b; --ink:#e3e8f0; --muted:#95a1b4; --line:#283345;
+  --accent:#6ea2f2; --accent-soft:#1b2b46; --good:#4cc283; --good-soft:#132e1e;
+  --bad:#f07178; --bad-soft:#3a191d; --warn:#e8b45a; --warn-soft:#352812;
+  --idle:#97a1b2; --idle-soft:#212a38; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e141e; --panel:#161e2b; --ink:#e3e8f0; --muted:#95a1b4; --line:#283345;
+  --accent:#6ea2f2; --accent-soft:#1b2b46; --good:#4cc283; --good-soft:#132e1e;
+  --bad:#f07178; --bad-soft:#3a191d; --warn:#e8b45a; --warn-soft:#352812;
+  --idle:#97a1b2; --idle-soft:#212a38; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--display);padding:0 16px 40px}
+.wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
+.mono,.num,td.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+h1{font-size:18px;margin:0;font-weight:700}
+h2{font-size:14px;margin:0;font-weight:600}
+.top{position:sticky;top:0;z-index:5;background:var(--bg);display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}
+.spacer{flex:1}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.phead{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.phead .hint{margin-left:auto}
+.hint{color:var(--muted);font-size:12px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;white-space:nowrap}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.good{background:var(--good-soft);color:var(--good)} .pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)} .pill.idle{background:var(--idle-soft);color:var(--idle)}
+.pill.plain::before{display:none}
+button{font:inherit;font-weight:600;font-size:13px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 11px;cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad)} button.danger:hover:not(:disabled){border-color:var(--bad)}
+button.ok{color:var(--good)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) minmax(260px,.8fr);gap:16px}
+@media (max-width:1050px){.bots{grid-template-columns:1fr 1fr}.gates{grid-column:1/-1}}
+@media (max-width:700px){.bots{grid-template-columns:1fr}}
+.bot{border-top:3px solid var(--idle)}
+.bot.s-running{border-top-color:var(--good)} .bot.s-paused{border-top-color:var(--warn)} .bot.s-halted,.bot.s-offline{border-top-color:var(--bad)}
+.bot-name{font-size:16px;font-weight:700}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.kpi .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.kpi .v{font-family:var(--mono);font-size:17px;font-weight:600}
+.up{color:var(--good)} .down{color:var(--bad)}
+.meta{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:12px;color:var(--muted);margin-bottom:10px}
+.meta span:nth-child(even){color:var(--ink);font-family:var(--mono)}
+.actions{display:flex;flex-wrap:wrap;gap:6px}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.switch:last-of-type{border-bottom:0}
+.switch .lbl b{display:block;font-size:13px}
+.switch .lbl span{font-size:12px;color:var(--muted)}
+.tg{position:relative;width:42px;height:24px;flex:none}
+.tg input{opacity:0;width:100%;height:100%;margin:0;cursor:pointer;position:absolute;z-index:1}
+.tg span{position:absolute;inset:0;border-radius:99px;background:var(--line)}
+.tg span::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.tg input:checked+span{background:var(--accent)} .tg input:checked+span::after{transform:translateX(18px)}
+.tg input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+.tg input:disabled{cursor:not-allowed} .tg input:disabled+span{opacity:.5}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;border-bottom:1px solid var(--line);padding:6px 8px;white-space:nowrap}
+td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right}
+.sym{font-family:var(--mono);font-weight:600}
+.mk{font-size:11px;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px}
+.range{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--bad-soft),var(--idle-soft) 40%,var(--good-soft));min-width:120px}
+.range i{position:absolute;top:-4px;width:3px;height:14px;border-radius:2px;background:var(--ink)}
+.range b{position:absolute;top:-2px;width:1px;height:10px;background:var(--muted)}
+.rlbl{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:4px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.list{display:grid;gap:8px}
+.item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
+.item .row1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.approval{border-left:3px solid var(--warn)}
+.empty{color:var(--muted);font-size:13px;padding:14px 4px}
+.log{display:grid;gap:4px;font-size:12px;font-family:var(--mono);max-height:300px;overflow-y:auto}
+.log div{display:grid;grid-template-columns:52px 1fr;gap:8px;color:var(--muted)}
+.log div span:last-child{color:var(--ink);font-family:var(--display)}
+.banner{border-radius:8px;padding:10px 12px;font-size:13px;display:none}
+.banner.show{display:block}
+.banner.bad{background:var(--bad-soft);color:var(--ink)} .banner.warn{background:var(--warn-soft)}
+.toast{position:fixed;right:16px;bottom:16px;z-index:20;display:grid;gap:8px;max-width:360px}
+.toast div{background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);padding:18px;max-width:420px;width:calc(100% - 32px)}
+dialog::backdrop{background:rgba(10,15,25,.45)}
+dialog h3{margin:0 0 6px;font-size:16px}
+dialog p{margin:0 0 14px;color:var(--muted)}
+dialog input{width:100%;font:14px var(--mono);padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);margin-bottom:14px}
+dialog .actions{justify-content:flex-end}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>TRADE_BOT Control</h1>
+    <span id="procPill" class="pill idle">Connecting…</span>
+    <span class="hint" id="procMeta"></span>
+    <span class="spacer"></span>
+    <span class="hint" id="refreshed"></span>
+    <button id="btnRefresh" type="button">Refresh</button>
+    <button id="btnLock" type="button">🔒 Unlock controls</button>
+  </header>
+
+  <div id="banner" class="banner" role="status"></div>
+
+  <section class="bots" aria-label="Bots">
+    <div class="panel bot" id="bot-US"></div>
+    <div class="panel bot" id="bot-INDIA"></div>
+    <div class="panel gates">
+      <div class="phead"><h2>Entry gates</h2><span class="hint">both bots</span></div>
+      <div class="switch"><div class="lbl"><b>Skeptic</b><span>Second AI argues against every new entry</span></div>
+        <label class="tg" for="gSkeptic"><input type="checkbox" id="gSkeptic" data-gate="skeptic" aria-label="Skeptic gate"><span></span></label></div>
+      <div class="switch"><div class="lbl"><b>Telegram approval</b><span>Nothing is bought until you tap Approve</span></div>
+        <label class="tg" for="gApproval"><input type="checkbox" id="gApproval" data-gate="approval" aria-label="Telegram approval gate"><span></span></label></div>
+      <div class="switch"><div class="lbl"><b>Skeptic refusal rate</b><span>Healthy is well above 50%</span></div>
+        <span class="mono" id="skRate">–</span></div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Pending approvals">
+    <div class="phead"><h2>Waiting for you</h2><span class="pill plain warn" id="apCount">0</span><span class="hint">Approve here or on Telegram. Re-checked at the live price before filling.</span></div>
+    <div class="list" id="approvals"></div>
+  </section>
+
+  <section class="panel" aria-label="Open positions">
+    <div class="phead"><h2>Shares the bots hold now</h2><span class="hint" id="posHint"></span></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Symbol</th><th class="num">Qty</th><th class="num">Entry</th><th class="num">Last</th><th class="num">P&amp;L</th><th>Stop → target</th><th>Thesis</th><th></th></tr></thead>
+      <tbody id="positions"></tbody></table></div>
+  </section>
+
+  <div class="two">
+    <section class="panel" aria-label="Watches">
+      <div class="phead"><h2>Armed entries (WATCH)</h2><span class="hint">Bot buys only if price reaches the level and re-checks pass</span></div>
+      <div class="tablewrap"><table><thead><tr><th>Symbol</th><th>Setup</th><th class="num">Entry at</th><th class="num">Stop</th><th class="num">Target</th><th>Expires</th></tr></thead><tbody id="watches"></tbody></table></div>
+    </section>
+    <section class="panel" aria-label="Skeptic rulings">
+      <div class="phead"><h2>Skeptic rulings</h2><span class="hint">newest first</span></div>
+      <div class="list" id="skeptic"></div>
+    </section>
+  </div>
+
+  <div class="two">
+    <section class="panel" aria-label="Activity">
+      <div class="phead"><h2>Activity</h2></div>
+      <div class="log" id="activity"></div>
+    </section>
+    <section class="panel" aria-label="Your commands">
+      <div class="phead"><h2>Your commands</h2><span class="hint">The bot runs these within ~20 s</span></div>
+      <div class="log" id="results"></div>
+    </section>
+  </div>
+</div>
+
+<dialog id="dlgToken"><form method="dialog" id="tokenForm">
+  <h3>Unlock controls</h3>
+  <p>Enter the DASHBOARD_TOKEN from the bot's .env. It stays in this browser only.</p>
+  <label for="tokenIn" class="hint">Dashboard token</label>
+  <input id="tokenIn" type="password" autocomplete="current-password">
+  <div class="actions"><button value="cancel" type="button" id="tokCancel">Cancel</button><button class="primary" type="submit">Unlock</button></div>
+</form></dialog>
+
+<dialog id="dlgConfirm"><form method="dialog">
+  <h3 id="cfTitle"></h3><p id="cfBody"></p>
+  <div class="actions"><button type="button" id="cfNo">Cancel</button><button class="primary" id="cfYes" type="button">Confirm</button></div>
+</form></dialog>
+
+<div class="toast" id="toast" aria-live="polite"></div>
+
+<script>
+"use strict";
+const API=(new URLSearchParams(location.search).get("api")||"").replace(/\/$/,"");
+const NAMES={US:"US Swing Bot",INDIA:"India Swing Bot"};
+const CUR={US:"$",INDIA:"₹"};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let token=""; try{token=localStorage.getItem("tb_token")||""}catch(e){}
+let summary=null, ctl=null, activity={US:[],INDIA:[]};
+
+const fmt=(n,m,dp=2)=>n==null?"–":(CUR[m]||"")+Number(n).toLocaleString(m==="INDIA"?"en-IN":"en-US",{minimumFractionDigits:dp,maximumFractionDigits:dp});
+const sgn=(n,m)=>n==null?"–":(n>=0?"+":"−")+fmt(Math.abs(n),m);
+const pct=n=>n==null?"–":(n>=0?"+":"")+Number(n).toFixed(2)+"%";
+function ago(ts){if(!ts)return"never";const s=Math.max(0,Date.now()/1000-ts);
+  if(s<90)return Math.round(s)+"s ago";if(s<5400)return Math.round(s/60)+"m ago";if(s<172800)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago"}
+function until(ts){if(!ts)return"–";const s=ts-Date.now()/1000;if(s<=0)return"now";
+  const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h>=24?Math.floor(h/24)+"d "+(h%24)+"h":h?`${h}h ${m}m`:`${m}m`}
+const clock=ts=>new Date(ts*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+
+function toast(msg){const d=document.createElement("div");d.textContent=msg;$("toast").appendChild(d);setTimeout(()=>d.remove(),4500)}
+
+async function get(path){const r=await fetch(API+path,{cache:"no-store"});if(!r.ok)throw new Error(path+" "+r.status);return r.json()}
+async function post(path,body){
+  if(!token){openToken();throw new Error("locked")}
+  const r=await fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json","X-Dashboard-Token":token},body:JSON.stringify(body||{})});
+  const j=await r.json().catch(()=>({}));
+  if(r.status===401){token="";try{localStorage.removeItem("tb_token")}catch(e){};renderLock();openToken();}
+  if(!r.ok)throw new Error(j.error||("HTTP "+r.status));
+  return j;
+}
+function confirmBox(title,body,danger){return new Promise(res=>{
+  $("cfTitle").textContent=title;$("cfBody").textContent=body;
+  $("cfYes").className=danger?"primary":"primary";$("cfYes").textContent=danger?"Yes, do it":"Confirm";
+  const d=$("dlgConfirm");const done=v=>{d.close();res(v)};
+  $("cfYes").onclick=()=>done(true);$("cfNo").onclick=()=>done(false);d.showModal();})}
+
+async function cmd(c,market,arg,label){
+  try{const r=await post("/api/control/cmd",{cmd:c,market,arg});toast(`${label} queued (#${r.queued.id}). The bot picks it up within ~20 s.`);setTimeout(load,1500)}
+  catch(e){if(e.message!=="locked")toast("Failed: "+e.message)}
+}
+async function flag(f,value,market){
+  try{await post("/api/control/flag",{flag:f,value,market});toast(`${f==="paused"?(value?"Paused":"Resumed")+" "+NAMES[market]:f+" gate "+(value?"on":"off")}`);load()}
+  catch(e){if(e.message!=="locked")toast("Failed: "+e.message);load()}
+}
+
+function botState(m){
+  if(!ctl||!ctl.bot_alive)return["offline","Offline","bad"];
+  const c=ctl.markets[m];
+  if(c.killed||summary?.[m]?.killed)return["halted","Kill-switched","bad"];
+  if(c.paused)return["paused","Paused","warn"];
+  return["running","Running","good"];
+}
+function renderBot(m){
+  const el=$("bot-"+m), s=summary?.[m], c=ctl?.markets?.[m]||{}, st=ctl?.status?.markets?.[m]||{};
+  const [key,label,tone]=botState(m);
+  el.className="panel bot s-"+key;
+  const dp=s?.day_pnl, ret=s?.total_return_pct, locked=!token;
+  el.innerHTML=`<div class="phead"><span class="bot-name">${NAMES[m]}</span><span class="pill ${tone}">${label}</span>
+    <span class="pill plain idle">${st.session_open?"Market open":"Market closed"}</span></div>
+  <div class="kpis">
+    <div class="kpi"><div class="k">Equity</div><div class="v">${fmt(s?.equity,m,0)}</div></div>
+    <div class="kpi"><div class="k">Today</div><div class="v ${dp>=0?"up":"down"}">${sgn(dp,m)}</div></div>
+    <div class="kpi"><div class="k">Since start</div><div class="v ${ret>=0?"up":"down"}">${pct(ret)}</div></div>
+  </div>
+  <div class="meta">
+    <span>Holding</span><span>${s?.positions?.length??"–"} position(s) · cash ${fmt(s?.cash,m,0)}</span>
+    <span>Last AI cycle</span><span>${ago(c.runs?.cycle)}</span>
+    <span>Next AI cycle</span><span>${c.paused?"skipped while paused":until(st.next_cycle)}</span>
+    <span>Stops checked</span><span>${ago(c.runs?.monitor)}</span>
+  </div>
+  ${s?.market_view?`<p class="hint" style="margin:0 0 10px">🧠 ${esc(s.market_view).slice(0,220)}</p>`:""}
+  <div class="actions">
+    ${c.paused?`<button class="primary" data-act="resume" data-m="${m}" ${locked?"disabled":""}>Resume new entries</button>`
+              :`<button data-act="pause" data-m="${m}" ${locked?"disabled":""}>Pause new entries</button>`}
+    <button data-act="cycle" data-m="${m}" ${locked||c.paused?"disabled":""}>Run AI cycle now</button>
+    <button data-act="monitor" data-m="${m}" ${locked?"disabled":""}>Check stops now</button>
+    <button class="danger" data-act="flatten" data-m="${m}" ${locked||!s?.positions?.length?"disabled":""}>Close all</button>
+  </div>`;
+}
+function rangeBar(p){
+  const lo=Math.min(p.stop??p.entry,p.last_price),hi=Math.max(p.target??p.entry,p.last_price),span=(hi-lo)||1;
+  const at=v=>((v-lo)/span*100).toFixed(1)+"%";
+  return `<div class="range" title="stop ${p.stop} · entry ${p.entry} · target ${p.target}"><b style="left:${at(p.entry)}"></b><i style="left:calc(${at(p.last_price)} - 1px)"></i></div>
+  <div class="rlbl"><span>${p.stop??"–"}</span><span>${p.target??"–"}</span></div>`;
+}
+function render(){
+  ["US","INDIA"].forEach(renderBot);
+  const alive=ctl?.bot_alive, st=ctl?.status||{};
+  $("procPill").className="pill "+(alive?"good":ctl?"bad":"idle");
+  $("procPill").textContent=alive?"Bot process running":ctl?"Bot process offline":"Connecting…";
+  $("procMeta").textContent=ctl?`${st.version||"v2"} · heartbeat ${ctl.heartbeat_age_s!=null?ctl.heartbeat_age_s+"s":"none"}${st.started?" · up since "+new Date(st.started*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}`:"";
+  const b=$("banner");
+  if(ctl&&!alive){b.className="banner bad show";b.textContent="The bot process is not sending heartbeats. Commands will wait in the queue until it is back. Check the VM service: sudo systemctl status trade-bot-v2";}
+  else if(ctl&&!ctl.controls_enabled){b.className="banner warn show";b.textContent="Controls are disabled on the server. Add DASHBOARD_TOKEN=<a long random string> to the .env used by the API and restart it.";}
+  else b.className="banner";
+
+  if(ctl){$("gSkeptic").checked=ctl.gates.skeptic;$("gApproval").checked=ctl.gates.approval}
+  $("gSkeptic").disabled=$("gApproval").disabled=!token;
+  const sk=["US","INDIA"].flatMap(m=>ctl?.markets?.[m]?.skeptic_log||[]);
+  $("skRate").textContent=sk.length?`${Math.round(100*sk.filter(x=>x.ruling!=="BUY").length/sk.length)}% of ${sk.length}`:"no rulings yet";
+
+  const aps=ctl?.approvals||[];
+  $("apCount").textContent=aps.length;
+  $("approvals").innerHTML=aps.length?aps.map(a=>{
+    const m=a.market,rr=a.target?((a.target-a.price)/(a.price-a.stop)).toFixed(1)+"R":"";
+    const left=Math.max(0,90-Math.round((Date.now()/1000-a.created)/60));
+    return `<div class="item approval"><div class="row1"><span class="sym">${esc(a.kind)} ${esc(a.symbol)}</span><span class="mk">${m}</span>
+      <span class="mono">~${Math.round(a.qty||0)} sh @ ${fmt(a.price,m)} · stop ${fmt(a.stop,m)} · target ${fmt(a.target,m)} ${rr}</span>
+      ${a.replace?`<span class="pill plain warn">replaces ${esc(a.replace)}</span>`:""}
+      <span class="spacer"></span><span class="hint">expires in ${left} min</span>
+      <button class="ok" data-act="approve" data-id="${esc(a.id)}" data-sym="${esc(a.symbol)}" ${token?"":"disabled"}>✅ Approve</button>
+      <button data-act="reject" data-id="${esc(a.id)}" data-sym="${esc(a.symbol)}" ${token?"":"disabled"}>⏭ Skip</button></div>
+      <div class="hint" style="margin-top:4px">💡 ${esc(a.thesis)}${a.skeptic?` · 🧐 ${esc(a.skeptic)}`:""}</div></div>`}).join("")
+    :`<div class="empty">Nothing waiting. New entries appear here after they pass the risk caps and the Skeptic.</div>`;
+
+  const pos=["US","INDIA"].flatMap(m=>(summary?.[m]?.positions||[]).map(p=>({...p,m})));
+  $("posHint").textContent=pos.length?`${pos.length} open · stops and targets enforced every 20 min`:"";
+  $("positions").innerHTML=pos.length?pos.map(p=>`<tr>
+    <td><span class="sym">${esc(p.symbol)}</span><span class="mk">${p.m}</span></td>
+    <td class="num">${Math.round(p.qty)}</td><td class="num">${fmt(p.entry,p.m)}</td><td class="num">${fmt(p.last_price,p.m)}</td>
+    <td class="num ${p.unrealized_pnl>=0?"up":"down"}">${sgn(p.unrealized_pnl,p.m)}<br><span class="hint">${pct(p.unrealized_pnl_pct)}</span></td>
+    <td style="min-width:150px">${rangeBar(p)}</td>
+    <td class="hint" style="max-width:280px">${esc((p.thesis||"").slice(0,120))}</td>
+    <td><button class="danger" data-act="close" data-m="${p.m}" data-sym="${esc(p.symbol)}" ${token?"":"disabled"}>Close</button></td></tr>`).join("")
+    :`<tr><td colspan="8" class="empty">No open positions.</td></tr>`;
+
+  const w=["US","INDIA"].flatMap(m=>(ctl?.markets?.[m]?.watches||[]).map(x=>({...x,m})));
+  $("watches").innerHTML=w.length?w.map(x=>`<tr><td><span class="sym">${esc(x.symbol)}</span><span class="mk">${x.m}</span></td><td>${esc(x.setup||"–")}</td>
+    <td class="num">${fmt(x.ideal_entry,x.m)}</td><td class="num">${fmt(x.stop,x.m)}</td><td class="num">${fmt(x.target,x.m)}</td><td class="hint">${until(x.ts_expires)}</td></tr>`).join("")
+    :`<tr><td colspan="6" class="empty">No armed entries.</td></tr>`;
+
+  const skl=["US","INDIA"].flatMap(m=>(ctl?.markets?.[m]?.skeptic_log||[]).map(x=>({...x,m}))).sort((a,b)=>b.ts-a.ts).slice(0,8);
+  $("skeptic").innerHTML=skl.length?skl.map(x=>`<div class="item"><div class="row1"><span class="pill ${x.ruling==="BUY"?"good":x.ruling==="WAIT"?"warn":"bad"}">${x.ruling}</span>
+    <span class="sym">${esc(x.symbol)}</span><span class="mk">${x.m}</span><span class="spacer"></span><span class="hint">${ago(x.ts)}</span></div>
+    <div class="hint" style="margin-top:4px">${esc(x.summary)}</div></div>`).join("")
+    :`<div class="empty">No rulings yet.</div>`;
+
+  const feed=["US","INDIA"].flatMap(m=>(activity[m]||[]).map(a=>({...a,m}))).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,25);
+  $("activity").innerHTML=feed.length?feed.map(a=>`<div><span>${a.ts?clock(a.ts):""}</span><span><b class="mk" style="margin:0 6px 0 0">${a.m}</b>${esc(a.kind==="trade"?`${a.text} · ${sgn(a.pnl,a.m)}`:`AI: ${a.text}`)}</span></div>`).join("")
+    :`<div><span></span><span class="hint">No activity yet.</span></div>`;
+
+  const q=(ctl?.queue||[]).map(x=>`<div><span>${clock(x.ts)}</span><span>⏳ ${esc(x.cmd)} ${esc(x.market||"")} ${esc(x.arg||"")} · waiting for bot</span></div>`);
+  const r=(ctl?.results||[]).map(x=>`<div><span>${clock(x.done)}</span><span>${x.ok?"✅":"⚠️"} ${esc(x.cmd)} ${esc(x.market||"")} ${esc(x.arg||"")} · ${esc(x.note)}</span></div>`);
+  $("results").innerHTML=(q.concat(r)).join("")||`<div><span></span><span class="hint">Nothing yet.</span></div>`;
+  renderLock();
+}
+function renderLock(){$("btnLock").textContent=token?"🔓 Controls unlocked":"🔒 Unlock controls"}
+
+async function load(){
+  try{
+    const [s,c,a1,a2]=await Promise.all([get("/api/summary"),get("/api/control"),get("/api/activity?market=US"),get("/api/activity?market=INDIA")]);
+    summary=s;ctl=c;activity={US:a1,INDIA:a2};
+    $("refreshed").textContent="Updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  }catch(e){
+    $("banner").className="banner bad show";$("banner").textContent="Cannot reach the bot API ("+e.message+"). Is trade-bot-v2-api running?";
+    $("procPill").className="pill bad";$("procPill").textContent="API unreachable";return;
+  }
+  render();
+}
+
+function openToken(){$("tokenIn").value="";$("dlgToken").showModal();$("tokenIn").focus()}
+$("tokCancel").onclick=()=>$("dlgToken").close();
+$("tokenForm").addEventListener("submit",async e=>{
+  e.preventDefault();const t=$("tokenIn").value.trim();if(!t)return;
+  const r=await fetch(API+"/api/control/auth",{method:"POST",headers:{"X-Dashboard-Token":t}});
+  if(r.ok){token=t;try{localStorage.setItem("tb_token",t)}catch(e){};$("dlgToken").close();toast("Controls unlocked");render()}
+  else{const j=await r.json().catch(()=>({}));toast(j.error||"Wrong token")}
+});
+$("btnLock").onclick=()=>{if(token){token="";try{localStorage.removeItem("tb_token")}catch(e){};toast("Controls locked");render()}else openToken()};
+$("btnRefresh").onclick=load;
+document.querySelectorAll("[data-gate]").forEach(el=>el.addEventListener("change",async e=>{
+  const g=e.target.dataset.gate,on=e.target.checked;
+  if(!on&&!(await confirmBox(`Turn off ${g==="skeptic"?"the Skeptic":"Telegram approval"}?`,
+      g==="skeptic"?"New entries will skip the second AI check.":"New entries will be bought immediately without asking you.",true))){e.target.checked=true;return}
+  flag(g,on);
+}));
+document.addEventListener("click",async e=>{
+  const b=e.target.closest("button[data-act]");if(!b)return;
+  const a=b.dataset.act,m=b.dataset.m,sym=b.dataset.sym;
+  if(a==="pause")return flag("paused",true,m);
+  if(a==="resume")return flag("paused",false,m);
+  if(a==="cycle"){if(await confirmBox(`Run the ${NAMES[m]} AI cycle now?`,"The AI will review the market and may propose new entries. It uses one AI call.",false))cmd("run_cycle",m,null,"AI cycle");return}
+  if(a==="monitor")return cmd("monitor",m,null,"Stop check");
+  if(a==="flatten"){if(await confirmBox(`Close every ${NAMES[m]} position?`,"All open positions in this market will be sold at the current price.",true))cmd("flatten",m,null,"Close all");return}
+  if(a==="close"){if(await confirmBox(`Close ${sym}?`,"Sells the whole position at the current price.",true))cmd("close",m,sym,"Close "+sym);return}
+  if(a==="approve")return cmd("approve",null,b.dataset.id,"Approve "+sym);
+  if(a==="reject")return cmd("reject",null,b.dataset.id,"Skip "+sym);
+});
+load();setInterval(load,10000);
+</script>
+</body>
+</html>

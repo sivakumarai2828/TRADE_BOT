@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from botv2.ai_pm import PortfolioManagerAI
 from botv2.alpaca_mirror import AlpacaMirror
 from botv2.approval import ApprovalDesk
-from botv2 import notify
+from botv2 import control, notify
 from botv2.config import load_config
 from botv2.executor import MarketRunner
 from botv2.skeptic import Skeptic
@@ -106,6 +106,7 @@ def main() -> None:
     log = logging.getLogger("botv2.main")
     journal = make_journal(cfg.db_path)
     runners, desk = build_runners(cfg, journal)
+    skeptic = next((r.skeptic for r in runners.values()), None)
 
     args = sys.argv[1:]
     if args[:1] == ["once"]:
@@ -155,6 +156,23 @@ def main() -> None:
                 except Exception:
                     pass
 
+    started = time.time()
+
+    def cycle(market):
+        def _go():
+            if control.is_paused(journal, market):
+                log.info("%s paused from dashboard — decision cycle skipped", market)
+                return
+            runners[market].run_cycle()
+            control.mark(journal, market, "cycle")
+        return _go
+
+    def monitor(market):
+        def _go():
+            runners[market].monitor_positions()
+            control.mark(journal, market, "monitor")
+        return _go
+
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
     notify.alert(f"🟢 TRADE_BOT_V3 started (markets: {', '.join(runners)}) | "
                  f"skeptic {'on' if cfg.skeptic_enabled else 'off'} | "
@@ -167,6 +185,9 @@ def main() -> None:
     while True:
         try:
             journal.kv_set("heartbeat", str(time.time()))  # dashboard "bot online" signal
+            control.apply_flags(journal, runners, skeptic, desk, cfg)
+            control.drain(journal, runners, desk)          # dashboard commands
+            control.write_status(journal, runners, started, MARKETS)
             now_utc = datetime.now(timezone.utc)
             for market, (tz, decide_at, open_at, close_at) in MARKETS.items():
                 if market not in runners:
@@ -178,11 +199,11 @@ def main() -> None:
                 hm = (local.hour, local.minute)
                 # daily AI decision at 10:00 local
                 if hm == decide_at:
-                    fire_once(f"{market}_cycle", day, runners[market].run_cycle)
+                    fire_once(f"{market}_cycle", day, cycle(market))
                 # stop/target monitor every 20 min during the session
                 if open_at <= hm <= close_at and local.minute % 20 == 0:
                     fire_once(f"{market}_mon", f"{day}T{local.hour}:{local.minute}",
-                              runners[market].monitor_positions)
+                              monitor(market))
             # weekly self-review: Saturday 08:00 UTC
             if now_utc.weekday() == 5 and (now_utc.hour, now_utc.minute) == (8, 0):
                 for r in runners.values():

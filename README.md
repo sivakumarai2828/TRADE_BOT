@@ -1,5 +1,21 @@
 # TRADE_BOT_V2 — AI Portfolio Manager
 
+## v3 branch: control dashboard
+
+`http://<api-host>:8000/control` shows both bots (running / paused /
+kill-switched / offline), every open position with its stop→target range,
+pending approvals, armed WATCH entries, Skeptic rulings and activity.
+With `DASHBOARD_TOKEN` set in the API's `.env` you can unlock controls:
+pause/resume new entries per bot, run an AI cycle now, check stops now,
+close one position or all, approve/skip entries, and switch the Skeptic and
+Telegram-approval gates. The API only writes flags and queues commands
+(`botv2/control.py`); the bot process executes them within ~20 s.
+Pause stops new entries only — stops, targets and the kill switch keep running.
+
+Try it locally with a simulated market (no keys, nothing touches the VM):
+
+    python tools/demo_stack.py      # then open http://localhost:8000/control, token: demo
+
 ## v3 branch: Skeptic + per-trade approval
 
 Every NEW entry (BUY, REPLACE, WATCH trigger) now passes, in order:

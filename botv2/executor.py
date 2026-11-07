@@ -80,6 +80,7 @@ class MarketRunner:
         self.alpaca = alpaca  # AlpacaMirror or None (US only)
         self.skeptic = skeptic          # Skeptic or None (gate disabled)
         self.approvals = approvals      # ApprovalDesk or None (fill immediately)
+        self.entries_paused = False     # set from the dashboard: no new entries
         self.risk = RiskEngine(cfg.caps, journal, market)
         self._snapshots: dict[str, dict] = {}   # symbol -> latest snapshot
         self._regime_label = "UNKNOWN"
@@ -124,6 +125,8 @@ class MarketRunner:
     def check_watch_triggers(self, halt: str | None = None) -> None:
         """Arm pending watches. Price reaching the level is necessary but never
         sufficient — every trigger is revalidated before it becomes an order."""
+        if self.entries_paused:
+            return
         try:
             self.journal.expire_watches(self.market)
             watches = self.journal.active_watches(self.market)

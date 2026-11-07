@@ -1,4 +1,10 @@
-"""Read-only dashboard API for TRADE_BOT_V2.
+"""Dashboard API for TRADE_BOT_V2/V3.
+
+Read endpoints are open (as before). Control endpoints (/api/control/*,
+POST only) require the X-Dashboard-Token header to match DASHBOARD_TOKEN and
+are disabled entirely when DASHBOARD_TOKEN is unset. The API never trades
+itself: it writes flags and queues commands that the bot process executes
+(see botv2/control.py), so a crash here still cannot affect the bot.
 
 Runs as its own systemd service (trade-bot-v2-api) on port 8000 so a crash
 here can never affect the trading bot. Serves dashboard.html at / and JSON at
@@ -7,6 +13,7 @@ here can never affect the trading bot. Serves dashboard.html at / and JSON at
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import time
@@ -14,6 +21,7 @@ import time
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
+from botv2 import control
 from botv2.config import load_config
 from botv2.ledger import PaperLedger
 from botv2.storage import make_journal
@@ -129,6 +137,69 @@ def decisions():
         except Exception:
             r["decision"] = {}
     return jsonify(rows)
+
+
+# ── control (v3) ─────────────────────────────────────────────────
+@app.route("/control")
+def control_page():
+    return send_from_directory(BASE, "control.html")
+
+
+def _authorized() -> bool:
+    expected = os.getenv("DASHBOARD_TOKEN", "")
+    given = request.headers.get("X-Dashboard-Token", "")
+    return bool(expected) and hmac.compare_digest(expected, given)
+
+
+def _deny():
+    if not os.getenv("DASHBOARD_TOKEN"):
+        return jsonify({"error": "controls disabled: set DASHBOARD_TOKEN in the API's .env"}), 403
+    return jsonify({"error": "wrong or missing dashboard token"}), 401
+
+
+@app.route("/api/control")
+def control_state():
+    snap = control.snapshot(_journal(), {
+        "skeptic": CFG.skeptic_enabled, "approval": CFG.approval_mode == "telegram"})
+    snap["controls_enabled"] = bool(os.getenv("DASHBOARD_TOKEN"))
+    return jsonify(snap)
+
+
+@app.route("/api/control/auth", methods=["POST"])
+def control_auth():
+    return (jsonify({"ok": True}) if _authorized() else _deny())
+
+
+@app.route("/api/control/flag", methods=["POST"])
+def control_flag():
+    if not _authorized():
+        return _deny()
+    body = request.get_json(silent=True) or {}
+    flag, value = body.get("flag"), bool(body.get("value"))
+    j = _journal()
+    if flag == "paused":
+        market = body.get("market")
+        if market not in ("US", "INDIA"):
+            return jsonify({"error": "market must be US or INDIA"}), 400
+        control.set_paused(j, market, value)
+    elif flag in ("skeptic", "approval"):
+        control.set_gate(j, flag, value)
+    else:
+        return jsonify({"error": f"unknown flag {flag!r}"}), 400
+    return jsonify({"ok": True, "flag": flag, "value": value})
+
+
+@app.route("/api/control/cmd", methods=["POST"])
+def control_cmd():
+    if not _authorized():
+        return _deny()
+    body = request.get_json(silent=True) or {}
+    try:
+        item = control.enqueue(_journal(), body.get("cmd", ""), body.get("market"),
+                               body.get("arg"), source="dashboard")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "queued": item})
 
 
 if __name__ == "__main__":
