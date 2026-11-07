@@ -208,7 +208,8 @@ class ApprovalDesk:
             f"🟡 <b>APPROVAL NEEDED</b> <code>{r['id']}</code>",
             f"[{r['market']}] <b>{r['kind']} {r['symbol']}</b>"
             + (f" (replaces {html.escape(str(r['replace']))})" if r.get("replace") else ""),
-            f"~{r.get('qty', '?')} sh @ {c}{r['price']:,.2f} | stop {c}{r['stop']:,.2f}"
+            (f"~{float(r['qty']):.0f} sh" if r.get("qty") else "size set at fill")
+            + f" @ {c}{r['price']:,.2f} | stop {c}{r['stop']:,.2f}"
             + (f" | target {c}{r['target']:,.2f}{rr}" if r.get("target") else ""),
             f"💡 {html.escape(str(r.get('thesis', ''))[:200])}",
         ]
