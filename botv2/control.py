@@ -28,8 +28,8 @@ from datetime import datetime, timedelta, timezone
 log = logging.getLogger("botv2.control")
 
 K_QUEUE, K_RESULTS, K_STATUS = "ctl_queue", "ctl_results", "bot_status"
-COMMANDS = {"run_cycle", "close", "flatten", "approve", "reject", "monitor"}
-MARKET_CMDS = {"run_cycle", "close", "flatten", "monitor"}
+COMMANDS = {"run_cycle", "close", "flatten", "approve", "reject", "monitor", "reset_kill"}
+MARKET_CMDS = {"run_cycle", "close", "flatten", "monitor", "reset_kill"}
 
 
 def _load(journal, key: str, default):
@@ -120,6 +120,8 @@ def _run(item: dict, runners: dict, desk) -> tuple[bool, str]:
         r.run_cycle()
         mark(r.journal, market, "cycle")
         return True, "decision cycle completed"
+    if cmd == "reset_kill":
+        return reset_kill_switch(r)
     if cmd == "monitor":
         r.monitor_positions()
         return True, "stops/targets checked"
@@ -135,6 +137,25 @@ def _run(item: dict, runners: dict, desk) -> tuple[bool, str]:
             r._exit(pos, "manual_flatten_dashboard")
         return True, f"closed {n} position(s)"
     return False, "unhandled"
+
+
+def reset_kill_switch(r) -> tuple[bool, str]:
+    """Manual reset after a kill switch. The equity peak is reset to today's
+    equity too: otherwise a book still ~10% under its old peak would trip
+    again on the very next check. The 10% limit is measured from here."""
+    m = r.market
+    was = r.journal.kv_get(f"{m}_killed") == "1"
+    equity = r.ledger.equity()
+    old_peak = r.journal.kv_get(f"{m}_equity_peak")
+    r.journal.kv_set(f"{m}_killed", "0")
+    r.journal.kv_set(f"{m}_equity_peak", str(equity))
+    from . import notify
+    notify.alert(f"♻️ [{m}] Kill switch reset from dashboard. Equity {equity:,.2f} "
+                 f"(old peak {old_peak}) is the new peak; next halt at "
+                 f"{equity * (1 - r.risk.caps.max_drawdown_kill_pct):,.2f}.")
+    return True, (f"{'reset' if was else 'was not tripped; peak reset'} — new peak "
+                  f"{equity:,.2f}, halts again below "
+                  f"{equity * (1 - r.risk.caps.max_drawdown_kill_pct):,.2f}")
 
 
 # ── applying flags to live runners ───────────────────────────────

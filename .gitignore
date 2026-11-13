@@ -5,3 +5,6 @@ __pycache__/
 .vercel/
 node_modules/
 TRADE_BOT_V1_archive_*.tar.gz
+
+deploy_v3.log
+DEPLOY_V3.cmd

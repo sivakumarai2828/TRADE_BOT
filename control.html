@@ -263,7 +263,9 @@ function renderBot(m){
     <span>Stops checked</span><span>${ago(c.runs?.monitor)}</span>
   </div>
   ${s?.market_view?`<p class="hint" style="margin:0 0 10px">🧠 ${esc(s.market_view).slice(0,220)}</p>`:""}
+  ${key==="halted"?`<div class="banner bad show" style="margin-bottom:10px">Kill switch tripped: equity fell 10% below its peak. All positions were closed and the bot will not trade until you reset it.</div>`:""}
   <div class="actions">
+    ${key==="halted"?`<button class="primary" data-act="reset" data-m="${m}" ${locked?"disabled":""}>Reset kill switch</button>`:""}
     ${c.paused?`<button class="primary" data-act="resume" data-m="${m}" ${locked?"disabled":""}>Resume new entries</button>`
               :`<button data-act="pause" data-m="${m}" ${locked?"disabled":""}>Pause new entries</button>`}
     <button data-act="cycle" data-m="${m}" ${locked||c.paused?"disabled":""}>Run AI cycle now</button>
@@ -374,6 +376,7 @@ document.addEventListener("click",async e=>{
   if(a==="pause")return flag("paused",true,m);
   if(a==="resume")return flag("paused",false,m);
   if(a==="cycle"){if(await confirmBox(`Run the ${NAMES[m]} AI cycle now?`,"The AI will review the market and may propose new entries. It uses one AI call.",false))cmd("run_cycle",m,null,"AI cycle");return}
+  if(a==="reset"){if(await confirmBox(`Reset the ${NAMES[m]} kill switch?`,"The bot will trade again from its next cycle. Today's equity becomes the new peak, so it halts again if it loses another 10% from here.",true))cmd("reset_kill",m,null,"Kill switch reset");return}
   if(a==="monitor")return cmd("monitor",m,null,"Stop check");
   if(a==="flatten"){if(await confirmBox(`Close every ${NAMES[m]} position?`,"All open positions in this market will be sold at the current price.",true))cmd("flatten",m,null,"Close all");return}
   if(a==="close"){if(await confirmBox(`Close ${sym}?`,"Sells the whole position at the current price.",true))cmd("close",m,sym,"Close "+sym);return}

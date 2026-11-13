@@ -142,3 +142,14 @@ def test_bad_command_rejected(client, monkeypatch):
 def test_state_endpoint_reads(client):
     r = client.get("/api/control")
     assert r.status_code == 200 and "markets" in r.get_json()
+
+
+def test_reset_kill_switch(runner, journal):
+    journal.kv_set("US_killed", "1")
+    journal.kv_set("US_equity_peak", "6000")       # equity now 5000: 16% under
+    assert runner.risk.check_halts(runner.ledger.equity(), 0) is not None
+    control.enqueue(journal, "reset_kill", "US")
+    control.drain(journal, {"US": runner})
+    assert control.results(journal)[-1]["ok"]
+    assert journal.kv_get("US_killed") == "0"
+    assert runner.risk.check_halts(runner.ledger.equity(), 0) is None   # does not re-trip
