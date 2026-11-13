@@ -153,3 +153,30 @@ def test_reset_kill_switch(runner, journal):
     assert control.results(journal)[-1]["ok"]
     assert journal.kv_get("US_killed") == "0"
     assert runner.risk.check_halts(runner.ledger.equity(), 0) is None   # does not re-trip
+
+
+def test_parallel_requests_are_serialised(client):
+    """Regression: the shared Supabase client failed under concurrent requests."""
+    import threading
+    import api_v2
+    active, peak = [0], [0]
+    orig = api_v2.JOURNAL.kv_get
+
+    def slow_kv_get(*a, **k):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        import time as _t
+        _t.sleep(0.01)
+        active[0] -= 1
+        return orig(*a, **k)
+
+    api_v2.JOURNAL.kv_get = slow_kv_get
+    try:
+        codes = []
+        ts = [threading.Thread(target=lambda: codes.append(client.get("/api/control").status_code))
+              for _ in range(4)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+    finally:
+        api_v2.JOURNAL.kv_get = orig
+    assert codes == [200] * 4 and peak[0] == 1

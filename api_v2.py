@@ -16,6 +16,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import threading
 import time
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -32,6 +33,22 @@ CORS(app)
 CFG = load_config()
 BASE = os.path.dirname(os.path.abspath(__file__))
 JOURNAL = make_journal(CFG.db_path)  # SQLite or Supabase, same interface
+
+# The Supabase client is not safe to share across threads: parallel requests
+# (the control page loads 4 endpoints at once) failed with 500s. Requests are
+# few and short, so serialise them all behind one lock.
+_REQUEST_LOCK = threading.Lock()
+
+
+@app.before_request
+def _serialise():
+    _REQUEST_LOCK.acquire()
+
+
+@app.teardown_request
+def _release(_exc=None):
+    if _REQUEST_LOCK.locked():
+        _REQUEST_LOCK.release()
 
 
 def _journal():

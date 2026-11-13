@@ -344,7 +344,10 @@ function renderLock(){$("btnLock").textContent=token?"ðŸ”“ Controls unlocked":"ð
 
 async function load(){
   try{
-    const [s,c,a1,a2]=await Promise.all([get("/api/summary"),get("/api/control"),get("/api/activity?market=US"),get("/api/activity?market=INDIA")]);
+    // one at a time: the API serialises requests anyway, and older API
+    // builds failed parallel requests with 500s
+    const s=await get("/api/summary"), c=await get("/api/control");
+    const a1=await get("/api/activity?market=US").catch(()=>[]), a2=await get("/api/activity?market=INDIA").catch(()=>[]);
     summary=s;ctl=c;activity={US:a1,INDIA:a2};
     $("refreshed").textContent="Updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});
   }catch(e){
