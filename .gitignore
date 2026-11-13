@@ -8,3 +8,5 @@ TRADE_BOT_V1_archive_*.tar.gz
 
 deploy_v3.log
 DEPLOY_V3.cmd
+deploy_dashboard.log
+DEPLOY_DASHBOARD.cmd
