@@ -1,4 +1,6 @@
 .env
+.env.live
+botv2_live.db*
 *.db
 __pycache__/
 *.pyc

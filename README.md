@@ -115,3 +115,32 @@ botv2/notify.py         Telegram (same env vars as V1)
 Paper-trade at least 4 weeks and require: 20+ closed trades, positive total
 P&L, avg win > avg loss, max drawdown < 7%. No trading system — AI or not —
 can guarantee profits; hard caps limit damage, they don't create returns.
+
+## Broker mode — real orders at Alpaca (paper first, then live)
+
+`BROKER_TRADING=true` swaps the virtual ledger for `botv2/alpaca_ledger.py`:
+orders go to Alpaca, the journal records only real fills, every position
+gets a GTC stop order resting at Alpaca, and each monitor pass reconciles
+the journal with the broker. It runs as its own service with its own
+settings and SQLite journal, next to (or instead of) the paper bot.
+
+The bot refuses to start unless the setup is safe (`check_broker_config`):
+Telegram approvals on, US only, separate journal, no Supabase, a
+`MAX_ORDER_USD` ceiling, and the live URL only with `LIVE_REAL_MONEY=true`.
+
+On the VM, after a normal deploy:
+
+```bash
+cd ~/TRADE_BOT_V3
+cp .env.live.example .env.live && chmod 600 .env.live
+nano .env.live          # Alpaca PAPER keys, separate Telegram bot token, AI keys
+sudo cp trade-bot-live.service /etc/systemd/system/
+sudo sed -i "s|__USER__|$USER|g" /etc/systemd/system/trade-bot-live.service
+sudo systemctl daemon-reload && sudo systemctl enable --now trade-bot-live
+sudo journalctl -u trade-bot-live -f      # expect "PAPER Alpaca account ACTIVE"
+```
+
+Going live later = in `.env.live` set the LIVE keys,
+`ALPACA_BASE_URL=https://api.alpaca.markets`, `LIVE_REAL_MONEY=true`, then
+`sudo systemctl restart trade-bot-live`. Telegram messages are prefixed
+`🧪 ALPACA-PAPER` or `💵 LIVE`.

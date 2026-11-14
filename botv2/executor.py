@@ -88,6 +88,12 @@ class MarketRunner:
     # ── stop/target monitor (runs intra-session, no AI call) ────
     def monitor_positions(self) -> None:
         # Kill switch must also work mid-session (review issue #5).
+        # Broker mode: record stops that already filled at Alpaca and re-place
+        # any missing ones before deciding anything else.
+        if hasattr(self.ledger, "reconcile"):
+            for f in self.ledger.reconcile():
+                notify.trade_closed(self.market, f["symbol"], f["fill"], f["pnl"],
+                                    "stop_loss (broker)", self.currency)
         halt = self.risk.check_halts(self.ledger.equity(), self.ledger.day_pnl())
         if halt and "KILL SWITCH" in halt:
             self._flatten_all(halt)
@@ -325,6 +331,8 @@ class MarketRunner:
                 log.warning("ADJUST %s partially rejected: %s", sym, note)
             if new_stop is not None or new_target is not None:
                 self.journal.update_levels(pos["id"], new_stop, new_target)
+                if new_stop is not None and hasattr(self.ledger, "move_stop"):
+                    self.ledger.move_stop(pos, new_stop)   # the resting broker stop too
                 log.info("%s adjusted: stop=%s target=%s", sym, new_stop, new_target)
 
         elif kind == "WATCH":

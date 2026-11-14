@@ -10,6 +10,9 @@ import requests
 
 log = logging.getLogger("botv2.notify")
 
+# Set by main.py in broker mode so live/paper-broker messages are unmistakable.
+PREFIX = ""
+
 
 def _esc(text) -> str:
     """Escape AI-generated text so it can't break Telegram HTML mode."""
@@ -24,7 +27,7 @@ def _send(msg: str) -> None:
     try:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat, "text": msg, "parse_mode": "HTML"},
+            json={"chat_id": chat, "text": PREFIX + msg, "parse_mode": "HTML"},
             timeout=8,
         )
     except Exception as exc:

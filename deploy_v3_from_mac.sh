@@ -65,7 +65,7 @@ trap 'rm -rf "$STAGE_ROOT"' EXIT
 STAGE="$STAGE_ROOT/TRADE_BOT_V3"
 rsync -a \
     --exclude .git --exclude __pycache__ --exclude .pytest_cache --exclude node_modules \
-    --exclude .env --exclude '*.pyc' --exclude '*.db' --exclude .DS_Store \
+    --exclude .env --exclude .env.live --exclude '*.pyc' --exclude '*.db' --exclude .DS_Store \
     --exclude .claude --exclude .codex --exclude .vercel --exclude dist \
     --exclude 'deploy_*.log' --exclude 'TRADE_BOT_V1_archive_*.tar.gz' \
     "$HERE/" "$STAGE/"

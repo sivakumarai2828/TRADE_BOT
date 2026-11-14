@@ -1,0 +1,22 @@
+[Unit]
+Description=AI Trade Bot V3 - Alpaca broker trading (paper or LIVE per .env.live)
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+User=__USER__
+WorkingDirectory=/home/__USER__/TRADE_BOT_V3
+# Own settings file + own SQLite journal: never shares state with the paper bot.
+EnvironmentFile=/home/__USER__/TRADE_BOT_V3/.env.live
+Environment=BOTV2_ENV_FILE=.env.live
+Environment=TZ=UTC
+ExecStart=/home/__USER__/venv311/bin/python3 main.py
+# A refused start (bad config, blocked account) exits non-zero: retry slowly.
+Restart=always
+RestartSec=60
+MemoryMax=750M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

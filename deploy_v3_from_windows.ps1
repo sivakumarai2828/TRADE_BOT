@@ -25,7 +25,7 @@ if (Test-Path "$PSScriptRoot\.env") {
 }
 $stage = Join-Path $env:TEMP "TRADE_BOT_V3"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-robocopy "$PSScriptRoot" $stage /E /XD .git __pycache__ .pytest_cache node_modules /XF .env *.pyc | Out-Null
+robocopy "$PSScriptRoot" $stage /E /XD .git __pycache__ .pytest_cache node_modules /XF .env .env.live *.pyc | Out-Null
 gcloud compute scp --recurse $stage "${name}:/home/$VM_USER/" --zone=$zone
 Remove-Item $stage -Recurse -Force
 

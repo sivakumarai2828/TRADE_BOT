@@ -31,7 +31,7 @@ from botv2.ai_pm import PortfolioManagerAI
 from botv2.alpaca_mirror import AlpacaMirror
 from botv2.approval import ApprovalDesk
 from botv2 import control, notify
-from botv2.config import load_config
+from botv2.config import check_broker_config, load_config
 from botv2.executor import MarketRunner
 from botv2.skeptic import Skeptic
 from botv2.storage import make_journal
@@ -69,7 +69,16 @@ def build_runners(cfg, journal=None):
                             cfg.ai_reasoning_effort)
     skeptic, desk = build_desk(cfg, journal)
     runners = {}
-    if cfg.trade_us:
+    if cfg.trade_us and cfg.broker_trading:
+        # Real orders at Alpaca (paper or live account); broker = source of truth.
+        from botv2.alpaca_ledger import AlpacaClient, AlpacaLedger
+        client = AlpacaClient(cfg.alpaca_key, cfg.alpaca_secret, cfg.alpaca_base_url)
+        runners["US"] = MarketRunner(
+            "US", "USD", cfg, journal, ai,
+            AlpacaLedger(journal, "US", client, cfg.max_order_usd),
+            skeptic=skeptic, approvals=desk,
+        )
+    elif cfg.trade_us:
         runners["US"] = MarketRunner(
             "US", "USD", cfg, journal, ai,
             PaperLedger(journal, "US", cfg.us_start_cash),
@@ -104,8 +113,15 @@ def main() -> None:
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
     log = logging.getLogger("botv2.main")
+    errs = check_broker_config(cfg)
+    if errs:
+        raise SystemExit("Refusing to start in broker mode:\n  - " + "\n  - ".join(errs))
+    if cfg.broker_trading:
+        notify.PREFIX = "💵 LIVE " if cfg.live_real_money else "🧪 ALPACA-PAPER "
     journal = make_journal(cfg.db_path)
     runners, desk = build_runners(cfg, journal)
+    if cfg.broker_trading:
+        log.info(runners["US"].ledger.preflight())   # bad keys / blocked account -> crash, no trading
     skeptic = next((r.skeptic for r in runners.values()), None)
 
     args = sys.argv[1:]

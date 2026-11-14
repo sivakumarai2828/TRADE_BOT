@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# The live service sets BOTV2_ENV_FILE=.env.live so it never picks up the
+# paper bot's .env (e.g. its Supabase journal) for keys it doesn't set itself.
+load_dotenv(os.getenv("BOTV2_ENV_FILE", ".env"))
 
 
 def _f(name: str, default: str) -> float:
@@ -96,6 +98,14 @@ class V2Config:
     # Cancel an approved entry if price has run this far above the proposal.
     approval_max_drift_pct: float = 0.015
 
+    # ── Broker trading (US via Alpaca). Off = virtual PaperLedger. ──
+    # On: orders go to the Alpaca account at alpaca_base_url and the broker
+    # is the source of truth. Paper URL first; the live URL also needs
+    # live_real_money=True. See check_broker_config().
+    broker_trading: bool = False
+    live_real_money: bool = False
+    max_order_usd: float = 150.0          # hard ceiling on any single buy
+
     caps: HardCaps = field(default_factory=HardCaps)
 
 
@@ -139,5 +149,45 @@ def load_config() -> V2Config:
         approval_mode=os.getenv("APPROVAL_MODE", "telegram").strip().lower(),
         approval_timeout_min=_f("APPROVAL_TIMEOUT_MIN", "90"),
         approval_max_drift_pct=_f("APPROVAL_MAX_DRIFT_PCT", "0.015"),
+        broker_trading=_b("BROKER_TRADING", "false"),
+        live_real_money=_b("LIVE_REAL_MONEY", "false"),
+        max_order_usd=_f("MAX_ORDER_USD", "150"),
         caps=caps,
     )
+
+
+def check_broker_config(cfg: V2Config) -> list[str]:
+    """Reasons the bot must NOT start in broker mode. Empty list = OK.
+
+    Every rule here guards real money, so a failure stops the process
+    rather than falling back to something weaker."""
+    if not cfg.broker_trading:
+        return []
+    from .alpaca_ledger import LIVE_URL, PAPER_URL
+
+    errs = []
+    url = cfg.alpaca_base_url.rstrip("/")
+    if url not in (PAPER_URL, LIVE_URL):
+        errs.append(f"ALPACA_BASE_URL must be {PAPER_URL} or {LIVE_URL}, got {url!r}")
+    if url == LIVE_URL and not cfg.live_real_money:
+        errs.append("ALPACA_BASE_URL is the LIVE account: also set LIVE_REAL_MONEY=true")
+    if cfg.live_real_money and url != LIVE_URL:
+        errs.append("LIVE_REAL_MONEY=true but ALPACA_BASE_URL is not the live URL")
+    if not (cfg.alpaca_key and cfg.alpaca_secret):
+        errs.append("ALPACA_KEY / ALPACA_SECRET missing")
+    if cfg.approval_mode != "telegram":
+        errs.append("APPROVAL_MODE must be telegram: every new entry needs your tap")
+    if not (cfg.telegram_token and cfg.telegram_chat_id):
+        errs.append("TELEGRAM_TOKEN / TELEGRAM_CHAT_ID missing")
+    if cfg.trade_india:
+        errs.append("TRADE_INDIA must be false (one market per broker process)")
+    if not cfg.trade_us:
+        errs.append("TRADE_US must be true")
+    if os.getenv("SUPABASE_URL"):
+        errs.append("SUPABASE_URL must be empty: broker mode keeps its own SQLite "
+                    "journal so it never mixes with the paper bot's records")
+    if cfg.db_path == "botv2.db":
+        errs.append("BOTV2_DB must name a separate file (e.g. botv2_live.db)")
+    if not 10 <= cfg.max_order_usd <= 5000:
+        errs.append("MAX_ORDER_USD must be between 10 and 5000")
+    return errs
