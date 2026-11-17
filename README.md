@@ -218,3 +218,18 @@ It reads the bot's Supabase journal through the viewer's Supabase connector
 bot runs it on its next loop pass, exactly like the control page. It works
 with the Supabase-journal (paper) bot only: the broker-mode bot keeps its
 own SQLite journal on the VM, so its approvals stay in Telegram.
+
+## Options research (Phase 1) — `tools/options_lab.py`
+
+Replays each lab strategy's trades as at-the-money calls, 30–60 days to
+expiry, exits at +100% / -50% / the stock signal / 21 days left
+(`botv2/options_bt.py`). Option prices are MODELED with Black-Scholes from
+realized volatility (no real option price history yet: needs Alpaca keys or
+a paid feed), with a spread cost per side.
+
+Result on 2026-11-17: calls failed the gate for every strategy, at every
+size (5–33% premium per trade) and even with optimistic costs (1% spread,
+implied vol = realized). At 5% premium most capital sits idle; at 20–33%
+the worst drop reaches -55% to -94%. On a $437 account at 5% per trade, no
+contract was affordable on any signal. Phase 2 (building it) is not
+justified by these numbers.
