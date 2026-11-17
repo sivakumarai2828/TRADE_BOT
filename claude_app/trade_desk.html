@@ -154,13 +154,40 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   try { const t = localStorage.getItem("td_market"); if (t === "US" || t === "INDIA") market = t; } catch (e) {}
 
   // ── reading ────────────────────────────────────────────────────
+  // The connector's answer arrives in different wrappings depending on the
+  // app and connector version: rows directly, {result: "<text>"}, a text block,
+  // structured content, with or without an <untrusted-data-…> fence, and the
+  // inner JSON sometimes still string-escaped. Try each until rows come out.
+  function rowsFromValue(v, depth) {
+    if (depth > 4 || v == null) return null;
+    if (Array.isArray(v)) return v.length && v[0] && typeof v[0] === "object" ? v : (v.length ? null : v);
+    if (typeof v === "object") {
+      for (const k of ["result", "text", "data", "rows", "content"]) {
+        const r = rowsFromValue(v[k], depth + 1); if (r) return r;
+      }
+      return null;
+    }
+    if (typeof v !== "string") return null;
+    const t = v.trim();
+    try { const r = rowsFromValue(JSON.parse(t), depth + 1); if (r) return r; } catch (e) {}
+    const fenced = t.match(/<untrusted-data-[^>]*>\s*([\s\S]*?)\s*<\/untrusted-data-[^>]*>/);
+    if (fenced) { const r = rowsFromValue(fenced[1], depth + 1); if (r) return r; }
+    const a = t.indexOf('[{'), b = t.lastIndexOf('}]');
+    if (a >= 0 && b > a) {
+      const chunk = t.slice(a, b + 2);
+      try { return JSON.parse(chunk); } catch (e) {}
+      try { return JSON.parse(JSON.parse('"' + chunk + '"')); } catch (e) {}   // still string-escaped
+    }
+    return null;
+  }
   function rowsFrom(result) {
-    const p = result && result.payload;
-    if (Array.isArray(p)) return p;
-    const text = typeof p === "string" ? p : p && typeof p.result === "string" ? p.result : null;
-    if (text == null) throw {code: "bad_shape", message: "Unexpected answer from Supabase."};
-    const m = text.match(/<untrusted-data-[^>]*>\s*([\s\S]*?)\s*<\/untrusted-data-[^>]*>/);
-    return JSON.parse(m ? m[1] : text);
+    const tries = [result && result.payload, result && result.structuredContent];
+    for (const b of (result && result.content) || []) if (b && typeof b.text === "string") tries.push(b.text);
+    for (const t of tries) { const r = rowsFromValue(t, 0); if (r) return r; }
+    let seen = "";
+    try { seen = JSON.stringify(result && (result.payload ?? result.content)).slice(0, 160); } catch (e) {}
+    console.error("Trade Desk: could not read the Supabase answer", result);
+    throw {code: "bad_shape", message: "The Supabase answer was not in a format this page understands. Start of the answer: " + seen};
   }
   const call = query => mcp.callTool(SERVER, TOOL, {project_id: PROJECT, query}, {cache: false});
   const parse = (v, fallback) => { try { const x = JSON.parse(v); return x == null ? fallback : x; } catch (e) { return fallback; } };
@@ -195,7 +222,11 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   function explain(e, doing) {
     const code = e && e.code;
     if (code === "tool_error") return doing + " failed: " + String(e.message || "the database reported an error").slice(0, 240);
-    return FIX[code] || (doing + " failed (" + (code || "unknown error") + "). Tap Refresh to try again.");
+    if (code === "bad_shape") return doing + " failed. " + e.message;
+    if (FIX[code]) return FIX[code];
+    const what = code || (e && (e.name || e.constructor && e.constructor.name)) || "error";
+    const msg = e && e.message ? ": " + String(e.message).slice(0, 200) : "";
+    return doing + " failed (" + what + msg + "). Tap Refresh to try again; if it repeats, send this message to Claude.";
   }
 
   let reading = null;
@@ -206,8 +237,9 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       let rows, err;
       for (let attempt = 0; attempt < 2; attempt++) {
         try { rows = rowsFrom(await call(READ_SQL)); err = null; break; }
-        catch (e) { err = e; if (!(e && e.retryable) || attempt) break; await sleep((e.retryAfterMs || 1200) + Math.random() * 800); }
+        catch (e) { err = e; console.error("Trade Desk read failed", e); if (!(e && e.retryable) || attempt) break; await sleep((e.retryAfterMs || 1200) + Math.random() * 800); }
       }
+      if (!err && !(rows && rows[0] && rows[0].d)) err = {code: "bad_shape", message: "The answer had no bot records in it."};
       if (err) {
         const denied = ["needs_reauth", "server_not_connected", "not_in_manifest", "blocked_by_policy", "approval_required", "consent_required"];
         if (denied.includes(err.code)) { data = normalize(null); loaded = false; }
