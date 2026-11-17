@@ -140,7 +140,81 @@ sudo systemctl daemon-reload && sudo systemctl enable --now trade-bot-live
 sudo journalctl -u trade-bot-live -f      # expect "PAPER Alpaca account ACTIVE"
 ```
 
+Dashboard for the broker-mode bot (same pages, read from Alpaca, view only,
+localhost only, so it never goes through the public Vercel link):
+
+```bash
+sudo cp trade-bot-live-api.service /etc/systemd/system/
+sudo sed -i "s|__USER__|$USER|g" /etc/systemd/system/trade-bot-live-api.service
+sudo systemctl daemon-reload && sudo systemctl enable --now trade-bot-live-api
+# on your own computer:
+gcloud compute ssh konda@trade-bot-vm --project=trade-bot-2025 --zone=us-central1-a -- -N -L 8001:localhost:8001
+# then open http://localhost:8001 (positions) or http://localhost:8001/control (approvals, watch list)
+```
+
+A banner on both pages says which account is shown (`ALPACA PAPER` or
+`LIVE · REAL MONEY`). Entries are approved in Telegram. After a kill switch:
+`BOTV2_ENV_FILE=.env.live python3 main.py reset-kill us`.
+
 Going live later = in `.env.live` set the LIVE keys,
 `ALPACA_BASE_URL=https://api.alpaca.markets`, `LIVE_REAL_MONEY=true`, then
 `sudo systemctl restart trade-bot-live`. Telegram messages are prefixed
 `🧪 ALPACA-PAPER` or `💵 LIVE`.
+
+## Strategy lab — test a rule on history before trading it
+
+`tools/strategy_lab.py` runs entry/exit rules through `botv2/backtest.py`
+(research only; the live bot never imports it). Signals at a day's close
+trade at the next open; stops/targets fill on daily open/high/low, gaps fill
+at the open; cash only, sales settle next day, costs on both sides.
+
+```bash
+python3 tools/strategy_lab.py                 # all strategies: TRAIN 2018-22 vs TEST 2023-now
+python3 tools/strategy_lab.py --sweep         # target x stop grid
+python3 tools/strategy_lab.py --only rotation_monthly --slots 5 --offset 7 --exclude SMCI,APP,PLTR
+python3 tools/strategy_lab.py --capital 437 --whole-shares
+python3 tools/strategy_lab.py --trades rotation_monthly
+```
+
+A rule passes only if it beats **Universe hold** (all universe stocks, equal
+weight) in both windows. Read results with two cautions:
+
+- The universe is today's list. SMCI, APP and PLTR traded at $6-11 in
+  January 2023 and are on it because they later soared. Re-run any
+  "winner" with `--exclude SMCI,APP,PLTR` and several `--offset` values.
+- Findings on 2026-11-14: no fixed target/stop rule (including +10%/-5%)
+  beat Universe hold. Monthly momentum rotation did, but only through
+  those three names; without them it matched the benchmark with -50%
+  drawdowns.
+
+`tools/backtest.py` is the older, narrower stop-vs-no-stop comparison.
+
+## India: daily buy suggestions only (`INDIA_MODE=suggest`)
+
+The bot opens no India position, paper or real. The 10:00 IST cycle still
+runs the AI, the hard risk rules and the Skeptic; every entry that survives
+is stored as a suggestion (`botv2/suggest.py`), ranked HIGH / MEDIUM / LOW by
+the AI's confidence, sent to Telegram as one list and shown on the dashboard
+(India tab) and the control page. Each suggestion gives a buy-near price,
+stop, target, reward:risk and a size as a share of your own capital. A WATCH
+whose level is reached during the session is sent as a single suggestion.
+India paper positions opened before the switch keep their stops and targets
+until they close. `INDIA_MODE=trade` restores the paper book.
+
+The same ranked list is kept for the US. With `US_MODE=trade` (default) the
+bot trades as before and the Suggestions tab shows each day's ideas with what
+the bot did ("Sent to Telegram for your approval" or "Bought by the bot").
+`US_MODE=suggest` makes the US suggestions-only as well (not allowed together
+with `BROKER_TRADING=true`).
+
+## Trade Desk page in the Claude app (`claude_app/trade_desk.html`)
+
+A Claude artifact (published from this file) for approving from the Claude
+app: pending buy requests with Approve / Skip, today's ranked US and India
+suggestions with what happened to each, recent decisions and open positions.
+It reads the bot's Supabase journal through the viewer's Supabase connector
+(`v2_kv`, `v2_trades`) and refreshes every 30 s. Approve / Skip append one
+`approve` / `reject` command to `ctl_queue` in a single SQL statement; the
+bot runs it on its next loop pass, exactly like the control page. It works
+with the Supabase-journal (paper) bot only: the broker-mode bot keeps its
+own SQLite journal on the VM, so its approvals stay in Telegram.

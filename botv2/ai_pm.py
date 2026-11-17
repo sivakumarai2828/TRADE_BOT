@@ -95,7 +95,8 @@ An empty actions list is acceptable ONLY when you are at or above target deploym
 
 def build_prompt(market: str, currency: str, regime: list[dict], candidates: list[dict],
                  portfolio: dict, stats: dict, recent_trades: list[dict],
-                 memo: str | None, caps: dict, halt_reason: str | None) -> str:
+                 memo: str | None, caps: dict, halt_reason: str | None,
+                 advisory: bool = False) -> str:
     recent = [
         {"symbol": t["symbol"], "pnl": t["pnl"], "pnl_pct": t["pnl_pct"],
          "exit_reason": t["exit_reason"], "thesis": t["thesis"]}
@@ -114,6 +115,15 @@ def build_prompt(market: str, currency: str, regime: list[dict], candidates: lis
     if halt_reason:
         parts.append(f"\nACTIVE RESTRICTION: {halt_reason}\n"
                      "You may only SELL or ADJUST this cycle. No BUY actions.")
+    if advisory:
+        parts.append(
+            "\nADVISORY MODE: nothing is executed in this market. Each BUY you return is "
+            "published to the user as a buy suggestion for today, and they decide whether to "
+            "place it with their own broker. The portfolio above is a reference book only. "
+            "Return your best ideas as BUY actions, strongest first, and set `confidence` "
+            "(0.0-1.0) honestly on every BUY: it ranks the list the user sees. Suggest only "
+            "what you would buy at today's price; use WATCH for names that need a better level. "
+            "Fewer, better suggestions beat a long list.")
     parts.append(f"\nCANDIDATE DATA ({len(candidates)} symbols):\n{json.dumps(candidates, indent=1)}")
     parts.append("\nProduce your action plan JSON now.")
     return "\n".join(parts)

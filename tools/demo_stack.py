@@ -30,6 +30,8 @@ for k in ("SUPABASE_URL", "SUPABASE_KEY", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID",
     os.environ[k] = ""
 os.environ.update(BOTV2_DB=DB, DASHBOARD_TOKEN=os.getenv("DEMO_TOKEN", "demo"),
                   US_START_CASH="5000", INDIA_START_CASH="250000",
+                  INDIA_MODE=os.getenv("INDIA_MODE", "suggest"),   # India: daily suggestions only
+                  BOTV2_DEMO="1",                                   # pages show a DEMO banner
                   CAP_MAX_POSITION_PCT="0.25", CAP_MAX_RISK_PER_TRADE_PCT="0.02",
                   CAP_MAX_OPEN_POSITIONS="8", CAP_MAX_NEW_ENTRIES_PER_DAY="5")
 
@@ -47,6 +49,25 @@ BASE = {"NVDA": 182.4, "AMD": 240.0, "PLTR": 160.0, "MU": 120.0, "ARM": 150.0,
         "RELIANCE.NS": 1450.0, "TCS.NS": 4100.0, "INFY.NS": 1900.0, "HDFCBANK.NS": 1750.0,
         "^NSEI": 25900.0}
 T0 = time.time()
+
+
+def use_real_closes() -> None:
+    """Start each symbol at its last real close so the page shows believable
+    numbers. Needs the network; without it the built-in levels above are kept.
+    DEMO_REAL_PRICES=0 skips it."""
+    if os.getenv("DEMO_REAL_PRICES", "1") == "0":
+        return
+    try:
+        import yfinance as yf
+        closes = yf.download(list(BASE), period="5d", auto_adjust=True, progress=False)["Close"].ffill().iloc[-1]
+        got = {s: round(float(v), 2) for s, v in closes.items() if v == v and v > 0}
+        BASE.update(got)
+        print(f"  Using last real closes for {len(got)}/{len(BASE)} symbols.")
+    except Exception as exc:
+        print(f"  Real prices unavailable ({type(exc).__name__}); using built-in demo levels.")
+
+
+use_real_closes()
 
 
 def price(sym: str) -> float | None:
@@ -80,21 +101,27 @@ notify._send = lambda msg: print("📱", msg.replace("\n", " | ")[:160])
 
 # ── simulated AI (portfolio manager + skeptic) ───────────────────
 class FakePM:
-    IDEAS = {"US": [("ARM", "PULLBACK", "Pullback to 50DMA, clean base"),
-                    ("PLTR", "BREAKOUT", "Breakout to new highs"),
-                    ("AMD", "PULLBACK", "Holding 50-day support")],
-             "INDIA": [("INFY.NS", "PULLBACK", "IT bounce off the 50DMA")]}
+    # (symbol, setup, thesis, confidence): confidence ranks the suggestions list
+    IDEAS = {"US": [("ARM", "PULLBACK", "Pullback to 50DMA, clean base", 0.8),
+                    ("PLTR", "BREAKOUT", "Breakout to new highs", 0.6),
+                    ("AMD", "PULLBACK", "Holding 50-day support", 0.55)],
+             "INDIA": [("INFY.NS", "PULLBACK", "IT bounce off the 50DMA", 0.75),
+                       ("TCS.NS", "PULLBACK", "Holding its rising 50DMA", 0.6),
+                       ("HDFCBANK.NS", "BREAKOUT", "Near highs, volume only average", 0.45)]}
 
     def __init__(self, market):
         self.market = market
 
     def decide(self, prompt):
         acts = []
-        for sym, setup, thesis in self.IDEAS[self.market]:
+        for sym, setup, thesis, conf in self.IDEAS[self.market]:
             px = price(sym)
             stop = round(px * 0.97, 2)
             acts.append({"action": "BUY", "symbol": sym, "setup": setup, "stop": stop,
-                         "target": round(px + 2.4 * (px - stop), 2), "thesis": thesis + " (2.4R)"})
+                         # 3R leaves room for the demo's price wobble, so an approval can
+                         # still clear the bot's 2R re-check at fill time
+                         "target": round(px + 3.0 * (px - stop), 2), "thesis": thesis + " (3.0R)",
+                         "confidence": conf})
         return {"market_view": "Constructive tape; adding selectively on pullbacks.",
                 "actions": acts, "watch_next": []}
 
@@ -132,30 +159,42 @@ runners = {
     "US": MarketRunner("US", "USD", cfg, journal, FakePM("US"),
                        PaperLedger(journal, "US", cfg.us_start_cash), skeptic=skeptic, approvals=desk),
     "INDIA": MarketRunner("INDIA", "INR", cfg, journal, FakePM("INDIA"),
-                          PaperLedger(journal, "INDIA", cfg.india_start_cash), skeptic=skeptic, approvals=desk),
+                          PaperLedger(journal, "INDIA", cfg.india_start_cash), skeptic=skeptic, approvals=desk,
+                          suggest_only=cfg.india_mode == "suggest"),
 }
 desk.runners = runners
 
 
 def seed():
+    """Positions and watches placed relative to the current price, so the
+    numbers stay sensible whatever each stock really trades at."""
     us, ind = runners["US"].ledger, runners["INDIA"].ledger
-    us.buy("NVDA", 6, 178.80, 189.60, "Pullback to EMA20 in a stage-2 trend (2.0R)",
-           meta={"setup_type": "PULLBACK", "planned_r": 2.0})
-    us.buy("MU", 9, 114.50, 133.00, "Memory upcycle continuation (2.4R)",
-           meta={"setup_type": "CONTINUATION", "planned_r": 2.4})
-    ind.buy("RELIANCE.NS", 30, 1405.0, 1560.0, "Base breakout above 1,440 (2.4R)",
-            meta={"setup_type": "BREAKOUT", "planned_r": 2.4})
-    ind.buy("TCS.NS", 10, 3990.0, 4380.0, "Pullback to 50DMA (2.5R)",
-            meta={"setup_type": "PULLBACK", "planned_r": 2.5})
+
+    def hold(ledger, sym, budget, stop_pct, r, thesis, setup):
+        px = price(sym)
+        stop = round(px * (1 - stop_pct), 2)
+        ledger.buy(sym, max(1, int(budget / px)), stop, round(px + r * (px - stop), 2),
+                   f"{thesis} ({r:.1f}R)", meta={"setup_type": setup, "planned_r": r})
+
+    hold(us, "NVDA", 1100, 0.025, 2.0, "Pullback to EMA20 in a stage-2 trend", "PULLBACK")
+    hold(us, "MU", 1100, 0.05, 2.4, "Memory upcycle continuation", "CONTINUATION")
+    if not runners["INDIA"].suggest_only:      # a suggestions-only market holds nothing
+        hold(ind, "RELIANCE.NS", 43000, 0.03, 2.4, "Base breakout", "BREAKOUT")
+        hold(ind, "TCS.NS", 40000, 0.03, 2.5, "Pullback to 50DMA", "PULLBACK")
     # a closed winner and loser for the activity feed
     for sym, ex in (("RKLB", 1.06), ("HDFCBANK.NS", 0.98)):
         m = "INDIA" if sym.endswith(".NS") else "US"
         tid = journal.open_trade(m, sym, 10, BASE[sym], BASE[sym] * .96, BASE[sym] * 1.1, "seed", {})
         journal.close_trade(tid, round(BASE[sym] * ex, 2), "take_profit" if ex > 1 else "stop_loss")
-    journal.add_watch("US", "RKLB", "PULLBACK", 30.0, 29.0, 33.0, "Wants a dip to 30 support (3R)")
-    journal.add_watch("INDIA", "INFY.NS", "BREAKOUT", 1925.0, 1870.0, 2040.0, "Buy the break of 1,920")
+    rk, inf = price("RKLB"), price("INFY.NS")
+    journal.add_watch("US", "RKLB", "PULLBACK", round(rk * .97, 2), round(rk * .94, 2), round(rk * 1.06, 2),
+                      "Wants a 3% dip to support (3R)")
+    journal.add_watch("INDIA", "INFY.NS", "BREAKOUT", round(inf * 1.02, 2), round(inf * .99, 2),
+                      round(inf * 1.09, 2), "Buy only on a break 2% higher")
     journal.log_decision("INDIA", {"market_view": "Nifty above its 50DMA; breadth improving.", "actions": []})
     runners["US"].run_cycle()           # AI ideas -> caps -> Skeptic -> approvals
+    if runners["INDIA"].suggest_only:
+        runners["INDIA"].run_cycle()    # AI ideas -> caps -> Skeptic -> ranked suggestions
     control.mark(journal, "US", "cycle")
     control.mark(journal, "INDIA", "cycle")
 

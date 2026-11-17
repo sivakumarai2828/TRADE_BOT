@@ -161,7 +161,9 @@ def reset_kill_switch(r) -> tuple[bool, str]:
 # ── applying flags to live runners ───────────────────────────────
 def apply_flags(journal, runners: dict, skeptic, desk, cfg) -> None:
     sk_on = skeptic is not None and gate_on(journal, "skeptic", cfg.skeptic_enabled)
-    ap_on = desk is not None and gate_on(journal, "approval", cfg.approval_mode == "telegram")
+    # Broker mode (real orders): the approval gate cannot be turned off by a flag.
+    ap_on = desk is not None and (getattr(cfg, "broker_trading", False)
+                                  or gate_on(journal, "approval", cfg.approval_mode == "telegram"))
     for m, r in runners.items():
         r.skeptic = skeptic if sk_on else None
         r.approvals = desk if ap_on else None

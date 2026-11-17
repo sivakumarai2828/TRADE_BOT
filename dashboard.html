@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Trading Bot V2 — Dashboard</title>
+<title>AI Trading Bot V3 — Dashboard</title>
 <style>
   :root { --bg:#0b0f14; --panel:#11161d; --card:#151c25; --border:#232b36; --text:#e6edf3;
           --dim:#7d8895; --green:#22c55e; --green-dim:#22c55e22; --red:#ef4444; --red-dim:#ef444422;
@@ -25,6 +25,20 @@
   .sidebox.mode { background:var(--amber-dim); border-color:#eab30833; }
   .sidebox.mode .v { color:var(--amber); }
   .sidebox.mode .d { font-size:.72rem; color:var(--dim); margin-top:3px; }
+  .sidebox.mode.live { background:var(--red-dim); border-color:#ef444455; }
+  .sidebox.mode.live .v { color:var(--red); }
+  .modebar { padding:10px 14px; border-radius:9px; margin-bottom:14px; font-size:.86rem; font-weight:600; border:1px solid #eab30855; background:var(--amber-dim); color:var(--amber); }
+  .modebar.live, .modebar.err { border-color:#ef444466; background:var(--red-dim); color:var(--red); }
+  .modebar span { font-weight:400; color:var(--text); }
+  .prio { display:inline-block; padding:1px 8px; border-radius:999px; font-size:.7rem; font-weight:700; letter-spacing:.04em; border:1px solid var(--border); color:var(--dim); }
+  .prio.HIGH { color:var(--green); border-color:#22c55e66; background:var(--green-dim); }
+  .prio.MEDIUM { color:var(--amber); border-color:#eab30866; background:var(--amber-dim); }
+  .sugday { font-size:.72rem; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; margin:14px 0 6px; }
+  .why { color:var(--dim); font-size:.78rem; min-width:260px; max-width:420px; }
+  .note { color:var(--dim); font-size:.76rem; margin-top:10px; }
+  .tablewrap { overflow-x:auto; }
+  .tablewrap th, .tablewrap td { white-space:nowrap; }
+  .tablewrap td.why { white-space:normal; }
   .main { flex:1; padding:22px 28px; min-width:0; }
   .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:10px; }
   .head .bc { font-size:.72rem; color:var(--dim); letter-spacing:.12em; }
@@ -49,7 +63,9 @@
   .stat .val { font-size:1.5rem; font-weight:700; }
   .stat .sub { font-size:.76rem; color:var(--dim); margin-top:4px; }
   .row2 { display:grid; grid-template-columns:1.6fr 1fr; gap:14px; margin-bottom:14px; }
-  @media (max-width:1000px){ .row2 { grid-template-columns:1fr; } .side{display:none;} }
+  .mktbar { display:none; gap:8px; margin-bottom:14px; }
+  .mktbar .nav { flex:1; justify-content:center; border:1px solid var(--border); }
+  @media (max-width:1000px){ .row2 { grid-template-columns:1fr; } .side{display:none;} .mktbar{display:flex;} }
   .panel { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
   .panel h3 { font-size:.72rem; color:var(--dim); letter-spacing:.12em; text-transform:uppercase; margin-bottom:12px; }
   table { width:100%; border-collapse:collapse; font-size:.83rem; }
@@ -76,18 +92,25 @@
   <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE — Swing</div>
   <div class="spacer"></div>
   <div class="sidebox"><div class="l">Broker</div><div class="v" id="side-broker">Paper Ledger</div></div>
-  <div class="sidebox mode"><div class="l">Mode</div><div class="v">Paper trading</div>
-    <div class="d">Simulated orders — hard risk caps enforced in code.</div></div>
+  <div class="sidebox mode" id="side-mode-box"><div class="l">Mode</div><div class="v" id="side-mode">Paper trading</div>
+    <div class="d" id="side-mode-d">Simulated orders — hard risk caps enforced in code.</div></div>
 </aside>
 
 <main class="main">
+  <div class="modebar" id="modebar" role="status" hidden></div>
   <div class="head">
-    <div><div class="bc">DASHBOARD</div><h1>AI Trading Bot V2</h1></div>
+    <div><div class="bc">DASHBOARD</div><h1>AI Trading Bot V3</h1></div>
     <div class="pills">
       <div class="pill" id="pill-bot"><span class="dot"></span><span>Bot …</span></div>
       <div class="pill" id="pill-api"><span class="dot"></span><span>API …</span></div>
       <div class="who">Sivakumar Kondapalle</div>
     </div>
+  </div>
+
+  <!-- market switch for narrow screens, where the sidebar is hidden -->
+  <div class="mktbar">
+    <div class="nav" data-market="US" onclick="setMarket('US')">🇺🇸&ensp;US Stocks</div>
+    <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE</div>
   </div>
 
   <div class="subhead">
@@ -97,6 +120,7 @@
 
   <div class="tabs">
     <div class="tab on" data-tab="overview" onclick="setTab('overview')">Overview</div>
+    <div class="tab" data-tab="suggestions" onclick="setTab('suggestions')">Suggestions</div>
     <div class="tab" data-tab="positions" onclick="setTab('positions')">My Positions</div>
     <div class="tab" data-tab="history" onclick="setTab('history')">Trade History</div>
     <div class="tab" data-tab="review" onclick="setTab('review')">AI Self-Review</div>
@@ -112,6 +136,27 @@ const fmt = (n,c) => n==null ? "—" : (CUR[c]||"")+Number(n).toLocaleString(und
 const cls = n => n>0?"pos":n<0?"neg":"";
 const ts = t => t? new Date(t*1000).toLocaleString():"";
 
+// Which account this page shows. The API says: paper | alpaca-paper | live.
+const MODES = {
+  "live":         {bar:"LIVE · REAL MONEY", note:"Positions, cash and P&L are read from your Alpaca live account. View only: approve entries in Telegram.",
+                   mode:"Live trading", d:"Real orders with real money at Alpaca.", broker:"Alpaca live account", usOnly:true},
+  "demo":         {bar:"DEMO · SIMULATED", note:"Share prices start from the last real close and then move by small made-up amounts. The AI ideas, approvals and trades are simulated. Nothing here is a real order or a real suggestion.",
+                   mode:"Demo", d:"Simulated market and AI. No real orders.", broker:"None (simulation)"},
+  "alpaca-paper": {bar:"ALPACA PAPER · PRACTICE MONEY", note:"Real orders on your Alpaca paper account. View only: approve entries in Telegram.",
+                   mode:"Alpaca paper trading", d:"Real orders, practice money.", broker:"Alpaca paper account", usOnly:true},
+};
+function applyMode(){
+  const m = MODES[DATA && DATA._mode], bar = document.getElementById("modebar");
+  if(DATA && DATA.error){ bar.className="modebar err"; bar.textContent=DATA.error; bar.hidden=false; }
+  else if(m){ bar.className="modebar"+(DATA._mode==="live"?" live":""); bar.textContent=m.bar+" "; bar.hidden=false;
+    const n=document.createElement("span"); n.textContent="· "+m.note; bar.appendChild(n); }
+  else bar.hidden=true;
+  if(!m) return;
+  document.getElementById("side-mode").textContent=m.mode;
+  document.getElementById("side-mode-d").textContent=m.d;
+  document.getElementById("side-mode-box").classList.toggle("live", DATA._mode==="live");
+  if(m.usOnly) document.querySelectorAll('.nav[data-market="INDIA"]').forEach(n=>n.style.display="none");   // broker mode is US only
+}
 function setMarket(m){ MARKET=m; render(); refresh(); }
 function setTab(t){ TAB=t; render(); }
 
@@ -121,11 +166,19 @@ function render(){
   document.getElementById("mkt-title").textContent = MARKET==="US" ? "US Stocks — Swing Bot" : "India NSE — Swing Bot";
   if(!DATA || !DATA[MARKET]) return;
   const d = DATA[MARKET], c = d.currency, s = d.stats||{};
-  document.getElementById("side-broker").textContent = MARKET==="US" ? "Paper Ledger + Alpaca" : "Paper Ledger (INR)";
+  if(d.suggest_only) document.getElementById("mkt-title").textContent = (MARKET==="US" ? "US Stocks" : "India NSE") + " — Daily Buy Suggestions";
+  if(!MODES[DATA._mode]){
+    document.getElementById("side-mode").textContent = d.suggest_only ? "Suggestions only" : "Paper trading";
+    document.getElementById("side-mode-d").textContent = d.suggest_only ? "The bot places no orders in this market. You decide and buy yourself."
+      : "Simulated orders — hard risk caps enforced in code.";
+  }
+  document.getElementById("side-broker").textContent = MODES[DATA._mode] ? MODES[DATA._mode].broker
+    : d.suggest_only ? "None (you place the orders)" : MARKET==="US" ? "Paper Ledger + Alpaca" : "Paper Ledger (INR)";
   let html = "";
 
   if(TAB==="overview"){
-    html += `<div class="cards">
+    // Suggestions-only market with nothing held: no account to summarise.
+    if(!(d.suggest_only && !d.positions.length)) html += `<div class="cards">
       <div class="stat"><div class="top"><span class="lbl">Portfolio Value</span><span class="ico">💼</span></div>
         <div class="val">${fmt(d.equity,c)}</div><div class="sub">Cash: ${fmt(d.cash,c)}</div></div>
       <div class="stat"><div class="top"><span class="lbl">Daily P&L</span><span class="ico">📈</span></div>
@@ -137,11 +190,15 @@ function render(){
         <div class="val" style="color:${d.killed?"var(--red)":"var(--green)"}">${d.killed?"KILLED":"ON"}</div>
         <div class="sub">${d.killed?"Manual reset required":"-10% kill · -3% day halt · 1.5% risk/trade"}</div></div>
     </div>`;
+    html += suggestionsHtml(d,c,false);
     if(d.market_view) html += `<div class="viewbox">🧠 <b>Claude's market view</b> (${ts(d.market_view_ts)})<br>${d.market_view}</div>`;
     html += `<div class="row2">
-      <div class="panel"><h3>Open Positions (${d.positions.length})</h3>${posTable(d,c)}</div>
+      <div class="panel"><h3>${d.suggest_only?"Earlier paper positions still open":"Open Positions"} (${d.positions.length})</h3>${d.suggest_only&&!d.positions.length?'<div class="empty">None. The bot holds nothing in this market.</div>':posTable(d,c)}</div>
       <div class="panel"><h3>Activity Log</h3>${feedHtml()}</div>
     </div>`;
+  }
+  else if(TAB==="suggestions"){
+    html += suggestionsHtml(d,c,true);
   }
   else if(TAB==="positions"){
     html += `<div class="panel"><h3>Open Positions (${d.positions.length})</h3>${posTable(d,c,true)}</div>`;
@@ -165,6 +222,40 @@ function render(){
   document.getElementById("content").innerHTML = html;
 }
 
+const esc = t => String(t??"").replace(/[&<>"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
+const SUG_STATUS = {approval:"Sent to Telegram for your approval", bought:"Bought by the bot", suggest:"Suggestion only"};
+function sugTable(rows,c,traded){
+  return `<div class="tablewrap"><table><tr><th>#</th><th>Priority</th><th>Symbol</th><th>Buy near</th><th>Stop</th><th>Target</th><th>Reward : risk</th><th>Size</th>${traded?"<th>What the bot did</th>":""}<th>Why</th></tr>`+
+    rows.map(x=>`<tr><td>${x.rank}</td><td><span class="prio ${esc(x.priority)}">${esc(x.priority)}</span></td>
+      <td><b>${esc(x.symbol)}</b></td><td>${fmt(x.price,c)}</td><td>${fmt(x.stop,c)}</td><td>${fmt(x.target,c)}</td>
+      <td>${x.r==null?"—":x.r+" : 1"}</td><td>up to ${x.size_pct}%</td>
+      ${traded?`<td>${sugOutcome(x)}</td>`:""}<td class="why">${esc(x.thesis)}</td></tr>`).join("")+`</table></div>`;
+}
+// What happened to an idea that was sent for approval.
+const AP_STATUS = {pending:["Waiting for your Approve or Skip","MEDIUM"], filled:["Approved and bought","HIGH"],
+  rejected:["Skipped by you",""], expired:["Expired, no answer in time",""], cancelled:["Approved, not bought",""], failed:["Failed",""]};
+function sugOutcome(x){
+  const a = x.approval, st = a && AP_STATUS[a.status];
+  if(!st) return esc(SUG_STATUS[x.status]||"—");
+  const note = a.note && a.status!=="rejected" && a.status!=="pending" ? `<div class="note" style="margin-top:2px">${esc(a.note)}</div>` : "";
+  return `<span class="prio ${st[1]}">${esc(st[0])}</span>${note}`;
+}
+function suggestionsHtml(d,c,all){
+  const s = d.suggestions||[], today = s.filter(x=>x.day===d.suggestions_today), traded = !d.suggest_only;
+  const when = MARKET==="US" ? "10:00 New York time" : "10:00 India time";
+  let h = `<div class="panel" style="margin-bottom:18px"><h3>Today's buy suggestions (${today.length})</h3>`;
+  h += today.length ? sugTable(today,c,traded)
+    : d.scanned_today
+      ? `<div class="empty">Today's scan ran at ${new Date(d.market_view_ts*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} your time. No buy passed the risk rules and the second AI check, so there is nothing to suggest today. Any stocks the AI is watching are listed on the control page.</div>`
+      : `<div class="empty">No suggestions yet today. The list is made once a day at ${when}, on trading days.</div>`;
+  h += traded
+    ? `<div class="note">These are the ideas that passed the risk rules and the second AI check today, best first. The bot still trades this market: each one is sent to Telegram and bought only if you approve it. "Size" is the share of capital that keeps the loss at the stop within the risk limit.</div>`
+    : `<div class="note">Suggestions only: the bot places no orders in this market. "Size" is the share of your own capital that keeps the loss at the stop within the risk limit. Prices are from the time of the scan, so check the live price before buying.</div>`;
+  const days = [...new Set(s.filter(x=>x.day!==d.suggestions_today).map(x=>x.day))].slice(0, all?6:1);
+  for(const day of days) h += `<div class="sugday">${esc(day)}</div>` + sugTable(s.filter(x=>x.day===day),c,traded);
+  return h + `</div>`;
+}
+
 function posTable(d,c,full){
   if(!d.positions.length) return `<div class="empty">No open positions — holding cash is a position too.</div>`;
   return `<table><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Now</th><th>Stop</th><th>Target</th><th>P&L</th>${full?"<th>Thesis</th>":""}</tr>`+
@@ -186,6 +277,7 @@ async function refresh(){
   const apiPill = document.getElementById("pill-api"), botPill = document.getElementById("pill-bot");
   try{
     DATA = await (await fetch("/api/summary")).json();
+    applyMode();
     TRADES = await (await fetch("/api/trades?market="+MARKET)).json();
     FEED = await (await fetch("/api/activity?market="+MARKET)).json();
     apiPill.className="pill ok"; apiPill.lastElementChild.textContent="API online";

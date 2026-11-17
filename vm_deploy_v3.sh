@@ -47,6 +47,7 @@ add SKEPTIC_MODEL ""
 add APPROVAL_MODE telegram
 add APPROVAL_TIMEOUT_MIN 90
 add APPROVAL_MAX_DRIFT_PCT 0.015
+add INDIA_MODE suggest          # India: daily buy suggestions only, no orders
 if ! grep -qE "^DASHBOARD_TOKEN=.+" "$V3/.env"; then
     sed -i '/^DASHBOARD_TOKEN=/d' "$V3/.env"
     echo "DASHBOARD_TOKEN=$("$PY" -c 'import secrets;print(secrets.token_urlsafe(24))')" >> "$V3/.env"

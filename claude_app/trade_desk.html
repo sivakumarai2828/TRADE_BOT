@@ -1,0 +1,426 @@
+<title>Trade Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one column, what needs you first (approvals), then today's ideas per market,
+   then what already happened, then what the bot holds. Tokens match the bot's control page. */
+:root{
+  --bg:#f2f4f7; --panel:#fff; --ink:#142033; --muted:#5d6879; --line:#dce2ea;
+  --accent:#1f5fbf; --accent-soft:#e3ecfa;
+  --good:#16804a; --good-soft:#e0f3e7; --bad:#b4232c; --bad-soft:#fbe4e5;
+  --warn:#9a6200; --warn-soft:#fbf0d8; --idle:#6b7587; --idle-soft:#eceff3;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e141e; --panel:#161e2b; --ink:#e3e8f0; --muted:#95a1b4; --line:#283345;
+  --accent:#6ea2f2; --accent-soft:#1b2b46; --good:#4cc283; --good-soft:#132e1e;
+  --bad:#f07178; --bad-soft:#3a191d; --warn:#e8b45a; --warn-soft:#352812;
+  --idle:#97a1b2; --idle-soft:#212a38; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e141e; --panel:#161e2b; --ink:#e3e8f0; --muted:#95a1b4; --line:#283345;
+  --accent:#6ea2f2; --accent-soft:#1b2b46; --good:#4cc283; --good-soft:#132e1e;
+  --bad:#f07178; --bad-soft:#3a191d; --warn:#e8b45a; --warn-soft:#352812;
+  --idle:#97a1b2; --idle-soft:#212a38; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.45}
+.td-wrap{max-width:860px;margin:0 auto;padding-block:18px 40px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:16px}
+.td-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.td-top h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.td-spacer{flex:1}
+.td-hint{color:var(--muted);font-size:13px}
+.td-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:500;
+  background:var(--idle-soft);color:var(--idle);white-space:nowrap}
+.td-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.td-pill.good{background:var(--good-soft);color:var(--good)} .td-pill.bad{background:var(--bad-soft);color:var(--bad)}
+.td-pill.warn{background:var(--warn-soft);color:var(--warn)} .td-pill.plain::before{display:none}
+.td-btn{font:inherit;font-weight:500;font-size:14px;padding:8px 14px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink);cursor:pointer;min-height:38px}
+.td-btn:hover{border-color:var(--accent)} .td-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.td-btn[disabled]{opacity:.55;cursor:default}
+.td-btn.primary{background:var(--good);border-color:var(--good);color:#fff}
+.td-btn.small{padding:5px 10px;min-height:32px;font-size:13px}
+.td-notice{border-radius:10px;padding:11px 13px;font-size:14px;background:var(--warn-soft);color:var(--ink);border:1px solid var(--line)}
+.td-notice.bad{background:var(--bad-soft)} .td-notice b{font-weight:600}
+.td-panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}
+.td-phead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:10px}
+.td-phead h2{margin:0;font-size:16px;font-weight:600}
+.td-list{display:flex;flex-direction:column;gap:10px}
+.td-item{border:1px solid var(--line);border-radius:10px;padding:12px 13px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.td-item.wait{border-left:3px solid var(--warn)}
+.td-row1{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+.td-rank{font-family:var(--mono);color:var(--muted);font-size:13px}
+.td-sym{font-family:var(--mono);font-weight:500;font-size:16px}
+.td-mk{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:0 5px}
+.td-levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px 12px}
+.td-levels div{min-width:0}
+.td-k{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.td-v{font-family:var(--mono);font-size:14.5px;font-variant-numeric:tabular-nums}
+.td-why{color:var(--muted);font-size:13.5px;overflow-wrap:anywhere}
+.td-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.td-confirm{background:var(--accent-soft);border-radius:8px;padding:9px 11px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.td-confirm span{flex:1 1 220px;font-size:14px}
+.td-empty{color:var(--muted);font-size:14px;padding:6px 0}
+.td-tabs{display:flex;gap:6px}
+.td-tab{font:inherit;font-size:13.5px;font-weight:500;padding:5px 12px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--muted);cursor:pointer}
+.td-tab[aria-selected="true"]{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.td-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.td-scroll{overflow-x:auto}
+table.td-table{width:100%;border-collapse:collapse;font-size:14px}
+.td-table th{text-align:left;font-weight:500;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
+  padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.td-table td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+.td-table .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.td-foot{color:var(--muted);font-size:12.5px;line-height:1.5}
+</style>
+
+<div class="td-wrap">
+  <header class="td-top">
+    <h1>Trade Desk</h1>
+    <span class="td-pill" id="botPill">Connecting…</span>
+    <span class="td-pill plain" id="acctPill">Paper account</span>
+    <span class="td-spacer"></span>
+    <span class="td-hint" id="updated"></span>
+    <button class="td-btn small" id="btnRefresh" type="button">Refresh</button>
+  </header>
+
+  <div class="td-notice" id="notice" role="status" hidden></div>
+
+  <section class="td-panel" aria-label="Waiting for you">
+    <div class="td-phead"><h2>Waiting for you</h2><span class="td-pill plain warn" id="waitCount">0</span>
+      <span class="td-hint">The bot buys only what you approve, after re-checking the price.</span></div>
+    <div class="td-list" id="waiting"><div class="td-empty">Reading the bot's records…</div></div>
+  </section>
+
+  <section class="td-panel" aria-label="Today's buy suggestions">
+    <div class="td-phead"><h2>Today's buy suggestions</h2>
+      <span class="td-spacer"></span>
+      <div class="td-tabs" role="tablist" aria-label="Market">
+        <button class="td-tab" role="tab" type="button" id="tabUS" data-m="US" aria-selected="true">US stocks</button>
+        <button class="td-tab" role="tab" type="button" id="tabINDIA" data-m="INDIA" aria-selected="false">India NSE</button>
+      </div></div>
+    <div class="td-hint" id="sugHint" style="margin-bottom:10px"></div>
+    <div class="td-list" id="suggestions"><div class="td-empty">Reading the bot's records…</div></div>
+  </section>
+
+  <section class="td-panel" aria-label="Recent decisions">
+    <div class="td-phead"><h2>Recent decisions</h2><span class="td-hint">Approved, skipped and expired requests, newest first</span></div>
+    <div class="td-list" id="recent"><div class="td-empty">Reading the bot's records…</div></div>
+  </section>
+
+  <section class="td-panel" aria-label="Open positions">
+    <div class="td-phead"><h2>Shares the bot holds</h2><span class="td-pill plain" id="posCount">0</span>
+      <span class="td-hint">Live prices and profit are on the bot's own dashboard.</span></div>
+    <div id="positions"><div class="td-empty">Reading the bot's records…</div></div>
+  </section>
+
+  <p class="td-foot">This page reads the trading bot's records through your Supabase connector and refreshes every 30 seconds while open.
+    Approve and Skip add one command to the bot's queue; the bot acts on it within about 20 seconds. Suggestions are the bot's ideas, not advice.</p>
+</div>
+
+<script>
+(() => {
+  const SERVER = "Supabase", TOOL = "execute_sql", PROJECT = "ocuknhkchjhwuqnwuuqg";
+  const APPROVAL_MIN = 90;             // the bot's APPROVAL_TIMEOUT_MIN
+  const KV_KEYS = ["approval_requests","ctl_results","ctl_queue","heartbeat","bot_status","US_suggestions","INDIA_suggestions",
+                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused"];
+  const READ_SQL = "select json_build_object(" +
+    "'kv', (select json_object_agg(k, v) from v2_kv where k in (" + KV_KEYS.map(k => "'" + k + "'").join(",") + "))," +
+    "'positions', (select coalesce(json_agg(t), '[]'::json) from (select id, market, symbol, qty, entry, stop, target, thesis, ts_open " +
+    "from v2_trades where status = 'open' order by ts_open) t)) as d";
+  const TZ = {US: "America/New_York", INDIA: "Asia/Kolkata"}, CUR = {US: "$", INDIA: "₹"};
+  const NAME = {US: "US", INDIA: "India"};
+
+  const $ = id => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const money = (n, m) => n == null || n === "" || isNaN(+n) ? "–"
+    : CUR[m] + Number(n).toLocaleString(m === "INDIA" ? "en-IN" : "en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const dayIn = (ms, m) => new Intl.DateTimeFormat("en-CA", {timeZone: TZ[m], year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date(ms));
+  const clock = ms => new Date(ms).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  function ago(sec) { const s = Math.max(0, Date.now() / 1000 - sec);
+    return s < 90 ? Math.round(s) + "s ago" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 172800 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago"; }
+
+  let mcp, loaded = false, market = "US";   // mcp: undefined = still connecting, null = unavailable
+  let data = {requests: [], results: [], queue: [], heartbeat: 0, status: {}, sug: {US: [], INDIA: []}, flags: {}, positions: []};
+  const sent = new Map();        // request id -> {cmdId, cmd, at, state}
+  const confirming = new Set();  // request ids showing the "Yes, buy" step
+  try { const t = localStorage.getItem("td_market"); if (t === "US" || t === "INDIA") market = t; } catch (e) {}
+
+  // ── reading ────────────────────────────────────────────────────
+  function rowsFrom(result) {
+    const p = result && result.payload;
+    if (Array.isArray(p)) return p;
+    const text = typeof p === "string" ? p : p && typeof p.result === "string" ? p.result : null;
+    if (text == null) throw {code: "bad_shape", message: "Unexpected answer from Supabase."};
+    const m = text.match(/<untrusted-data-[^>]*>\s*([\s\S]*?)\s*<\/untrusted-data-[^>]*>/);
+    return JSON.parse(m ? m[1] : text);
+  }
+  const call = query => mcp.callTool(SERVER, TOOL, {project_id: PROJECT, query}, {cache: false});
+  const parse = (v, fallback) => { try { const x = JSON.parse(v); return x == null ? fallback : x; } catch (e) { return fallback; } };
+
+  function normalize(d) {
+    const kv = (d && d.kv) || {};
+    return {
+      requests: parse(kv.approval_requests, []), results: parse(kv.ctl_results, []), queue: parse(kv.ctl_queue, []),
+      heartbeat: parseFloat(kv.heartbeat) || 0, status: parse(kv.bot_status, {}),
+      sug: {US: parse(kv.US_suggestions, []), INDIA: parse(kv.INDIA_suggestions, [])},
+      flags: {US: {killed: kv.US_killed === "1", paused: kv.ctl_US_paused === "1"},
+              INDIA: {killed: kv.INDIA_killed === "1", paused: kv.ctl_INDIA_paused === "1"}},
+      positions: Array.isArray(d && d.positions) ? d.positions : [],
+    };
+  }
+
+  const FIX = {
+    needs_reauth: "Supabase needs to be reconnected. Open claude.ai Settings → Connectors, reconnect Supabase, then tap Refresh.",
+    server_not_connected: "The Supabase connector is not connected for this account. Add it in claude.ai Settings → Connectors, then tap Refresh.",
+    selection_required: "More than one Supabase connector is connected. Choose one when Claude asks, then tap Refresh.",
+    not_in_manifest: "Supabase access is turned off for this page. Allow it in this page's Permissions menu, then reload.",
+    consent_required: "Supabase access was not allowed for this page. Tap Refresh to be asked again.",
+    blocked_by_policy: "Your organization blocks this Supabase tool, so the page cannot read the bot's records.",
+    approval_required: "Your organization requires approval for this Supabase tool, which pages cannot request yet.",
+    not_granted: "This view cannot use connectors. Open the page in the Claude app while signed in.",
+    capability_disabled: "This view cannot use connectors. Open the page in the Claude app while signed in.",
+    capability_removed: "This view cannot use connectors. Open the page in the Claude app while signed in.",
+    server_unavailable: "Supabase did not answer. The page will try again on the next refresh.",
+    rate_limited: "Too many requests just now. The page will try again shortly.",
+  };
+  function notice(text, bad) { const n = $("notice"); n.textContent = text; n.className = "td-notice" + (bad ? " bad" : ""); n.hidden = false; }
+  function explain(e, doing) {
+    const code = e && e.code;
+    if (code === "tool_error") return doing + " failed: " + String(e.message || "the database reported an error").slice(0, 240);
+    return FIX[code] || (doing + " failed (" + (code || "unknown error") + "). Tap Refresh to try again.");
+  }
+
+  let reading = null;
+  function refresh() {
+    if (!mcp) return Promise.resolve();
+    if (reading) return reading;
+    reading = (async () => {
+      let rows, err;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try { rows = rowsFrom(await call(READ_SQL)); err = null; break; }
+        catch (e) { err = e; if (!(e && e.retryable) || attempt) break; await sleep((e.retryAfterMs || 1200) + Math.random() * 800); }
+      }
+      if (err) {
+        const denied = ["needs_reauth", "server_not_connected", "not_in_manifest", "blocked_by_policy", "approval_required", "consent_required"];
+        if (denied.includes(err.code)) { data = normalize(null); loaded = false; }
+        notice(explain(err, "Reading the bot's records"), true);
+      } else {
+        data = normalize(rows && rows[0] && rows[0].d); loaded = true; $("notice").hidden = true;
+        $("updated").textContent = "Updated " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+        settle();
+      }
+      render();
+    })().finally(() => { reading = null; });
+    return reading;
+  }
+
+  // ── approve / skip ─────────────────────────────────────────────
+  function newId() { const b = new Uint8Array(3); crypto.getRandomValues(b); return [...b].map(x => x.toString(16).padStart(2, "0")).join(""); }
+
+  async function send(cmd, req) {
+    if (!mcp || sent.has(req.id)) return;
+    if (!/^[0-9a-f]{4,16}$/i.test(String(req.id))) { notice("This request has an unexpected id, so nothing was sent.", true); return; }
+    const item = {id: newId(), ts: Date.now() / 1000, cmd, market: null, arg: String(req.id), source: "claude-app"};
+    const literal = JSON.stringify([item]).replace(/'/g, "''");
+    // Appends one command to the bot's queue in a single statement, so a command queued by anyone else is kept.
+    const sql = "insert into v2_kv (k, v) values ('ctl_queue', '" + literal + "') " +
+      "on conflict (k) do update set v = (coalesce(nullif(v2_kv.v, ''), '[]')::jsonb || excluded.v::jsonb)::text returning k";
+    confirming.delete(req.id);
+    sent.set(req.id, {cmdId: item.id, cmd, at: Date.now(), state: "sending", symbol: req.symbol});
+    render();
+    try {
+      await call(sql);
+      sent.get(req.id).state = "sent";
+      render(); follow();
+    } catch (e) {
+      sent.delete(req.id);
+      const unsure = e && (e.code === "server_unavailable" || e.code === "upstream_error" || e.code === "cancelled");
+      notice(unsure ? "The " + (cmd === "approve" ? "approval" : "skip") + " for " + req.symbol + " may or may not have been sent. Wait for the list to refresh before trying again."
+                    : explain(e, cmd === "approve" ? "Approving " + req.symbol : "Skipping " + req.symbol), true);
+      render(); refresh();
+    }
+  }
+
+  let following = false;
+  async function follow() {          // quick checks while a command is waiting for the bot
+    if (following) return; following = true;
+    for (let i = 0; i < 18 && [...sent.values()].some(s => s.state === "sent"); i++) { await sleep(5000); await refresh(); }
+    following = false;
+  }
+
+  function settle() {                // match commands we sent against what the bot reports
+    for (const [reqId, s] of sent) {
+      if (s.state !== "sent") continue;
+      const res = data.results.find(r => r.id === s.cmdId);
+      if (res) {
+        sent.delete(reqId);
+        notice((res.ok ? "Done. " : "Not done. ") + String(res.note || ""), !res.ok);
+      } else if (Date.now() - s.at > 90000 && !data.queue.some(q => q.id === s.cmdId)) {
+        sent.delete(reqId);
+        notice("The bot did not pick up the " + (s.cmd === "approve" ? "approval" : "skip") + " for " + s.symbol +
+               ". Check that the bot is running, then tap again.", true);
+      }
+    }
+  }
+
+  // ── rendering ──────────────────────────────────────────────────
+  const AP = {pending: ["Waiting for you", "warn"], filled: ["Approved and bought", "good"], rejected: ["Skipped", ""],
+              expired: ["Expired, no answer in time", ""], cancelled: ["Approved, not bought", "bad"], failed: ["Failed", "bad"]};
+  const PRIO = {HIGH: "good", MEDIUM: "warn", LOW: ""};
+
+  function level(k, v) { const d = el("div"); d.append(el("div", "td-k", k), el("div", "td-v", v)); return d; }
+  function levels(x, m, withQty) {
+    const g = el("div", "td-levels");
+    const risk = x.price && x.stop && x.target && x.price > x.stop ? ((x.target - x.price) / (x.price - x.stop)).toFixed(2) + " : 1" : (x.r != null ? x.r + " : 1" : "–");
+    g.append(level("Buy near", money(x.price, m)), level("Stop", money(x.stop, m)), level("Target", money(x.target, m)), level("Reward : risk", risk));
+    if (withQty && x.qty != null) g.append(level("Shares", "about " + Math.round(x.qty)));
+    if (x.size_pct != null) g.append(level("Size", "up to " + x.size_pct + "%"));
+    return g;
+  }
+
+  function actions(req) {            // Approve / Skip for one pending request
+    const wrap = el("div", "td-actions"), s = sent.get(req.id);
+    if (s) { wrap.append(el("span", "td-pill " + (s.cmd === "approve" ? "good" : ""), (s.cmd === "approve" ? "Approval" : "Skip") +
+      (s.state === "sending" ? " sending…" : " sent. The bot acts within about 20 seconds."))); return wrap; }
+    if (confirming.has(req.id)) {
+      const c = el("div", "td-confirm");
+      c.append(el("span", null, "Buy about " + Math.round(req.qty || 0) + " share(s) of " + req.symbol + " at the current price on the paper account?"));
+      const yes = el("button", "td-btn primary small", "Yes, buy"); yes.type = "button"; yes.onclick = () => send("approve", req);
+      const no = el("button", "td-btn small", "Cancel"); no.type = "button"; no.onclick = () => { confirming.delete(req.id); render(); };
+      c.append(yes, no); return c;
+    }
+    const ok = el("button", "td-btn primary", "Approve"); ok.type = "button"; ok.onclick = () => { confirming.add(req.id); render(); };
+    const skip = el("button", "td-btn", "Skip"); skip.type = "button"; skip.onclick = () => send("reject", req);
+    const left = Math.round(APPROVAL_MIN - (Date.now() / 1000 - req.created) / 60);
+    wrap.append(ok, skip, el("span", "td-hint", left > 0 ? "expires in about " + left + " min" : "about to expire"));
+    return wrap;
+  }
+
+  function renderWaiting() {
+    const box = $("waiting"), pend = data.requests.filter(r => r.status === "pending");
+    $("waitCount").textContent = pend.length;
+    box.replaceChildren();
+    if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
+    if (!pend.length) { box.append(el("div", "td-empty", "Nothing is waiting for you. New requests appear here after the bot's daily scan.")); return; }
+    for (const r of pend) {
+      const it = el("div", "td-item wait"), row = el("div", "td-row1"), m = r.market in CUR ? r.market : "US";
+      row.append(el("span", "td-sym", (r.kind === "REPLACE" ? "Swap into " : "Buy ") + r.symbol), el("span", "td-mk", NAME[m]));
+      if (r.kind === "REPLACE" && r.replace) row.append(el("span", "td-hint", "sells " + r.replace + " first"));
+      if (r.kind === "WATCH") row.append(el("span", "td-hint", "watched price reached"));
+      it.append(row, levels(r, m, true));
+      if (r.thesis) it.append(el("div", "td-why", "Why: " + r.thesis));
+      if (r.skeptic) it.append(el("div", "td-why", "Second AI check: " + r.skeptic));
+      it.append(actions(r));
+      box.append(it);
+    }
+  }
+
+  function approvalFor(s, m) {
+    return data.requests.filter(r => r.market === m && r.symbol === s.symbol && r.created && dayIn(r.created * 1000, m) === s.day).pop();
+  }
+
+  function renderSuggestions() {
+    document.querySelectorAll(".td-tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.m === market)));
+    const box = $("suggestions"), m = market, today = dayIn(Date.now(), m);
+    const all = data.sug[m] || [];
+    const rows = all.filter(s => s.day === today).sort((a, b) => (b.score || 0) - (a.score || 0) || (b.r || 0) - (a.r || 0));
+    const onlySuggest = rows.length ? rows.every(s => s.status === "suggest") : m === "INDIA";
+    $("sugHint").textContent = onlySuggest
+      ? NAME[m] + " is suggestions only: the bot places no orders here. Buy with your own broker if you agree. Check the live price first."
+      : "Ideas that passed the risk rules and the second AI check today, best first. The bot buys only the ones you approve.";
+    box.replaceChildren();
+    if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
+    if (!rows.length) {
+      const next = data.status && data.status.markets && data.status.markets[m] && data.status.markets[m].next_cycle;
+      box.append(el("div", "td-empty", "No suggestions yet today for " + NAME[m] + "." + (next ? " Next scan: " + clock(next * 1000) + " your time." : "")));
+      return;
+    }
+    rows.forEach((s, i) => {
+      const it = el("div", "td-item"), row = el("div", "td-row1"), ap = approvalFor(s, m);
+      row.append(el("span", "td-rank", "#" + (i + 1)), el("span", "td-pill plain " + (PRIO[s.priority] || ""), s.priority || "–"), el("span", "td-sym", s.symbol));
+      if (ap && AP[ap.status]) row.append(el("span", "td-pill " + AP[ap.status][1], AP[ap.status][0]));
+      else if (s.status === "bought") row.append(el("span", "td-pill good", "Bought by the bot"));
+      else if (s.status === "suggest") row.append(el("span", "td-pill plain", "Suggestion only"));
+      it.append(row, levels(s, m, false));
+      if (s.thesis) it.append(el("div", "td-why", "Why: " + s.thesis));
+      if (ap && ap.status === "pending") { it.classList.add("wait"); it.append(actions(ap)); }
+      else if (ap && ap.note && ap.status !== "rejected") it.append(el("div", "td-why", "Result: " + ap.note));
+      box.append(it);
+    });
+  }
+
+  function renderRecent() {
+    const box = $("recent");
+    const done = data.requests.filter(r => r.status !== "pending").sort((a, b) => (b.resolved || b.created || 0) - (a.resolved || a.created || 0)).slice(0, 8);
+    box.replaceChildren();
+    if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
+    if (!done.length) { box.append(el("div", "td-empty", "No decisions yet. Each request you approve, skip or let expire is listed here.")); return; }
+    for (const r of done) {
+      const it = el("div", "td-item"), row = el("div", "td-row1"), st = AP[r.status] || [r.status, ""], m = r.market in CUR ? r.market : "US";
+      row.append(el("span", "td-sym", r.symbol), el("span", "td-mk", NAME[m]), el("span", "td-pill " + st[1], st[0]),
+                 el("span", "td-hint", r.resolved ? ago(r.resolved) : ""));
+      it.append(row);
+      if (r.note) it.append(el("div", "td-why", r.note));
+      box.append(it);
+    }
+  }
+
+  function renderPositions() {
+    const box = $("positions"), pos = data.positions;
+    $("posCount").textContent = pos.length;
+    box.replaceChildren();
+    if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
+    if (!pos.length) { box.append(el("div", "td-empty", "The bot holds no shares right now.")); return; }
+    const wrap = el("div", "td-scroll"), t = el("table", "td-table"), head = el("tr");
+    for (const [h, c] of [["Symbol", ""], ["Shares", "num"], ["Bought at", "num"], ["Stop", "num"], ["Target", "num"], ["Why", ""]]) head.append(el("th", c, h));
+    t.append(head);
+    for (const p of pos) {
+      const tr = el("tr"), m = p.market in CUR ? p.market : "US", sym = el("td");
+      sym.append(el("span", "td-sym", p.symbol), document.createTextNode(" "), el("span", "td-mk", NAME[m]));
+      tr.append(sym, el("td", "num", String(Math.round(p.qty * 10000) / 10000)), el("td", "num", money(p.entry, m)),
+                el("td", "num", money(p.stop, m)), el("td", "num", money(p.target, m)), el("td", "td-why", p.thesis || ""));
+      t.append(tr);
+    }
+    wrap.append(t); box.append(wrap);
+  }
+
+  function renderTop() {
+    const pill = $("botPill");
+    if (!loaded) { pill.className = "td-pill"; pill.textContent = mcp === null ? "Not connected" : "Connecting…"; return; }
+    const alive = data.heartbeat && Date.now() / 1000 - data.heartbeat < 120;
+    pill.className = "td-pill " + (alive ? "good" : "bad");
+    pill.textContent = alive ? "Bot running" : "Bot offline" + (data.heartbeat ? " · last seen " + ago(data.heartbeat) : "");
+    const halted = ["US", "INDIA"].filter(m => data.flags[m] && data.flags[m].killed).map(m => NAME[m]);
+    const paused = ["US", "INDIA"].filter(m => data.flags[m] && data.flags[m].paused).map(m => NAME[m]);
+    const acct = $("acctPill");
+    acct.className = "td-pill plain" + (halted.length ? " bad" : paused.length ? " warn" : "");
+    acct.textContent = halted.length ? halted.join(" and ") + " halted by the kill switch"
+      : paused.length ? "Paper account · " + paused.join(" and ") + " paused" : "Paper account";
+  }
+
+  function render() { renderTop(); renderWaiting(); renderSuggestions(); renderRecent(); renderPositions(); }
+
+  // ── wiring ─────────────────────────────────────────────────────
+  $("btnRefresh").onclick = () => refresh();
+  document.querySelectorAll(".td-tab").forEach(t => t.onclick = () => {
+    market = t.dataset.m; try { localStorage.setItem("td_market", market); } catch (e) {} renderSuggestions(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
+  render();
+
+  (async () => {
+    try { mcp = window.claude && window.claude.use ? await window.claude.use("mcp") : null; } catch (e) { mcp = null; }
+    if (!mcp) {
+      mcp = null; render();
+      notice("This page needs your Supabase connector to read the bot's records. Open it in the Claude app while signed in.", true);
+      return;
+    }
+    await refresh();
+    setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 30000);
+  })();
+})();
+</script>

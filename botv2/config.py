@@ -59,6 +59,10 @@ class V2Config:
     # Markets
     trade_us: bool = True
     trade_india: bool = True
+    # "trade" = the bot runs an India paper book; "suggest" = it never opens an
+    # India position and publishes a ranked daily list of buy suggestions instead.
+    india_mode: str = "trade"
+    us_mode: str = "trade"            # same choice for the US (virtual ledger only)
 
     # Capital (virtual ledger starting cash per market)
     us_start_cash: float = 3000.0
@@ -109,6 +113,13 @@ class V2Config:
     caps: HardCaps = field(default_factory=HardCaps)
 
 
+def _market_mode(name: str) -> str:
+    mode = os.getenv(name, "trade").strip().lower()
+    if mode not in ("trade", "suggest"):
+        raise SystemExit(f"{name} must be trade or suggest, got {mode!r}")
+    return mode
+
+
 def load_config() -> V2Config:
     caps = HardCaps(
         max_position_pct=_f("CAP_MAX_POSITION_PCT", "0.20"),
@@ -132,6 +143,8 @@ def load_config() -> V2Config:
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-fable-5"),
         trade_us=_b("TRADE_US", "true"),
         trade_india=_b("TRADE_INDIA", "true"),
+        india_mode=_market_mode("INDIA_MODE"),
+        us_mode=_market_mode("US_MODE"),
         us_start_cash=_f("US_START_CASH", "3000"),
         india_start_cash=_f("INDIA_START_CASH", "250000"),
         alpaca_key=os.getenv("ALPACA_KEY", os.getenv("APCA_API_KEY_ID", "")),
@@ -183,6 +196,8 @@ def check_broker_config(cfg: V2Config) -> list[str]:
         errs.append("TRADE_INDIA must be false (one market per broker process)")
     if not cfg.trade_us:
         errs.append("TRADE_US must be true")
+    if cfg.us_mode != "trade":
+        errs.append("US_MODE must be trade: a suggestions-only US market places no orders")
     if os.getenv("SUPABASE_URL"):
         errs.append("SUPABASE_URL must be empty: broker mode keeps its own SQLite "
                     "journal so it never mixes with the paper bot's records")

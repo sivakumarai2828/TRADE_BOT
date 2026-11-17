@@ -9,6 +9,13 @@ itself: it writes flags and queues commands that the bot process executes
 Runs as its own systemd service (trade-bot-v2-api) on port 8000 so a crash
 here can never affect the trading bot. Serves dashboard.html at / and JSON at
 /api/summary, /api/trades, /api/activity, /api/decisions.
+
+Broker mode (BROKER_TRADING=true, started with BOTV2_ENV_FILE=.env.live by
+trade-bot-live-api.service): the same pages show the real-order bot. Cash,
+equity and day P&L come from the Alpaca account, only the US market is
+listed, every control endpoint is refused (read-only: entries are approved
+in Telegram), and the server listens on 127.0.0.1 only, so it is reached
+through an SSH tunnel and never through the public Vercel proxy.
 """
 
 from __future__ import annotations
@@ -22,8 +29,8 @@ import time
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-from botv2 import control
-from botv2.config import load_config
+from botv2 import control, suggest
+from botv2.config import check_broker_config, load_config
 from botv2.ledger import PaperLedger
 from botv2.storage import make_journal
 
@@ -33,6 +40,27 @@ CORS(app)
 CFG = load_config()
 BASE = os.path.dirname(os.path.abspath(__file__))
 JOURNAL = make_journal(CFG.db_path)  # SQLite or Supabase, same interface
+
+# Which account the pages are showing: "paper" (virtual ledger),
+# "alpaca-paper" (real orders, Alpaca practice account) or "live" (real money).
+# "demo" is the local simulation (tools/demo_stack.py), so its pages can say so.
+MODE = ("live" if CFG.live_real_money else "alpaca-paper" if CFG.broker_trading
+        else "demo" if os.getenv("BOTV2_DEMO") else "paper")
+BROKER = None                      # AlpacaLedger in broker mode, built on first use
+
+
+def _broker():
+    global BROKER
+    if BROKER is None and _read_only():
+        from botv2.alpaca_ledger import AlpacaClient, AlpacaLedger
+        BROKER = AlpacaLedger(_journal(), "US",
+                              AlpacaClient(CFG.alpaca_key, CFG.alpaca_secret, CFG.alpaca_base_url),
+                              CFG.max_order_usd)
+    return BROKER
+
+
+def _read_only() -> bool:
+    return MODE in ("live", "alpaca-paper")       # the broker-mode dashboards
 
 # The Supabase client is not safe to share across threads: parallel requests
 # (the control page loads 4 endpoints at once) failed with 500s. Requests are
@@ -83,13 +111,27 @@ def health():
 def summary():
     j = _journal()
     hb = float(j.kv_get("heartbeat", "0") or 0)
-    out = {"_bot_alive": (time.time() - hb) < 120}
-    for market, start_cash, currency in (("US", CFG.us_start_cash, "USD"),
-                                         ("INDIA", CFG.india_start_cash, "INR")):
-        ledger = PaperLedger(j, market, start_cash)
-        positions = ledger.positions()
-        equity = round(ledger.cash + sum(p["market_value"] for p in positions), 2)
-        start = float(j.kv_get(f"{market}_start_cash", str(start_cash)))
+    out = {"_bot_alive": (time.time() - hb) < 120, "_mode": MODE}
+    broker = _broker()
+    markets = ((("US", CFG.us_start_cash, "USD"),) if broker else
+               (("US", CFG.us_start_cash, "USD"), ("INDIA", CFG.india_start_cash, "INR")))
+    for market, start_cash, currency in markets:
+        if broker:
+            # Real account: every number is Alpaca's, never our own arithmetic.
+            try:
+                acct = broker.account_snapshot()
+                positions = broker.positions()
+            except Exception as exc:
+                return jsonify({"error": f"Alpaca account unavailable: {exc}"[:300],
+                                "_mode": MODE}), 502
+            cash, equity, day_pnl = acct["cash"], acct["equity"], acct["day_pnl"]
+            start = float(j.kv_get(f"{market}_start_cash") or 0)
+        else:
+            ledger = PaperLedger(j, market, start_cash)
+            positions = ledger.positions()
+            cash, day_pnl = ledger.cash, ledger.day_pnl()
+            equity = round(cash + sum(p["market_value"] for p in positions), 2)
+            start = float(j.kv_get(f"{market}_start_cash", str(start_cash)))
         last_dec = j.recent_decisions(market, 1)
         view = ""
         if last_dec:
@@ -99,10 +141,10 @@ def summary():
                 pass
         out[market] = {
             "currency": currency,
-            "cash": ledger.cash,
+            "cash": cash,
             "equity": equity,
             "total_return_pct": round((equity / start - 1) * 100, 2) if start else 0,
-            "day_pnl": ledger.day_pnl(),
+            "day_pnl": day_pnl,
             "killed": j.kv_get(f"{market}_killed") == "1",
             "positions": [
                 {k: p.get(k) for k in ("symbol", "qty", "entry", "last_price", "stop",
@@ -114,6 +156,15 @@ def summary():
             "market_view": view,
             "market_view_ts": last_dec[0]["ts"] if last_dec else None,
             "memo": j.latest_memo(market) or "",
+            # Suggest-only market: no orders, a ranked list of buy suggestions instead.
+            "suggest_only": (CFG.india_mode if market == "INDIA" else CFG.us_mode) == "suggest"
+                            and not broker,
+            "suggestions": suggest.attach_approvals(
+                suggest.recent(j, market), control._load(j, "approval_requests", []), market),
+            "suggestions_today": suggest.today(market),
+            # Did today's scan already run? Lets the pages tell "nothing passed"
+            # apart from "not scanned yet".
+            "scanned_today": bool(last_dec) and suggest.day_of(last_dec[0]["ts"], market) == suggest.today(market),
         }
     return jsonify(out)
 
@@ -162,13 +213,22 @@ def control_page():
     return send_from_directory(BASE, "control.html")
 
 
-def _authorized() -> bool:
+def _token_ok() -> bool:
     expected = os.getenv("DASHBOARD_TOKEN", "")
     given = request.headers.get("X-Dashboard-Token", "")
     return bool(expected) and hmac.compare_digest(expected, given)
 
 
+def _authorized() -> bool:
+    if _read_only():               # broker mode: no token unlocks anything
+        return False
+    return _token_ok()
+
+
 def _deny():
+    if _read_only():
+        return jsonify({"error": "read-only: this dashboard shows the real-order bot. "
+                                 "Approve entries in Telegram."}), 403
     if not os.getenv("DASHBOARD_TOKEN"):
         return jsonify({"error": "controls disabled: set DASHBOARD_TOKEN in the API's .env"}), 403
     return jsonify({"error": "wrong or missing dashboard token"}), 401
@@ -178,7 +238,11 @@ def _deny():
 def control_state():
     snap = control.snapshot(_journal(), {
         "skeptic": CFG.skeptic_enabled, "approval": CFG.approval_mode == "telegram"})
-    snap["controls_enabled"] = bool(os.getenv("DASHBOARD_TOKEN"))
+    snap["mode"], snap["read_only"] = MODE, _read_only()
+    snap["controls_enabled"] = bool(os.getenv("DASHBOARD_TOKEN")) and not _read_only()
+    if _read_only():
+        snap["markets"] = {"US": snap["markets"]["US"]}
+        snap["gates"]["approval"] = True       # forced on by the bot in broker mode
     return jsonify(snap)
 
 
@@ -220,4 +284,11 @@ def control_cmd():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("API_PORT", "8000")))
+    errs = check_broker_config(CFG)
+    if errs:
+        raise SystemExit("Refusing to start the broker-mode dashboard:\n  - " + "\n  - ".join(errs))
+    # Broker mode listens on localhost only (SSH tunnel); paper mode as before.
+    host = os.getenv("API_HOST", "127.0.0.1" if _read_only() else "0.0.0.0")
+    if _read_only() and host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit("Broker-mode dashboard must listen on localhost (API_HOST=127.0.0.1)")
+    app.run(host=host, port=int(os.getenv("API_PORT", "8001" if _read_only() else "8000")))

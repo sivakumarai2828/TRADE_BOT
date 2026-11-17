@@ -174,3 +174,163 @@ def test_adjust_cannot_lower_stop(runner, monkeypatch):
     runner._apply({"action": "ADJUST", "symbol": "X", "stop": 90},
                   {"X": pos}, halt=None, earnings={})
     assert runner.ledger.positions()[0]["stop"] == 95
+
+
+# ── suggest-only market (INDIA_MODE=suggest) ─────────────────────
+@pytest.fixture
+def india(caps, journal, monkeypatch):
+    """An India runner in suggest-only mode; captures Telegram messages."""
+    from botv2 import notify
+    from botv2.ledger import PaperLedger
+
+    sent = []
+    monkeypatch.setattr(notify, "_send", lambda msg: sent.append(msg))
+    cfg = types.SimpleNamespace(caps=caps, target_deployment_pct=0.0)
+    ai = types.SimpleNamespace(decide=lambda p: {}, self_review=lambda *a: "")
+    r = MarketRunner("INDIA", "INR", cfg, journal, ai,
+                     PaperLedger(journal, "INDIA", 250_000.0), suggest_only=True)
+    r.sent = sent
+    return r
+
+
+def test_suggest_only_never_opens_a_position(india, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    act = {"action": "BUY", "symbol": "TITAN.NS", "stop": 95, "target": 115,
+           "thesis": "base breakout", "confidence": 0.8}
+    india._apply(act, {}, halt=None, earnings={})
+    assert india.ledger.positions() == [] and india.ledger.cash == 250_000.0
+    assert india.journal.open_trades("INDIA") == []
+    s = suggest.load(india.journal, "INDIA")
+    assert len(s) == 1 and s[0]["symbol"] == "TITAN.NS" and s[0]["priority"] == "HIGH"
+    assert s[0]["price"] == 100.0 and s[0]["r"] == 3.0
+    assert s[0]["size_pct"] == 25.0           # 2% risk / 5% stop = 40%, capped at the 25% position cap
+
+
+def test_suggestion_still_needs_the_risk_rules(india, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    india._apply({"action": "BUY", "symbol": "X.NS", "stop": 95, "target": 104}, {}, None, {})  # 0.8R
+    india._apply({"action": "BUY", "symbol": "Y.NS", "stop": 95, "target": 115}, {}, None, {"Y.NS": 1})  # earnings
+    assert suggest.load(india.journal, "INDIA") == []
+
+
+def test_skeptic_block_means_no_suggestion(india, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    india.skeptic = types.SimpleNamespace(review=lambda *a: types.SimpleNamespace(
+        approved=False, ruling="REJECT", summary="extended", reasons=["rsi 85"]))
+    monkeypatch.setattr(india, "_log_skeptic", lambda *a: None)
+    india._apply({"action": "BUY", "symbol": "X.NS", "stop": 95, "target": 115}, {}, None, {})
+    assert suggest.load(india.journal, "INDIA") == []
+
+
+def test_cycle_sends_one_ranked_list_and_does_not_repeat(india, monkeypatch):
+    from botv2 import data, executor, suggest
+    _price(monkeypatch, 100.0)
+    monkeypatch.setattr(data, "fetch_snapshot", lambda s: None)
+    monkeypatch.setattr(data, "fetch_market_context", lambda b: [])
+    monkeypatch.setattr(executor, "universe_for", lambda m: ([], []))
+    india.ai.decide = lambda p: {"market_view": "", "actions": [
+        {"action": "BUY", "symbol": "LOW.NS", "stop": 95, "target": 112, "confidence": 0.4},
+        {"action": "BUY", "symbol": "TOP.NS", "stop": 95, "target": 115, "confidence": 0.9},
+        {"action": "BUY", "symbol": "MID.NS", "stop": 95, "target": 115, "confidence": 0.6}]}
+    india.run_cycle()
+    lists = [m for m in india.sent if "Buy suggestions for" in m]
+    assert len(lists) == 1 and "(3)" in lists[0]
+    assert lists[0].index("TOP.NS") < lists[0].index("MID.NS") < lists[0].index("LOW.NS")
+    assert "places no orders" in lists[0] and india.journal.open_trades("INDIA") == []
+    ranked = suggest.recent(india.journal, "INDIA")
+    assert [(s["rank"], s["symbol"], s["priority"]) for s in ranked] == [
+        (1, "TOP.NS", "HIGH"), (2, "MID.NS", "MEDIUM"), (3, "LOW.NS", "LOW")]
+    india.run_cycle()                                     # same day again: nothing new stored
+    assert len(suggest.load(india.journal, "INDIA")) == 3
+
+
+def test_cycle_with_nothing_says_so(india, monkeypatch):
+    from botv2 import data, executor
+    monkeypatch.setattr(data, "fetch_snapshot", lambda s: None)
+    monkeypatch.setattr(data, "fetch_market_context", lambda b: [])
+    monkeypatch.setattr(executor, "universe_for", lambda m: ([], []))
+    india.ai.decide = lambda p: {"market_view": "", "actions": []}
+    india.run_cycle()
+    assert any("No buy suggestions" in m for m in india.sent)
+
+
+def test_watch_level_reached_becomes_a_single_suggestion(india, monkeypatch):
+    from botv2 import data, suggest
+    _price(monkeypatch, 100.0)
+    monkeypatch.setattr(data, "fetch_snapshot", lambda s: {"price": 100.0})
+    wid = india.journal.add_watch("INDIA", "W.NS", "BREAKOUT", 100.0, 95.0, 115.0, "needs 100")
+    w = india.journal.active_watches("INDIA")[0]
+    india._trigger_watch(w, 100.0)
+    assert india.journal.active_watches("INDIA") == [] and india.journal.open_trades("INDIA") == []
+    assert suggest.load(india.journal, "INDIA")[0]["kind"] == "WATCH"
+    assert any("watch level reached" in m for m in india.sent)
+
+
+def test_traded_market_still_buys(runner, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    runner._apply({"action": "BUY", "symbol": "X", "stop": 95, "target": 115}, {}, None, {})
+    assert len(runner.ledger.positions()) == 1
+
+
+def test_advisory_note_only_in_suggest_mode():
+    from botv2.ai_pm import build_prompt
+    args = ("INDIA", "INR", [], [], {}, {}, [], None, {}, None)
+    assert "ADVISORY MODE" in build_prompt(*args, advisory=True)
+    assert "ADVISORY MODE" not in build_prompt(*args)
+
+
+def test_traded_market_records_the_idea_and_still_trades(runner, monkeypatch):
+    """US keeps trading; the same entry also appears in the ranked list."""
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    runner._apply({"action": "BUY", "symbol": "X", "stop": 95, "target": 115, "confidence": 0.75},
+                  {}, None, {})
+    assert len(runner.ledger.positions()) == 1                 # bought as before
+    s = suggest.load(runner.journal, "US")
+    assert [(x["symbol"], x["priority"], x["status"]) for x in s] == [("X", "HIGH", "bought")]
+
+
+def test_traded_market_with_approvals_marks_the_idea_as_awaiting_approval(runner, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    asked = []
+    runner.approvals = types.SimpleNamespace(submit=lambda req: asked.append(req["symbol"]))
+    runner._apply({"action": "BUY", "symbol": "X", "stop": 95, "target": 115}, {}, None, {})
+    assert asked == ["X"] and runner.ledger.positions() == []
+    assert suggest.load(runner.journal, "US")[0]["status"] == "approval"
+
+
+def test_suggestion_store_failure_never_blocks_a_trade(runner, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    monkeypatch.setattr(suggest, "record", lambda *a, **k: 1 / 0)
+    runner._apply({"action": "BUY", "symbol": "X", "stop": 95, "target": 115}, {}, None, {})
+    assert len(runner.ledger.positions()) == 1
+
+
+def test_us_suggest_mode_refused_with_broker_trading():
+    import dataclasses
+    from botv2.alpaca_ledger import PAPER_URL
+    from botv2.config import V2Config, check_broker_config
+    cfg = dataclasses.replace(V2Config(), broker_trading=True, alpaca_key="k", alpaca_secret="s",
+                              alpaca_base_url=PAPER_URL, telegram_token="t", telegram_chat_id="c",
+                              trade_india=False, db_path="botv2_live.db", us_mode="suggest")
+    assert any("US_MODE" in e for e in check_broker_config(cfg))
+
+
+def test_suggestion_shows_what_happened_to_its_approval(journal):
+    import time
+    from botv2 import suggest
+    s = suggest.record(journal, "US", "USD", {"kind": "BUY", "symbol": "X", "price": 100, "stop": 95,
+                                              "target": 115}, types.SimpleNamespace(
+        max_position_pct=0.2, max_risk_per_trade_pct=0.015), status="approval")
+    reqs = [{"id": "abc123", "market": "US", "symbol": "X", "status": "filled",
+             "note": "2 sh @ 100.10", "created": time.time(), "resolved": time.time()},
+            {"id": "zzz999", "market": "INDIA", "symbol": "X", "status": "rejected", "created": time.time()}]
+    out = suggest.attach_approvals(suggest.recent(journal, "US"), reqs, "US")
+    assert out[0]["approval"]["id"] == "abc123" and out[0]["approval"]["status"] == "filled"
+    assert "approval" not in suggest.attach_approvals([dict(s, symbol="Y")], reqs, "US")[0]

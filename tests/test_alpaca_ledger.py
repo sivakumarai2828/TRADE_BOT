@@ -298,3 +298,67 @@ def test_shared_supabase_refused(monkeypatch):
 def test_live_config_with_confirmation_passes(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     assert check_broker_config(_cfg(alpaca_base_url=LIVE_URL, live_real_money=True)) == []
+
+
+# ── dashboard API in broker mode ────────────────────────────────
+@pytest.fixture
+def live_api(journal, led, broker, monkeypatch):
+    import api_v2
+    monkeypatch.setattr(api_v2, "JOURNAL", journal)
+    monkeypatch.setattr(api_v2, "MODE", "live")
+    monkeypatch.setattr(api_v2, "BROKER", led)
+    return api_v2.app.test_client()
+
+
+def test_summary_reads_the_alpaca_account(live_api, led, broker, journal):
+    journal.kv_set("US_start_cash", "400")
+    led.buy("AMD", 2, 46, 56, "t")
+    broker.price = 55.0
+    d = live_api.get("/api/summary").get_json()
+    assert d["_mode"] == "live" and "INDIA" not in d
+    us = d["US"]
+    assert us["cash"] == pytest.approx(350.0) and us["equity"] == pytest.approx(460.0)
+    assert us["total_return_pct"] == pytest.approx(15.0)
+    assert us["positions"][0]["symbol"] == "AMD" and us["positions"][0]["last_price"] == 55.0
+    assert us["positions"][0]["unrealized_pnl"] == pytest.approx(10.0)
+
+
+def test_summary_reports_broker_outage(live_api, broker, monkeypatch):
+    def down():
+        raise BrokerError("GET /v2/account -> 401: unauthorized")
+    monkeypatch.setattr(broker, "account", down)
+    r = live_api.get("/api/summary")
+    assert r.status_code == 502 and "Alpaca account unavailable" in r.get_json()["error"]
+
+
+def test_live_dashboard_is_read_only_even_with_a_valid_token(live_api, journal, monkeypatch):
+    from botv2 import control
+    monkeypatch.setenv("DASHBOARD_TOKEN", "s3cret")
+    h = {"X-Dashboard-Token": "s3cret"}
+    for path, body in (("/api/control/flag", {"flag": "approval", "value": False}),
+                       ("/api/control/cmd", {"cmd": "flatten", "market": "US"}),
+                       ("/api/control/auth", {})):
+        assert live_api.post(path, json=body, headers=h).status_code == 403
+    assert control._load(journal, control.K_QUEUE, []) == []
+    snap = live_api.get("/api/control").get_json()
+    assert snap["read_only"] and not snap["controls_enabled"] and list(snap["markets"]) == ["US"]
+
+
+def test_approval_gate_cannot_be_switched_off_in_broker_mode(journal):
+    from botv2 import control
+    control.set_gate(journal, "approval", False)          # a stale or hostile flag
+    desk, r = object(), types.SimpleNamespace()
+    cfg = types.SimpleNamespace(broker_trading=True, skeptic_enabled=True, approval_mode="telegram")
+    control.apply_flags(journal, {"US": r}, None, desk, cfg)
+    assert r.approvals is desk
+    cfg.broker_trading = False                            # paper bot: the flag still works
+    control.apply_flags(journal, {"US": r}, None, desk, cfg)
+    assert r.approvals is None
+
+
+def test_preflight_records_start_equity_once(led, journal):
+    led.preflight()
+    assert journal.kv_get("US_start_cash") == "450.0"
+    journal.kv_set("US_start_cash", "400")
+    led.preflight()
+    assert journal.kv_get("US_start_cash") == "400"

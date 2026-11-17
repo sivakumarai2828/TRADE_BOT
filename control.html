@@ -102,6 +102,7 @@ td.num,th.num{text-align:right}
 .log div span:last-child{color:var(--ink);font-family:var(--display)}
 .banner{border-radius:8px;padding:10px 12px;font-size:13px;display:none}
 .banner.show{display:block}
+.banner.modebar{margin-bottom:10px;border:1px solid var(--line)}
 .banner.bad{background:var(--bad-soft);color:var(--ink)} .banner.warn{background:var(--warn-soft)}
 .toast{position:fixed;right:16px;bottom:16px;z-index:20;display:grid;gap:8px;max-width:360px}
 .toast div{background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
@@ -126,6 +127,7 @@ dialog .actions{justify-content:flex-end}
     <button id="btnLock" type="button">🔒 Unlock controls</button>
   </header>
 
+  <div id="modebar" class="banner" role="status"></div>
   <div id="banner" class="banner" role="status"></div>
 
   <section class="bots" aria-label="Bots">
@@ -143,8 +145,15 @@ dialog .actions{justify-content:flex-end}
   </section>
 
   <section class="panel" aria-label="Pending approvals">
-    <div class="phead"><h2>Waiting for you</h2><span class="pill plain warn" id="apCount">0</span><span class="hint">Approve here or on Telegram. Re-checked at the live price before filling.</span></div>
+    <div class="phead"><h2>Waiting for you</h2><span class="pill plain warn" id="apCount">0</span><span class="hint" id="apHint">Approve here or on Telegram. Re-checked at the live price before filling.</span></div>
     <div class="list" id="approvals"></div>
+  </section>
+
+  <section class="panel" aria-label="Buy suggestions" id="sugPanel">
+    <div class="phead"><h2>Today's buy suggestions</h2><span class="pill plain warn" id="sugCount">0</span><span class="hint" id="sugHint">Ideas that passed the risk rules and the second AI check, best first.</span></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>#</th><th>Priority</th><th>Symbol</th><th>What happened</th><th class="num">Buy near</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Reward : risk</th><th class="num">Size</th><th>Why</th></tr></thead>
+      <tbody id="suggestions"></tbody></table></div>
   </section>
 
   <section class="panel" aria-label="Open positions">
@@ -196,6 +205,25 @@ dialog .actions{justify-content:flex-end}
 "use strict";
 const API=(new URLSearchParams(location.search).get("api")||"").replace(/\/$/,"");
 const NAMES={US:"US Swing Bot",INDIA:"India Swing Bot"};
+let MK=["US","INDIA"];   // markets shown; the broker-mode API lists US only
+const MODEBAR={
+  "live":["LIVE · REAL MONEY","Positions, cash and P&L are read from your Alpaca live account. This page is view only: approve entries in Telegram."],
+  "alpaca-paper":["ALPACA PAPER · PRACTICE MONEY","Real orders on your Alpaca paper account. This page is view only: approve entries in Telegram."],
+  "demo":["DEMO · SIMULATED","Share prices start from the last real close and then move by small made-up amounts. The AI ideas, approvals and trades are simulated. Nothing here is a real order or a real suggestion."]};
+function renderMode(){
+  const mode=ctl?.mode||summary?._mode, m=MODEBAR[mode], bar=$("modebar");
+  MK=ctl?.read_only?["US"]:["US","INDIA"];
+  if(ctl?.read_only){
+    token="";   // view only: every control button stays disabled
+    document.querySelectorAll("[data-gate]").forEach(g=>g.disabled=true);
+    $("apHint").textContent="Approve or skip in Telegram. Re-checked at the live price before filling.";
+  }
+  $("bot-INDIA").hidden=!!ctl?.read_only; $("btnLock").hidden=!!ctl?.read_only;
+  if(summary?.error){bar.className="banner bad show";bar.textContent=summary.error;return}
+  if(!m){bar.className="banner";return}
+  bar.className="banner show modebar "+(mode==="live"?"bad":"warn");
+  bar.replaceChildren(Object.assign(document.createElement("b"),{textContent:m[0]}),document.createTextNode(" · "+m[1]));
+}
 const CUR={US:"$",INDIA:"₹"};
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -208,7 +236,8 @@ const pct=n=>n==null?"–":(n>=0?"+":"")+Number(n).toFixed(2)+"%";
 function ago(ts){if(!ts)return"never";const s=Math.max(0,Date.now()/1000-ts);
   if(s<90)return Math.round(s)+"s ago";if(s<5400)return Math.round(s/60)+"m ago";if(s<172800)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago"}
 function until(ts){if(!ts)return"–";const s=ts-Date.now()/1000;if(s<=0)return"now";
-  const h=Math.floor(s/3600),m=Math.round((s%3600)/60);return h>=24?Math.floor(h/24)+"d "+(h%24)+"h":h?`${h}h ${m}m`:`${m}m`}
+  const t=Math.round(s/60),h=Math.floor(t/60),m=t%60;   // round once, so 59.6 min never shows as "60m"
+  return h>=24?Math.floor(h/24)+"d "+(h%24)+"h":h?`${h}h ${m}m`:`${m}m`}
 const clock=ts=>new Date(ts*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
 
 function toast(msg){const d=document.createElement("div");d.textContent=msg;$("toast").appendChild(d);setTimeout(()=>d.remove(),4500)}
@@ -277,23 +306,52 @@ function rangeBar(p){
   const lo=Math.min(p.stop??p.entry,p.last_price),hi=Math.max(p.target??p.entry,p.last_price),span=(hi-lo)||1;
   const at=v=>((v-lo)/span*100).toFixed(1)+"%";
   return `<div class="range" title="stop ${p.stop} · entry ${p.entry} · target ${p.target}"><b style="left:${at(p.entry)}"></b><i style="left:calc(${at(p.last_price)} - 1px)"></i></div>
-  <div class="rlbl"><span>${p.stop??"–"}</span><span>${p.target??"–"}</span></div>`;
+  <div class="rlbl"><span>stop ${fmt(p.stop,p.m)}</span><span>target ${fmt(p.target,p.m)}</span></div>`;
+}
+const SUG_STATUS={approval:"Sent to you for approval",bought:"Bought by the bot",suggest:"Nothing: you buy yourself"};
+const AP_STATUS={pending:["Waiting for your Approve or Skip","warn"],filled:["Approved and bought","good"],rejected:["Skipped by you","idle"],
+  expired:["Expired, no answer in time","idle"],cancelled:["Approved, not bought","bad"],failed:["Failed","bad"]};
+function sugOutcome(x){   // what happened to an idea, using its approval request when there is one
+  const a=x.approval, st=a&&AP_STATUS[a.status];
+  if(!st)return esc(SUG_STATUS[x.status]||"–");
+  const note=a.note&&a.status!=="rejected"&&a.status!=="pending"?`<br><span class="hint">${esc(a.note)}</span>`:"";
+  return `<span class="pill ${st[1]}">${esc(st[0])}</span>${note}`;
+}
+function renderSuggestions(){
+  const groups=MK.map(m=>{const d=summary?.[m];return [m,(d?.suggestions||[]).filter(x=>x.day===d.suggestions_today)]}).filter(g=>g[1].length);
+  $("sugCount").textContent=groups.reduce((n,g)=>n+g[1].length,0);
+  const only=MK.filter(m=>summary?.[m]?.suggest_only).map(m=>NAMES[m].replace(" Swing Bot",""));
+  $("sugHint").textContent="Ideas that passed the risk rules and the second AI check, best first in each market."+(only.length?" "+only.join(" and ")+": suggestions only, the bot places no orders.":"");
+  // one block per market, each ranked from 1, so the two lists are never read as one ranking
+  $("suggestions").innerHTML=groups.length?groups.map(([m,rows])=>`<tr><td colspan="10" class="hint"><b>${esc(NAMES[m].replace(" Swing Bot",""))}</b> · ${rows.length} today</td></tr>`+rows.map(x=>`<tr><td>${x.rank}</td>
+    <td><span class="pill ${x.priority==="HIGH"?"good":x.priority==="MEDIUM"?"warn":"idle"}">${esc(x.priority)}</span></td>
+    <td><span class="sym">${esc(x.symbol)}</span></td><td>${sugOutcome(x)}</td>
+    <td class="num">${fmt(x.price,m)}</td><td class="num">${fmt(x.stop,m)}</td>
+    <td class="num">${fmt(x.target,m)}</td><td class="num">${x.r==null?"–":esc(x.r)+" : 1"}</td>
+    <td class="num">up to ${esc(x.size_pct)}%</td><td>${esc(x.thesis)}</td></tr>`).join("")).join("")
+    :`<tr><td colspan="10" class="hint">${MK.map(m=>{const d=summary?.[m];return d?.scanned_today
+        ?`${esc(NAMES[m].replace(" Swing Bot",""))}: today's scan ran at ${clock(d.market_view_ts)} and no buy passed the checks.`
+        :`${esc(NAMES[m].replace(" Swing Bot",""))}: not scanned yet today (10:00 local time on trading days).`}).join(" ")}</td></tr>`;
 }
 function render(){
-  ["US","INDIA"].forEach(renderBot);
+  renderMode();
+  renderSuggestions();
+  MK.forEach(renderBot);
   const alive=ctl?.bot_alive, st=ctl?.status||{};
   $("procPill").className="pill "+(alive?"good":ctl?"bad":"idle");
   $("procPill").textContent=alive?"Bot process running":ctl?"Bot process offline":"Connecting…";
-  $("procMeta").textContent=ctl?`${st.version||"v2"} · heartbeat ${ctl.heartbeat_age_s!=null?ctl.heartbeat_age_s+"s":"none"}${st.started?" · up since "+new Date(st.started*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}`:"";
+  $("procMeta").textContent=ctl?`${st.version||"v3"} · heartbeat ${ctl.heartbeat_age_s!=null?ctl.heartbeat_age_s+"s":"none"}${st.started?" · up since "+new Date(st.started*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):""}`:"";
   const b=$("banner");
   if(ctl&&!alive){b.className="banner bad show";b.textContent="The bot process is not sending heartbeats. Commands will wait in the queue until it is back. Check the VM service: sudo systemctl status trade-bot-v2";}
+  else if(ctl&&ctl.read_only)b.className="banner";
   else if(ctl&&!ctl.controls_enabled){b.className="banner warn show";b.textContent="Controls are disabled on the server. Add DASHBOARD_TOKEN=<a long random string> to the .env used by the API and restart it.";}
   else b.className="banner";
 
   if(ctl){$("gSkeptic").checked=ctl.gates.skeptic;$("gApproval").checked=ctl.gates.approval}
   $("gSkeptic").disabled=$("gApproval").disabled=!token;
-  const sk=["US","INDIA"].flatMap(m=>ctl?.markets?.[m]?.skeptic_log||[]);
-  $("skRate").textContent=sk.length?`${Math.round(100*sk.filter(x=>x.ruling!=="BUY").length/sk.length)}% of ${sk.length}`:"no rulings yet";
+  const sk=MK.flatMap(m=>ctl?.markets?.[m]?.skeptic_log||[]);
+  const refused=sk.filter(x=>x.ruling!=="BUY").length;
+  $("skRate").textContent=sk.length?`${Math.round(100*refused/sk.length)}% (${refused} of ${sk.length} refused)`:"no rulings yet";
 
   const aps=ctl?.approvals||[];
   $("apCount").textContent=aps.length;
@@ -309,7 +367,7 @@ function render(){
       <div class="hint" style="margin-top:4px">💡 ${esc(a.thesis)}${a.skeptic?` · 🧐 ${esc(a.skeptic)}`:""}</div></div>`}).join("")
     :`<div class="empty">Nothing waiting. New entries appear here after they pass the risk caps and the Skeptic.</div>`;
 
-  const pos=["US","INDIA"].flatMap(m=>(summary?.[m]?.positions||[]).map(p=>({...p,m})));
+  const pos=MK.flatMap(m=>(summary?.[m]?.positions||[]).map(p=>({...p,m})));
   $("posHint").textContent=pos.length?`${pos.length} open · stops and targets enforced every 20 min`:"";
   $("positions").innerHTML=pos.length?pos.map(p=>`<tr>
     <td><span class="sym">${esc(p.symbol)}</span><span class="mk">${p.m}</span></td>
@@ -320,18 +378,18 @@ function render(){
     <td><button class="danger" data-act="close" data-m="${p.m}" data-sym="${esc(p.symbol)}" ${token?"":"disabled"}>Close</button></td></tr>`).join("")
     :`<tr><td colspan="8" class="empty">No open positions.</td></tr>`;
 
-  const w=["US","INDIA"].flatMap(m=>(ctl?.markets?.[m]?.watches||[]).map(x=>({...x,m})));
+  const w=MK.flatMap(m=>(ctl?.markets?.[m]?.watches||[]).map(x=>({...x,m})));
   $("watches").innerHTML=w.length?w.map(x=>`<tr><td><span class="sym">${esc(x.symbol)}</span><span class="mk">${x.m}</span></td><td>${esc(x.setup||"–")}</td>
     <td class="num">${fmt(x.ideal_entry,x.m)}</td><td class="num">${fmt(x.stop,x.m)}</td><td class="num">${fmt(x.target,x.m)}</td><td class="hint">${until(x.ts_expires)}</td></tr>`).join("")
     :`<tr><td colspan="6" class="empty">No armed entries.</td></tr>`;
 
-  const skl=["US","INDIA"].flatMap(m=>(ctl?.markets?.[m]?.skeptic_log||[]).map(x=>({...x,m}))).sort((a,b)=>b.ts-a.ts).slice(0,8);
+  const skl=MK.flatMap(m=>(ctl?.markets?.[m]?.skeptic_log||[]).map(x=>({...x,m}))).sort((a,b)=>b.ts-a.ts).slice(0,8);
   $("skeptic").innerHTML=skl.length?skl.map(x=>`<div class="item"><div class="row1"><span class="pill ${x.ruling==="BUY"?"good":x.ruling==="WAIT"?"warn":"bad"}">${x.ruling}</span>
     <span class="sym">${esc(x.symbol)}</span><span class="mk">${x.m}</span><span class="spacer"></span><span class="hint">${ago(x.ts)}</span></div>
     <div class="hint" style="margin-top:4px">${esc(x.summary)}</div></div>`).join("")
     :`<div class="empty">No rulings yet.</div>`;
 
-  const feed=["US","INDIA"].flatMap(m=>(activity[m]||[]).map(a=>({...a,m}))).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,25);
+  const feed=MK.flatMap(m=>(activity[m]||[]).map(a=>({...a,m}))).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,25);
   $("activity").innerHTML=feed.length?feed.map(a=>`<div><span>${a.ts?clock(a.ts):""}</span><span><b class="mk" style="margin:0 6px 0 0">${a.m}</b>${esc(a.kind==="trade"?`${a.text} · ${sgn(a.pnl,a.m)}`:`AI: ${a.text}`)}</span></div>`).join("")
     :`<div><span></span><span class="hint">No activity yet.</span></div>`;
 

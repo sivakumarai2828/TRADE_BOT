@@ -10,3 +10,4 @@ TRADE_BOT_V1_archive_*.tar.gz
 
 deploy_v3.log
 deploy_dashboard.log
+.bt_cache/

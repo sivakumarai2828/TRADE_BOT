@@ -126,6 +126,13 @@ class AlpacaLedger:
         a = self.client.account()
         return round(float(a["equity"]) - float(a["last_equity"]), 2)
 
+    def account_snapshot(self) -> dict:
+        """Cash, equity and day P&L from ONE account call (dashboard API)."""
+        a = self.client.account()
+        return {"cash": round(min(float(a["cash"]), float(a["buying_power"])), 2),
+                "equity": round(float(a["equity"]), 2),
+                "day_pnl": round(float(a["equity"]) - float(a["last_equity"]), 2)}
+
     def positions(self) -> list[dict]:
         held = {p["symbol"]: p for p in self.client.positions()}
         out = []
@@ -309,5 +316,7 @@ class AlpacaLedger:
         if a.get("trading_blocked") or a.get("account_blocked") or a.get("status") != "ACTIVE":
             raise BrokerError(f"Alpaca account not tradable (status {a.get('status')}, "
                               f"trading_blocked {a.get('trading_blocked')})")
+        if self.journal.kv_get(f"{self.market}_start_cash") is None:   # "since start" baseline
+            self.journal.kv_set(f"{self.market}_start_cash", str(round(float(a["equity"]), 2)))
         return (f"{'LIVE' if self.client.is_live else 'PAPER'} Alpaca account ACTIVE, "
                 f"equity ${float(a['equity']):,.2f}, cash ${float(a['cash']):,.2f}")

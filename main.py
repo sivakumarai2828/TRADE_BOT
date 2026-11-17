@@ -84,12 +84,14 @@ def build_runners(cfg, journal=None):
             PaperLedger(journal, "US", cfg.us_start_cash),
             alpaca=AlpacaMirror(cfg.alpaca_key, cfg.alpaca_secret, cfg.alpaca_base_url),
             skeptic=skeptic, approvals=desk,
+            suggest_only=cfg.us_mode == "suggest",
         )
     if cfg.trade_india:
         runners["INDIA"] = MarketRunner(
             "INDIA", "INR", cfg, journal, ai,
             PaperLedger(journal, "INDIA", cfg.india_start_cash),
             skeptic=skeptic, approvals=desk,
+            suggest_only=cfg.india_mode == "suggest",
         )
     if desk:
         desk.runners = runners
@@ -144,6 +146,10 @@ def main() -> None:
             return
         print(desk.decide(args[1], approve=args[0] == "approve", source="cli"))
         return
+    if args[:1] == ["reset-kill"]:
+        market = (args[1] if len(args) > 1 else "us").upper()
+        print(control.reset_kill_switch(runners[market])[1])
+        return
     if args[:1] == ["status"]:
         for name, r in runners.items():
             print(f"\n[{name}] cash={r.ledger.cash:,.2f} equity={r.ledger.equity():,.2f}")
@@ -192,7 +198,8 @@ def main() -> None:
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
     notify.alert(f"🟢 TRADE_BOT_V3 started (markets: {', '.join(runners)}) | "
                  f"skeptic {'on' if cfg.skeptic_enabled else 'off'} | "
-                 f"approvals {cfg.approval_mode}")
+                 f"approvals {cfg.approval_mode}"
+                 + "".join(f" | {m}: suggestions only" for m, r in runners.items() if r.suggest_only))
 
     # A transient network blip (e.g. Supabase 'connection reset by peer') must
     # never kill the scheduler: on 2026-08-06 one such error crashed the process

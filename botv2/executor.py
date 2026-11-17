@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import time
 
-from . import data, notify
+from . import data, notify, suggest
 from .ai_pm import PortfolioManagerAI, build_prompt
 from .journal import Journal
 from .ledger import PaperLedger
@@ -70,7 +70,7 @@ class MarketRunner:
 
     def __init__(self, market: str, currency: str, cfg, journal: Journal,
                  ai: PortfolioManagerAI, ledger: PaperLedger, alpaca=None,
-                 skeptic=None, approvals=None):
+                 skeptic=None, approvals=None, suggest_only: bool = False):
         self.market = market
         self.currency = currency
         self.cfg = cfg
@@ -81,6 +81,10 @@ class MarketRunner:
         self.skeptic = skeptic          # Skeptic or None (gate disabled)
         self.approvals = approvals      # ApprovalDesk or None (fill immediately)
         self.entries_paused = False     # set from the dashboard: no new entries
+        # Suggest-only market (INDIA_MODE=suggest): entries that pass the risk
+        # rules and the Skeptic are published as suggestions, never filled.
+        self.suggest_only = suggest_only
+        self._cycle_suggestions: list[dict] | None = None   # a list while a cycle runs
         self.risk = RiskEngine(cfg.caps, journal, market)
         self._snapshots: dict[str, dict] = {}   # symbol -> latest snapshot
         self._regime_label = "UNKNOWN"
@@ -292,6 +296,7 @@ class MarketRunner:
             self.market, self.currency, regime, candidates, portfolio,
             self.journal.stats(self.market), self.journal.recent_closed(self.market),
             self.journal.latest_memo(self.market), self.risk.describe(), halt,
+            advisory=self.suggest_only,
         )
         decision = self.ai.decide(prompt)
         # Store the full prompt context with the decision for later analysis.
@@ -302,11 +307,17 @@ class MarketRunner:
 
         by_symbol = {p["symbol"]: p for p in positions}
         earnings = {c["symbol"]: c.get("days_to_earnings") for c in candidates}
-        for act in decision.get("actions", []):
-            try:
-                self._apply(act, by_symbol, halt, earnings)
-            except Exception as exc:
-                log.exception("action failed %s: %s", act, exc)
+        self._cycle_suggestions = [] if self.suggest_only else None
+        try:
+            for act in decision.get("actions", []):
+                try:
+                    self._apply(act, by_symbol, halt, earnings)
+                except Exception as exc:
+                    log.exception("action failed %s: %s", act, exc)
+            if self.suggest_only:
+                suggest.send_digest(self.market, self._cycle_suggestions)
+        finally:
+            self._cycle_suggestions = None
         log.info("=== %s decision cycle done ===", self.market)
 
     def _apply(self, act: dict, by_symbol: dict, halt: str | None,
@@ -474,7 +485,8 @@ class MarketRunner:
         if gated:
             proposal = {"kind": "BUY", "symbol": sym, "price": price,
                         "stop": float(act["stop"]), "target": target, "setup": setup,
-                        "thesis": str(act.get("thesis", "")), "qty": verdict.qty}
+                        "thesis": str(act.get("thesis", "")), "qty": verdict.qty,
+                        "confidence": act.get("confidence")}
             gate = self._gate_entry(proposal, self._snapshots.get(sym))
             if gate == "blocked":
                 return
@@ -515,11 +527,35 @@ class MarketRunner:
                 notify.skeptic_blocked(self.market, sym, proposal["kind"],
                                        v.ruling, v.summary, v.reasons)
                 return "blocked"
+        if self.suggest_only:
+            self._suggest(proposal)
+            return "pending"           # callers treat it as "not filled now"
+        # Traded market: keep the same ranked list for the dashboard. Trading
+        # is unchanged, and a failure to store it must never block an entry.
+        try:
+            suggest.record(self.journal, self.market, self.currency, proposal, self.cfg.caps,
+                           status="approval" if self.approvals is not None else "bought")
+        except Exception:
+            log.exception("could not record suggestion for %s", sym)
         if self.approvals is not None:
             req = dict(proposal, market=self.market, currency=self.currency)
             self.approvals.submit(req)
             return "pending"
         return "go"
+
+    def _suggest(self, proposal: dict) -> None:
+        """Publish an entry as a suggestion. No ledger, no order."""
+        s = suggest.record(self.journal, self.market, self.currency, proposal, self.cfg.caps)
+        if proposal.get("watch_id"):   # the watch has done its job; don't re-ping
+            self.journal.resolve_watch(proposal["watch_id"], "triggered", "suggested (no order)")
+        if s is None:
+            return                     # already suggested today
+        log.info("%s suggestion: %s %s @ %.2f (%s)", self.market, s["kind"], s["symbol"],
+                 s["price"], s["priority"])
+        if self._cycle_suggestions is not None:
+            self._cycle_suggestions.append(s)      # goes out in the daily list
+        else:
+            suggest.send_one(self.market, s)       # watch level reached mid-session
 
     def _log_skeptic(self, proposal: dict, v) -> None:
         """Keep the last 100 rulings so refusal rate can be audited."""
