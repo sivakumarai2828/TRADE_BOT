@@ -98,7 +98,7 @@ class V2Config:
     # "telegram" = every new entry waits for an Approve tap; "off" = fill
     # immediately (V2 behaviour). Exits are never gated.
     approval_mode: str = "telegram"
-    approval_timeout_min: float = 90.0
+    approval_timeout_min: float = 390.0   # capped at the market close
     # Cancel an approved entry if price has run this far above the proposal.
     approval_max_drift_pct: float = 0.015
 
@@ -160,7 +160,7 @@ def load_config() -> V2Config:
         skeptic_enabled=_b("SKEPTIC_ENABLED", "true"),
         skeptic_model=os.getenv("SKEPTIC_MODEL", ""),
         approval_mode=os.getenv("APPROVAL_MODE", "telegram").strip().lower(),
-        approval_timeout_min=_f("APPROVAL_TIMEOUT_MIN", "90"),
+        approval_timeout_min=_f("APPROVAL_TIMEOUT_MIN", "390"),
         approval_max_drift_pct=_f("APPROVAL_MAX_DRIFT_PCT", "0.015"),
         broker_trading=_b("BROKER_TRADING", "false"),
         live_real_money=_b("LIVE_REAL_MONEY", "false"),

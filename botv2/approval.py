@@ -32,6 +32,26 @@ log = logging.getLogger("botv2.approval")
 KV_REQUESTS = "approval_requests"
 KV_OFFSET = "telegram_update_offset"
 KEEP_RESOLVED = 50          # resolved requests kept for the audit trail
+# A request never outlives the session it was made in: approving after the
+# close would fill at a stale last price. (tz, close hour, close minute)
+SESSION_CLOSE = {"US": ("America/New_York", 16, 0), "INDIA": ("Asia/Kolkata", 15, 30)}
+
+
+def deadline(market: str, created: float, timeout_s: float) -> float:
+    """When a request expires: timeout_s after it was made, but no later than
+    that day's market close. A request made after the close keeps the plain
+    timeout (the price re-check at approval still guards it)."""
+    end = created + timeout_s
+    tz_close = SESSION_CLOSE.get(market)
+    if tz_close:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz, h, m = tz_close
+        close = datetime.fromtimestamp(created, ZoneInfo(tz)).replace(
+            hour=h, minute=m, second=0, microsecond=0).timestamp()
+        if created < close:
+            end = min(end, close)
+    return end
 
 
 class ApprovalDesk:
@@ -61,6 +81,9 @@ class ApprovalDesk:
         done = [r for r in reqs if r["status"] != "pending"][-KEEP_RESOLVED:]
         self.journal.kv_set(KV_REQUESTS, json.dumps(pending + done))
 
+    def _expires(self, req: dict) -> float:
+        return float(req.get("expires") or req["created"] + self.timeout_s)
+
     def pending(self, market: str | None = None) -> list[dict]:
         return [r for r in self._load() if r["status"] == "pending"
                 and (market is None or r["market"] == market)]
@@ -77,6 +100,7 @@ class ApprovalDesk:
         req = dict(req)
         req.update(id=secrets.token_hex(3), status="pending",
                    created=time.time(), message_id=None)
+        req["expires"] = deadline(req["market"], req["created"], self.timeout_s)
         msg_id = self._send(self._request_text(req), buttons=req["id"])
         req["message_id"] = msg_id
         reqs.append(req)
@@ -93,7 +117,7 @@ class ApprovalDesk:
             return f"No request {req_id}."
         if req["status"] != "pending":
             return f"{req['symbol']} already {req['status']}."
-        if time.time() - req["created"] > self.timeout_s:
+        if time.time() > self._expires(req):
             self._resolve(req, "expired", "approval window passed")
             self._save(reqs)
             return f"{req['symbol']} expired before approval."
@@ -133,7 +157,7 @@ class ApprovalDesk:
         reqs = self._load()
         n = 0
         for r in reqs:
-            if r["status"] == "pending" and time.time() - r["created"] > self.timeout_s:
+            if r["status"] == "pending" and time.time() > self._expires(r):
                 self._resolve(r, "expired", "no answer in time")
                 runner = self.runners.get(r["market"])
                 if runner:
@@ -215,7 +239,8 @@ class ApprovalDesk:
         ]
         if r.get("skeptic"):
             lines.append(f"🧐 Skeptic BUY: {html.escape(str(r['skeptic'])[:200])}")
-        lines.append(f"⏱ Expires in {int(self.timeout_s // 60)} min. "
+        left = max(0, int((self._expires(r) - time.time()) // 60)) if r.get("created") else int(self.timeout_s // 60)
+        lines.append(f"⏱ Expires in {left // 60}h {left % 60}m (market close at the latest). "
                      f"Re-checked at current price on approval.")
         return "\n".join(lines)
 

@@ -365,11 +365,11 @@ function render(){
   $("apCount").textContent=aps.length;
   $("approvals").innerHTML=aps.length?aps.map(a=>{
     const m=a.market,rr=a.target?((a.target-a.price)/(a.price-a.stop)).toFixed(1)+"R":"";
-    const left=Math.max(0,90-Math.round((Date.now()/1000-a.created)/60));
+    const left=Math.max(0,Math.round(((a.expires||a.created+5400)-Date.now()/1000)/60));
     return `<div class="item approval"><div class="row1"><span class="sym">${esc(a.kind)} ${esc(a.symbol)}</span><span class="mk">${m}</span>
       <span class="mono">~${Math.round(a.qty||0)} sh @ ${fmt(a.price,m)} · stop ${fmt(a.stop,m)} · target ${fmt(a.target,m)} ${rr}</span>
       ${a.replace?`<span class="pill plain warn">replaces ${esc(a.replace)}</span>`:""}
-      <span class="spacer"></span><span class="hint">expires in ${left} min</span>
+      <span class="spacer"></span><span class="hint">expires in ${left>=60?Math.floor(left/60)+"h "+(left%60)+"m":left+" min"} (${clock(a.expires||a.created+5400)})</span>
       <button class="ok" data-act="approve" data-id="${esc(a.id)}" data-sym="${esc(a.symbol)}" ${token?"":"disabled"}>✅ Approve</button>
       <button data-act="reject" data-id="${esc(a.id)}" data-sym="${esc(a.symbol)}" ${token?"":"disabled"}>⏭ Skip</button></div>
       <div class="hint" style="margin-top:4px">💡 ${esc(a.thesis)}${a.skeptic?` · 🧐 ${esc(a.skeptic)}`:""}</div></div>`}).join("")

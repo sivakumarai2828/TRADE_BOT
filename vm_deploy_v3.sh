@@ -45,7 +45,9 @@ add() { grep -qE "^$1=" "$V3/.env" || { echo "$1=$2" >> "$V3/.env"; echo "  adde
 add SKEPTIC_ENABLED true
 add SKEPTIC_MODEL ""
 add APPROVAL_MODE telegram
-add APPROVAL_TIMEOUT_MIN 90
+add APPROVAL_TIMEOUT_MIN 390
+# 2026-11: approvals stay open until the market closes (no Telegram needed)
+grep -qE "^APPROVAL_TIMEOUT_MIN=90$" "$V3/.env" && sed -i 's/^APPROVAL_TIMEOUT_MIN=90$/APPROVAL_TIMEOUT_MIN=390/' "$V3/.env" && echo "  APPROVAL_TIMEOUT_MIN 90 -> 390"
 add APPROVAL_MAX_DRIFT_PCT 0.015
 add INDIA_MODE suggest          # India: daily buy suggestions only, no orders
 if ! grep -qE "^DASHBOARD_TOKEN=.+" "$V3/.env"; then

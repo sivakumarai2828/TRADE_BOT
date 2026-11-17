@@ -94,7 +94,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
 
   <section class="td-panel" aria-label="Waiting for you">
     <div class="td-phead"><h2>Waiting for you</h2><span class="td-pill plain warn" id="waitCount">0</span>
-      <span class="td-hint">The bot buys only what you approve, after re-checking the price.</span></div>
+      <span class="td-hint">The bot buys only what you approve, after re-checking the price. Requests stay open until that market closes.</span></div>
     <div class="td-list" id="waiting"><div class="td-empty">Reading the bot's records…</div></div>
   </section>
 
@@ -127,7 +127,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
 <script>
 (() => {
   const SERVER = "Supabase", TOOL = "execute_sql", PROJECT = "ocuknhkchjhwuqnwuuqg";
-  const APPROVAL_MIN = 90;             // the bot's APPROVAL_TIMEOUT_MIN
+  const APPROVAL_MIN = 90;             // fallback for requests made before "expires" was stored
   const KV_KEYS = ["approval_requests","ctl_results","ctl_queue","heartbeat","bot_status","US_suggestions","INDIA_suggestions",
                    "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused"];
   const READ_SQL = "select json_build_object(" +
@@ -299,8 +299,10 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     }
     const ok = el("button", "td-btn primary", "Approve"); ok.type = "button"; ok.onclick = () => { confirming.add(req.id); render(); };
     const skip = el("button", "td-btn", "Skip"); skip.type = "button"; skip.onclick = () => send("reject", req);
-    const left = Math.round(APPROVAL_MIN - (Date.now() / 1000 - req.created) / 60);
-    wrap.append(ok, skip, el("span", "td-hint", left > 0 ? "expires in about " + left + " min" : "about to expire"));
+    const until = req.expires || req.created + APPROVAL_MIN * 60, left = Math.round((until - Date.now() / 1000) / 60);
+    wrap.append(ok, skip, el("span", "td-hint", left > 0
+      ? "expires in " + (left >= 60 ? Math.floor(left / 60) + " h " + (left % 60) + " min" : left + " min") + " (" + clock(until * 1000) + ")"
+      : "about to expire"));
     return wrap;
   }
 

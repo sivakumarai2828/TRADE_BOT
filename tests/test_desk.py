@@ -268,6 +268,7 @@ def test_expired_request_cannot_fill(make_runner, price, journal):
     rid = _submit(r)
     reqs = json.loads(journal.kv_get("approval_requests"))
     reqs[0]["created"] = time.time() - 91 * 60
+    reqs[0]["expires"] = time.time() - 60           # its deadline has passed
     journal.kv_set("approval_requests", json.dumps(reqs))
     msg = r.approvals.decide(rid, approve=True)
     assert r.ledger.positions() == [] and "expired" in msg
@@ -278,6 +279,7 @@ def test_poll_expires_stale(make_runner, price, journal):
     _submit(r)
     reqs = json.loads(journal.kv_get("approval_requests"))
     reqs[0]["created"] = time.time() - 91 * 60
+    reqs[0]["expires"] = time.time() - 60           # its deadline has passed
     journal.kv_set("approval_requests", json.dumps(reqs))
     r.approvals.poll()
     assert r.approvals.pending() == []
@@ -328,3 +330,34 @@ def test_replace_keeps_old_until_approved(make_runner, price, journal):
     rid = r.approvals.pending()[0]["id"]
     assert r.approvals.decide(rid, approve=True).startswith("Filled")
     assert [p["symbol"] for p in r.ledger.positions()] == ["X"]
+
+
+# ── approval window: long, but never past that market's close ─────
+def test_deadline_is_capped_at_the_market_close():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from botv2.approval import deadline
+    ny = ZoneInfo("America/New_York")
+    made = datetime(2026, 11, 18, 10, 1, tzinfo=ny).timestamp()            # US scan time
+    close = datetime(2026, 11, 18, 16, 0, tzinfo=ny).timestamp()
+    assert deadline("US", made, 390 * 60) == close                          # 6h30 would pass 16:00
+    assert deadline("US", made, 90 * 60) == made + 90 * 60                  # shorter timeout wins
+    late = datetime(2026, 11, 18, 18, 0, tzinfo=ny).timestamp()             # after the close
+    assert deadline("US", late, 390 * 60) == late + 390 * 60
+    ist = ZoneInfo("Asia/Kolkata")
+    made_in = datetime(2026, 11, 18, 10, 0, tzinfo=ist).timestamp()
+    assert deadline("INDIA", made_in, 390 * 60) == datetime(2026, 11, 18, 15, 30, tzinfo=ist).timestamp()
+
+
+def test_request_expires_at_its_stored_deadline(journal, monkeypatch):
+    import time as _t
+    from botv2 import approval
+    desk = approval.ApprovalDesk(journal, "", "", timeout_min=390, http=types.SimpleNamespace(
+        post=lambda *a, **k: types.SimpleNamespace(json=lambda: {"result": {"message_id": 1}})))
+    monkeypatch.setattr(approval, "deadline", lambda m, c, t: c + 60)       # pretend close is in 1 min
+    rid = desk.submit({"market": "US", "currency": "USD", "kind": "BUY", "symbol": "X",
+                       "price": 100, "stop": 95, "target": 115, "qty": 1})
+    req = desk.pending()[0]
+    assert req["id"] == rid and req["expires"] == req["created"] + 60
+    monkeypatch.setattr(_t, "time", lambda: req["created"] + 61)
+    assert "expired" in desk.decide(rid, approve=True, source="web")
