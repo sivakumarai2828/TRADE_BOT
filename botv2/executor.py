@@ -348,7 +348,7 @@ class MarketRunner:
                 log.info("%s adjusted: stop=%s target=%s", sym, new_stop, new_target)
 
         elif kind == "WATCH":
-            self._add_watch(act, by_symbol, earnings)
+            self._add_watch(act, by_symbol, earnings, halt)
 
         elif kind == "REPLACE":
             self._replace(act, by_symbol, halt, earnings)
@@ -357,7 +357,8 @@ class MarketRunner:
             self._buy(act, by_symbol, halt, earnings)
 
     # ── WATCH creation ───────────────────────────────────────────
-    def _add_watch(self, act: dict, by_symbol: dict, earnings: dict | None) -> None:
+    def _add_watch(self, act: dict, by_symbol: dict, earnings: dict | None,
+                   halt: str | None = None) -> None:
         sym = str(act.get("symbol", "")).strip()
         entry = act.get("ideal_entry") or act.get("entry")
         stop, target = act.get("stop"), act.get("target")
@@ -379,6 +380,18 @@ class MarketRunner:
         if rr < self.risk.MIN_REWARD_RISK:
             log.warning("WATCH %s ignored — %.2fR at ideal entry < %.1fR",
                         sym, rr, self.risk.MIN_REWARD_RISK)
+            return
+        # A watch waits for a better price. If the price is already at the
+        # level, arming it would only fire on the next pass (seen 2026-11-17:
+        # CB armed at 385 fired 4 s later), so take it as a buy idea now:
+        # same risk rules, Skeptic and approval, recorded as what it is.
+        px = (self._snapshots.get(sym) or {}).get("price") or data.fetch_price(sym)
+        if px and px <= entry * 1.005:
+            log.info("%s WATCH %s level %.2f already reached (price %.2f) — treated as a buy idea",
+                     self.market, sym, entry, px)
+            self._buy(dict(act, action="BUY", thesis=f"[watch level {entry:g} already reached] "
+                                                     f"{act.get('thesis', '')}"),
+                      by_symbol, halt, earnings)
             return
         setup = str(act.get("setup", "")).upper()
         self.journal.add_watch(self.market, sym, setup if setup in SETUPS else None,

@@ -110,8 +110,8 @@ def test_realized_r_negative_on_loss(runner, monkeypatch):
 
 # ══ Phase 3: WATCH ═══════════════════════════════════════════════
 def test_watch_created(runner, monkeypatch):
-    act = {"action": "WATCH", "symbol": "X", "setup": "BREAKOUT",
-           "ideal_entry": 100, "stop": 90, "target": 125, "thesis": "waiting"}
+    act = {"action": "WATCH", "symbol": "X", "setup": "BREAKOUT",                 # price is 100:
+           "ideal_entry": 95, "stop": 85, "target": 125, "thesis": "waiting"}       # level below it
     runner._apply(act, {}, halt=None, earnings={})
     w = runner.journal.active_watches("US")
     assert len(w) == 1 and w[0]["symbol"] == "X" and w[0]["setup"] == "BREAKOUT"
@@ -140,8 +140,8 @@ def test_watch_rejected_when_already_held(runner, monkeypatch):
 
 def test_new_watch_supersedes_old(runner):
     for tgt in (125, 130):
-        runner._apply({"action": "WATCH", "symbol": "X", "ideal_entry": 100,
-                       "stop": 90, "target": tgt, "thesis": "t"},
+        runner._apply({"action": "WATCH", "symbol": "X", "ideal_entry": 95,
+                       "stop": 85, "target": tgt, "thesis": "t"},
                       {}, halt=None, earnings={})
     active = runner.journal.active_watches("US")
     assert len(active) == 1 and active[0]["target"] == 130

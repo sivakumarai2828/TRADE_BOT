@@ -114,6 +114,8 @@ def main() -> None:
         level=getattr(logging, cfg.log_level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    from botv2 import logsafe
+    logsafe.install()                 # no tokens or API keys in the logs
     log = logging.getLogger("botv2.main")
     errs = check_broker_config(cfg)
     if errs:

@@ -61,7 +61,8 @@ A great stock is not automatically a great trade. WATCH records an ideal entry;
 code arms the trigger, revalidates everything when price arrives, and buys only
 if it still passes. A WATCH expires after 10 trading sessions. Requirements:
 stop < ideal_entry < target, and at least 2R measured AT THE IDEAL ENTRY.
-Prefer WATCH over a marginal BUY at a stretched price.
+Prefer WATCH over a marginal BUY at a stretched price. A WATCH ideal_entry must be BELOW \
+today's price (the level you are waiting for); if you would buy at today's price, use BUY.
 
 REPLACE - use when the book is full and a new opportunity is clearly better than
 a specific holding. Name both symbols. Code refuses the swap if the old position

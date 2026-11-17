@@ -22,7 +22,7 @@ US_UNIVERSE = [
     "ACN", "ABNB", "BKNG", "SPOT", "APP",
     # Financials
     "JPM", "GS", "V", "MA", "BAC", "MS", "WFC", "C", "SCHW", "BLK",
-    "SPGI", "AXP", "PYPL", "COF", "PNC", "USB", "CB", "PGR", "MMC",
+    "SPGI", "AXP", "PYPL", "COF", "PNC", "USB", "CB", "PGR", "MRSH",
     "ICE", "CME", "AON",
     # Healthcare
     "LLY", "UNH", "JNJ", "ABBV", "MRK", "PFE", "TMO", "DHR", "AMGN",
@@ -59,7 +59,7 @@ INDIA_UNIVERSE = [
     "IDFCFIRSTB.NS", "CHOLAFIN.NS", "SBILIFE.NS", "HDFCLIFE.NS",
     "ICICIGI.NS", "ICICIPRULI.NS", "MUTHOOTFIN.NS", "PFC.NS", "RECLTD.NS",
     # IT / tech
-    "LTIM.NS", "PERSISTENT.NS", "MPHASIS.NS", "COFORGE.NS", "TATAELXSI.NS",
+    "LTM.NS", "PERSISTENT.NS", "MPHASIS.NS", "COFORGE.NS", "TATAELXSI.NS",
     # Auto / industrials
     "TVSMOTOR.NS", "BAJAJ-AUTO.NS", "ASHOKLEY.NS", "MOTHERSON.NS",
     "BOSCHLTD.NS", "SIEMENS.NS", "ABB.NS", "BEL.NS", "HAL.NS", "INDIGO.NS",
@@ -69,7 +69,7 @@ INDIA_UNIVERSE = [
     # Consumer
     "BRITANNIA.NS", "DABUR.NS", "GODREJCP.NS", "MARICO.NS", "COLPAL.NS",
     "PAGEIND.NS", "TRENT.NS", "DMART.NS", "JUBLFOOD.NS", "HAVELLS.NS",
-    "PIDILITE.NS", "BERGEPAINT.NS",
+    "PIDILITIND.NS", "BERGEPAINT.NS",
     # Materials / energy / power / infra
     "SHREECEM.NS", "AMBUJACEM.NS", "VEDL.NS", "JINDALSTEL.NS", "HINDZINC.NS",
     "NMDC.NS", "SAIL.NS", "GAIL.NS", "IOC.NS", "TATAPOWER.NS",
@@ -106,12 +106,12 @@ _tag("Technology", [
     "SHOP", "NFLX", "UBER", "ORCL", "ADBE", "INTU", "PANW", "CRWD", "SNOW",
     "DDOG", "NET", "MDB", "TEAM", "WDAY", "FTNT", "ACN", "ABNB", "BKNG",
     "SPOT", "APP",
-    "LTIM.NS", "PERSISTENT.NS", "MPHASIS.NS", "COFORGE.NS", "TATAELXSI.NS",
+    "LTM.NS", "PERSISTENT.NS", "MPHASIS.NS", "COFORGE.NS", "TATAELXSI.NS",
     "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS",
 ])
 _tag("Financials", [
     "JPM", "GS", "V", "MA", "BAC", "MS", "WFC", "C", "SCHW", "BLK", "SPGI",
-    "AXP", "PYPL", "COF", "PNC", "USB", "CB", "PGR", "MMC", "ICE", "CME", "AON",
+    "AXP", "PYPL", "COF", "PNC", "USB", "CB", "PGR", "MRSH", "ICE", "CME", "AON",
     "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS",
     "BAJFINANCE.NS", "BAJAJFINSV.NS", "BANKBARODA.NS", "PNB.NS", "CANBK.NS",
     "INDUSINDBK.NS", "FEDERALBNK.NS", "IDFCFIRSTB.NS", "CHOLAFIN.NS",
@@ -137,7 +137,7 @@ _tag("Energy & Materials", [
     "RELIANCE.NS", "ONGC.NS", "BPCL.NS", "IOC.NS", "GAIL.NS", "JSWSTEEL.NS",
     "TATASTEEL.NS", "HINDALCO.NS", "VEDL.NS", "JINDALSTEL.NS", "HINDZINC.NS",
     "NMDC.NS", "SAIL.NS", "ULTRACEMCO.NS", "SHREECEM.NS", "AMBUJACEM.NS",
-    "GRASIM.NS", "SRF.NS", "UPL.NS", "ASIANPAINT.NS", "PIDILITE.NS",
+    "GRASIM.NS", "SRF.NS", "UPL.NS", "ASIANPAINT.NS", "PIDILITIND.NS",
     "BERGEPAINT.NS",
 ])
 _tag("Consumer", [

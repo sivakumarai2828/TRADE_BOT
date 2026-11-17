@@ -31,7 +31,7 @@ def _send(msg: str) -> None:
             timeout=8,
         )
     except Exception as exc:
-        log.warning("telegram failed: %s", exc)
+        log.warning("telegram failed: %s", type(exc).__name__)
 
 
 def _cur(currency: str) -> str:

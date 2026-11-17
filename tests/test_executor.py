@@ -367,3 +367,46 @@ def test_digest_mentions_stopped_ideas(india, monkeypatch):
     india.run_cycle()
     msg = [m for m in india.sent if "No buy suggestions" in m][0]
     assert "1 idea the AI proposed today was stopped" in msg
+
+
+# ── 2026-11-17 live-bot review fixes ─────────────────────────────
+def test_watch_at_or_above_price_is_taken_as_a_buy_idea(runner, monkeypatch):
+    """CB was armed at 385 with the price already there and fired 4 s later."""
+    _price(monkeypatch, 100.0)
+    runner._apply({"action": "WATCH", "symbol": "X", "setup": "PULLBACK", "ideal_entry": 100.2,
+                   "stop": 95, "target": 115}, {}, None, {})
+    assert runner.journal.active_watches("US") == []          # not armed
+    pos = runner.ledger.positions()
+    assert len(pos) == 1 and "watch level 100.2 already reached" in pos[0]["thesis"]
+
+
+def test_watch_below_price_is_armed(runner, monkeypatch):
+    _price(monkeypatch, 100.0)
+    runner._apply({"action": "WATCH", "symbol": "X", "setup": "PULLBACK", "ideal_entry": 97,
+                   "stop": 93, "target": 110}, {}, None, {})
+    assert [w["symbol"] for w in runner.journal.active_watches("US")] == ["X"]
+    assert runner.ledger.positions() == []
+
+
+def test_logs_never_show_tokens_or_keys(caplog):
+    import logging
+    from botv2 import logsafe
+    log = logging.getLogger("t.redact")
+    caplog.handler.addFilter(logsafe.RedactSecrets())
+    with caplog.at_level(logging.WARNING):
+        log.warning("telegram getUpdates failed: %s",
+                    "Max retries exceeded with url: /bot1234567890:AAHogbkQL5EVP-MFGmgdH9MFm5X_L04teF8/getUpdates")
+        try:
+            raise RuntimeError("bad key sk-or-v1-abcdefabcdefabcdefabcdefabcdef")
+        except RuntimeError:
+            log.exception("AI call failed")
+    text = caplog.text
+    assert "AAHogbkQL5EVP" not in text and "abcdefabcdefabcdef" not in text
+    assert "<telegram-token>" in text and "<openrouter-key>" in text
+
+
+def test_renamed_tickers_are_in_the_lists():
+    from botv2.universe import INDIA_UNIVERSE, US_UNIVERSE
+    for gone in ("LTIM.NS", "PIDILITE.NS", "MMC"):
+        assert gone not in INDIA_UNIVERSE + US_UNIVERSE
+    assert "LTM.NS" in INDIA_UNIVERSE and "PIDILITIND.NS" in INDIA_UNIVERSE and "MRSH" in US_UNIVERSE

@@ -157,7 +157,7 @@ class ApprovalDesk:
                               timeout=10)
             updates = r.json().get("result", [])
         except Exception as exc:
-            log.warning("telegram getUpdates failed: %s", exc)
+            log.warning("telegram getUpdates failed: %s", type(exc).__name__)
             return
         for u in updates:
             offset = max(offset, u["update_id"] + 1)
@@ -233,7 +233,7 @@ class ApprovalDesk:
             r = self.http.post(self._url("sendMessage"), json=payload, timeout=8)
             return r.json().get("result", {}).get("message_id")
         except Exception as exc:
-            log.warning("telegram send failed: %s", exc)
+            log.warning("telegram send failed: %s", type(exc).__name__)
             return None
 
     def _edit(self, message_id: int, text: str) -> None:
@@ -242,7 +242,7 @@ class ApprovalDesk:
                            json={"chat_id": self.chat_id, "message_id": message_id,
                                  "text": text, "parse_mode": "HTML"}, timeout=8)
         except Exception as exc:
-            log.warning("telegram edit failed: %s", exc)
+            log.warning("telegram edit failed: %s", type(exc).__name__)
 
     def _answer(self, callback_id: str, text: str) -> None:
         try:
@@ -250,4 +250,4 @@ class ApprovalDesk:
                            json={"callback_query_id": callback_id, "text": text[:190]},
                            timeout=8)
         except Exception as exc:
-            log.warning("telegram answer failed: %s", exc)
+            log.warning("telegram answer failed: %s", type(exc).__name__)
