@@ -36,6 +36,9 @@
   .sugday { font-size:.72rem; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; margin:14px 0 6px; }
   .why { color:var(--dim); font-size:.78rem; min-width:260px; max-width:420px; }
   .note { color:var(--dim); font-size:.76rem; margin-top:10px; }
+  details.stopped { margin-top:12px; border-top:1px solid var(--border); padding-top:10px; }
+  details.stopped summary { cursor:pointer; color:var(--amber); font-size:.8rem; font-weight:600; }
+  details.stopped table { margin-top:8px; }
   .tablewrap { overflow-x:auto; }
   .tablewrap th, .tablewrap td { white-space:nowrap; }
   .tablewrap td.why { white-space:normal; }
@@ -240,19 +243,36 @@ function sugOutcome(x){
   const note = a.note && a.status!=="rejected" && a.status!=="pending" ? `<div class="note" style="margin-top:2px">${esc(a.note)}</div>` : "";
   return `<span class="prio ${st[1]}">${esc(st[0])}</span>${note}`;
 }
+// Ideas the AI proposed but a check stopped, with the reason.
+const STOPPED_BY = {skeptic:"Second AI check", risk:"Risk rules"};
+function stoppedTable(rows,c){
+  return `<div class="tablewrap"><table><tr><th>AI confidence</th><th>Symbol</th><th>Price</th><th>Stop</th><th>Target</th><th>Reward : risk</th><th>Stopped by</th><th>Reason</th><th>AI's idea</th></tr>`+
+    rows.map(x=>`<tr><td><span class="prio ${esc(x.priority)}">${esc(x.priority)}</span></td>
+      <td><b>${esc(x.symbol)}</b></td><td>${fmt(x.price,c)}</td><td>${fmt(x.stop,c)}</td><td>${fmt(x.target,c)}</td>
+      <td>${x.r==null?"—":x.r+" : 1"}</td>
+      <td>${esc(STOPPED_BY[x.blocked_by]||"A check")}${x.ruling?` <span class="note">(${esc(x.ruling)})</span>`:""}</td>
+      <td class="why">${esc(x.reason)}</td><td class="why">${esc(x.thesis)}</td></tr>`).join("")+`</table></div>`;
+}
+function dayBlock(rows,c,traded,open){
+  const ok = rows.filter(x=>x.status!=="blocked"), stopped = rows.filter(x=>x.status==="blocked");
+  let h = ok.length ? sugTable(ok,c,traded) : "";
+  if(stopped.length) h += `<details class="stopped"${open?" open":""}><summary>Stopped by the checks (${stopped.length}): proposed by the AI, not suggested</summary>${stoppedTable(stopped,c)}</details>`;
+  return h;
+}
 function suggestionsHtml(d,c,all){
-  const s = d.suggestions||[], today = s.filter(x=>x.day===d.suggestions_today), traded = !d.suggest_only;
+  const s = d.suggestions||[], todayAll = s.filter(x=>x.day===d.suggestions_today), traded = !d.suggest_only;
+  const today = todayAll.filter(x=>x.status!=="blocked"), stoppedN = todayAll.length - today.length;
   const when = MARKET==="US" ? "10:00 New York time" : "10:00 India time";
   let h = `<div class="panel" style="margin-bottom:18px"><h3>Today's buy suggestions (${today.length})</h3>`;
-  h += today.length ? sugTable(today,c,traded)
-    : d.scanned_today
-      ? `<div class="empty">Today's scan ran at ${new Date(d.market_view_ts*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} your time. No buy passed the risk rules and the second AI check, so there is nothing to suggest today. Any stocks the AI is watching are listed on the control page.</div>`
+  if(!today.length) h += d.scanned_today || stoppedN
+      ? `<div class="empty">Today's scan ran${d.market_view_ts?" at "+new Date(d.market_view_ts*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+" your time":""}. No buy passed the risk rules and the second AI check, so there is nothing to suggest today.${stoppedN?" The ideas the checks stopped are listed below with the reason.":""}</div>`
       : `<div class="empty">No suggestions yet today. The list is made once a day at ${when}, on trading days.</div>`;
+  h += dayBlock(todayAll,c,traded,!today.length);
   h += traded
-    ? `<div class="note">These are the ideas that passed the risk rules and the second AI check today, best first. The bot still trades this market: each one is sent to Telegram and bought only if you approve it. "Size" is the share of capital that keeps the loss at the stop within the risk limit.</div>`
-    : `<div class="note">Suggestions only: the bot places no orders in this market. "Size" is the share of your own capital that keeps the loss at the stop within the risk limit. Prices are from the time of the scan, so check the live price before buying.</div>`;
+    ? `<div class="note">Suggestions are the ideas that passed the risk rules and the second AI check today, best first. The bot still trades this market: each one is sent to Telegram and bought only if you approve it. "Size" is the share of capital that keeps the loss at the stop within the risk limit. Stopped ideas are never bought.</div>`
+    : `<div class="note">Suggestions only: the bot places no orders in this market. "Size" is the share of your own capital that keeps the loss at the stop within the risk limit. Prices are from the time of the scan, so check the live price before buying. Stopped ideas did not pass the checks; they are shown so you can see what was considered.</div>`;
   const days = [...new Set(s.filter(x=>x.day!==d.suggestions_today).map(x=>x.day))].slice(0, all?6:1);
-  for(const day of days) h += `<div class="sugday">${esc(day)}</div>` + sugTable(s.filter(x=>x.day===day),c,traded);
+  for(const day of days) h += `<div class="sugday">${esc(day)}</div>` + dayBlock(s.filter(x=>x.day===day),c,traded,false);
   return h + `</div>`;
 }
 

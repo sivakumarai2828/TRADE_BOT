@@ -103,6 +103,7 @@ td.num,th.num{text-align:right}
 .banner{border-radius:8px;padding:10px 12px;font-size:13px;display:none}
 .banner.show{display:block}
 .banner.modebar{margin-bottom:10px;border:1px solid var(--line)}
+tr.stopped td{opacity:.8}
 .banner.bad{background:var(--bad-soft);color:var(--ink)} .banner.warn{background:var(--warn-soft)}
 .toast{position:fixed;right:16px;bottom:16px;z-index:20;display:grid;gap:8px;max-width:360px}
 .toast div{background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
@@ -319,16 +320,23 @@ function sugOutcome(x){   // what happened to an idea, using its approval reques
 }
 function renderSuggestions(){
   const groups=MK.map(m=>{const d=summary?.[m];return [m,(d?.suggestions||[]).filter(x=>x.day===d.suggestions_today)]}).filter(g=>g[1].length);
-  $("sugCount").textContent=groups.reduce((n,g)=>n+g[1].length,0);
-  const only=MK.filter(m=>summary?.[m]?.suggest_only).map(m=>NAMES[m].replace(" Swing Bot",""));
-  $("sugHint").textContent="Ideas that passed the risk rules and the second AI check, best first in each market."+(only.length?" "+only.join(" and ")+": suggestions only, the bot places no orders.":"");
-  // one block per market, each ranked from 1, so the two lists are never read as one ranking
-  $("suggestions").innerHTML=groups.length?groups.map(([m,rows])=>`<tr><td colspan="10" class="hint"><b>${esc(NAMES[m].replace(" Swing Bot",""))}</b> · ${rows.length} today</td></tr>`+rows.map(x=>`<tr><td>${x.rank}</td>
+  $("sugCount").textContent=groups.reduce((n,g)=>n+g[1].filter(x=>x.status!=="blocked").length,0);
+  const STOP={skeptic:"Stopped: second AI check",risk:"Stopped: risk rules"};
+  const row=(x,m)=>x.status==="blocked"
+    ?`<tr class="stopped"><td>–</td><td><span class="pill idle">${esc(x.priority)}</span></td><td><span class="sym">${esc(x.symbol)}</span></td>
+      <td><span class="pill bad">${esc(STOP[x.blocked_by]||"Stopped")}</span></td><td class="num">${fmt(x.price,m)}</td><td class="num">${fmt(x.stop,m)}</td>
+      <td class="num">${fmt(x.target,m)}</td><td class="num">${x.r==null?"–":esc(x.r)+" : 1"}</td><td class="num">–</td><td>${esc(x.reason)}</td></tr>`
+    :`<tr><td>${x.rank}</td>
     <td><span class="pill ${x.priority==="HIGH"?"good":x.priority==="MEDIUM"?"warn":"idle"}">${esc(x.priority)}</span></td>
     <td><span class="sym">${esc(x.symbol)}</span></td><td>${sugOutcome(x)}</td>
     <td class="num">${fmt(x.price,m)}</td><td class="num">${fmt(x.stop,m)}</td>
     <td class="num">${fmt(x.target,m)}</td><td class="num">${x.r==null?"–":esc(x.r)+" : 1"}</td>
-    <td class="num">up to ${esc(x.size_pct)}%</td><td>${esc(x.thesis)}</td></tr>`).join("")).join("")
+    <td class="num">up to ${esc(x.size_pct)}%</td><td>${esc(x.thesis)}</td></tr>`;
+  const only=MK.filter(m=>summary?.[m]?.suggest_only).map(m=>NAMES[m].replace(" Swing Bot",""));
+  $("sugHint").textContent="Ideas that passed the risk rules and the second AI check, best first in each market."+(only.length?" "+only.join(" and ")+": suggestions only, the bot places no orders.":"");
+  // one block per market, each ranked from 1, so the two lists are never read as one ranking
+  $("suggestions").innerHTML=groups.length?groups.map(([m,rows])=>{const ok=rows.filter(x=>x.status!=="blocked").length;
+    return `<tr><td colspan="10" class="hint"><b>${esc(NAMES[m].replace(" Swing Bot",""))}</b> · ${ok} suggested${rows.length-ok?` · ${rows.length-ok} stopped by the checks`:""}</td></tr>`+rows.map(x=>row(x,m)).join("")}).join("")
     :`<tr><td colspan="10" class="hint">${MK.map(m=>{const d=summary?.[m];return d?.scanned_today
         ?`${esc(NAMES[m].replace(" Swing Bot",""))}: today's scan ran at ${clock(d.market_view_ts)} and no buy passed the checks.`
         :`${esc(NAMES[m].replace(" Swing Bot",""))}: not scanned yet today (10:00 local time on trading days).`}).join(" ")}</td></tr>`;

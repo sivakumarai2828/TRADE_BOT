@@ -57,16 +57,21 @@ def priority(confidence, r: float | None) -> tuple[str, float]:
 
 
 def record(journal, market: str, currency: str, proposal: dict, caps,
-           status: str = "suggest") -> dict | None:
+           status: str = "suggest", **extra) -> dict | None:
     """Store one suggestion. Returns it, or None if this symbol was already
     suggested today (a re-run cycle or a watch trigger must not repeat it).
 
     status says what the bot does with it: "suggest" (nothing: suggest-only
-    market), "approval" (sent to Telegram, bought only if approved) or
-    "bought" (approvals are off, the bot filled it)."""
+    market), "approval" (sent to Telegram, bought only if approved),
+    "bought" (approvals are off, the bot filled it) or "blocked" (the AI
+    proposed it but a check stopped it; see record_blocked). A real
+    suggestion replaces a blocked one for the same symbol and day; a blocked
+    one never replaces anything."""
     items, day, sym = load(journal, market), today(market), proposal["symbol"]
-    if any(s["day"] == day and s["symbol"] == sym for s in items):
+    same = [s for s in items if s["day"] == day and s["symbol"] == sym]
+    if same and (status == "blocked" or any(s.get("status") != "blocked" for s in same)):
         return None
+    items = [s for s in items if not (s["day"] == day and s["symbol"] == sym)]
     price, stop = float(proposal["price"]), float(proposal["stop"])
     target = float(proposal["target"]) if proposal.get("target") else None
     r = round((target - price) / (price - stop), 2) if target and price > stop else None
@@ -86,10 +91,20 @@ def record(journal, market: str, currency: str, proposal: dict, caps,
         "risk_pct": round(100 * size_pct * stop_dist, 2),
         "thesis": str(proposal.get("thesis", ""))[:400],
         "skeptic": str(proposal.get("skeptic", ""))[:300],
+        **extra,
     }
     items.append(s)
     journal.kv_set(_key(market), json.dumps(items[-KEEP:]))
     return s
+
+
+def record_blocked(journal, market: str, currency: str, proposal: dict, caps,
+                   by: str, reason: str, ruling: str = "") -> dict | None:
+    """Keep an idea the AI proposed but a check stopped, with the reason, so
+    the pages can show what was considered. by = "skeptic" (the second AI
+    check) or "risk" (the code's risk rules). Never sent as a suggestion."""
+    return record(journal, market, currency, proposal, caps, status="blocked",
+                  blocked_by=by, reason=str(reason)[:400], ruling=ruling)
 
 
 def ranked(items: list[dict]) -> list[dict]:
@@ -98,14 +113,22 @@ def ranked(items: list[dict]) -> list[dict]:
 
 def recent(journal, market: str, days: int = 7) -> list[dict]:
     """Suggestions from the last `days` suggestion-days, newest day first,
-    best first inside each day, each with its rank for that day."""
+    best first inside each day, each with its rank for that day. Ideas a
+    check stopped follow their day's suggestions, unranked (rank None)."""
     items = load(journal, market)
     keep = sorted({s["day"] for s in items}, reverse=True)[:days]
     out = []
     for day in keep:
-        for n, s in enumerate(ranked([x for x in items if x["day"] == day]), 1):
+        rows = [x for x in items if x["day"] == day]
+        for n, s in enumerate(ranked([x for x in rows if x.get("status") != "blocked"]), 1):
             out.append(dict(s, rank=n))
+        out += [dict(s, rank=None) for s in ranked([x for x in rows if x.get("status") == "blocked"])]
     return out
+
+
+def blocked_today(journal, market: str) -> int:
+    d = today(market)
+    return sum(1 for s in load(journal, market) if s["day"] == d and s.get("status") == "blocked")
 
 
 def attach_approvals(items: list[dict], requests: list[dict], market: str) -> list[dict]:
@@ -141,17 +164,20 @@ def _line(n: int | None, s: dict) -> str:
             f"💡 {notify._esc(s['thesis'][:220])}")
 
 
-def send_digest(market: str, items: list[dict]) -> None:
+def send_digest(market: str, items: list[dict], blocked: int = 0) -> None:
     """One message per daily cycle, best first."""
     day = datetime.now(ZoneInfo(TZ.get(market, "UTC"))).strftime("%-d %b")
+    stopped = (f"\n{blocked} idea{'s' if blocked != 1 else ''} the AI proposed today "
+               f"{'were' if blocked != 1 else 'was'} stopped by the checks; the dashboard's "
+               "Suggestions tab shows each one with the reason.") if blocked else ""
     if not items:
         notify.alert(f"📋 <b>[{market}] No buy suggestions for {day}.</b>\n"
-                     "Nothing passed the risk rules and the Skeptic today.")
+                     f"Nothing passed the risk rules and the Skeptic today.{stopped}")
         return
     body = "\n\n".join(_line(n, s) for n, s in enumerate(ranked(items), 1))
     notify.alert(f"📋 <b>[{market}] Buy suggestions for {day} ({len(items)})</b>\n\n{body}\n\n"
                  "Suggestions only: the bot places no orders in this market. "
-                 "Prices are from the time of the scan; check the live price before buying.")
+                 f"Prices are from the time of the scan; check the live price before buying.{stopped}")
 
 
 def send_one(market: str, s: dict) -> None:

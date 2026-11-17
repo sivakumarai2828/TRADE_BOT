@@ -315,7 +315,8 @@ class MarketRunner:
                 except Exception as exc:
                     log.exception("action failed %s: %s", act, exc)
             if self.suggest_only:
-                suggest.send_digest(self.market, self._cycle_suggestions)
+                suggest.send_digest(self.market, self._cycle_suggestions,
+                                    blocked=suggest.blocked_today(self.journal, self.market))
         finally:
             self._cycle_suggestions = None
         log.info("=== %s decision cycle done ===", self.market)
@@ -469,6 +470,9 @@ class MarketRunner:
         days = (earnings or {}).get(sym)
         if days is not None and days <= self.EARNINGS_BLOCK_DAYS:
             log.warning("BUY %s rejected — earnings in %d day(s)", sym, days)
+            p = self._proposal_from(act, sym, (self._snapshots.get(sym) or {}).get("price"))
+            if p:
+                self._record_blocked(p, "risk", f"earnings report in {days} day(s)")
             return
         price = data.fetch_price(sym)
         if not price:
@@ -480,6 +484,9 @@ class MarketRunner:
         )
         if not verdict.ok:
             log.warning("BUY %s rejected by risk: %s", sym, verdict.reason)
+            p = self._proposal_from(act, sym, price)
+            if p:
+                self._record_blocked(p, "risk", verdict.reason.split(": ", 1)[-1])
             return
         setup = str(act.get("setup", "")).upper()
         if gated:
@@ -524,6 +531,9 @@ class MarketRunner:
             if not v.approved:
                 log.warning("%s %s %s blocked by skeptic: %s — %s", self.market,
                             proposal["kind"], sym, v.ruling, v.summary)
+                self._record_blocked(proposal, "skeptic",
+                                     v.summary or f"second AI check unavailable: {v.error}",
+                                     ruling=v.ruling)
                 notify.skeptic_blocked(self.market, sym, proposal["kind"],
                                        v.ruling, v.summary, v.reasons)
                 return "blocked"
@@ -542,6 +552,26 @@ class MarketRunner:
             self.approvals.submit(req)
             return "pending"
         return "go"
+
+    def _record_blocked(self, proposal: dict, by: str, reason: str, ruling: str = "") -> None:
+        """Keep a stopped idea for the pages. Never allowed to break a cycle."""
+        try:
+            suggest.record_blocked(self.journal, self.market, self.currency, proposal,
+                                   self.cfg.caps, by, reason, ruling)
+        except Exception:
+            log.exception("could not record stopped idea %s", proposal.get("symbol"))
+
+    def _proposal_from(self, act: dict, sym: str, price: float | None) -> dict | None:
+        try:
+            stop = float(act.get("stop") or 0)
+            target = float(act.get("target") or 0) or None
+        except (TypeError, ValueError):
+            return None
+        if not price or stop <= 0:
+            return None
+        return {"kind": "BUY", "symbol": sym, "price": price, "stop": stop, "target": target,
+                "setup": str(act.get("setup", "")).upper(), "thesis": str(act.get("thesis", "")),
+                "confidence": act.get("confidence")}
 
     def _suggest(self, proposal: dict) -> None:
         """Publish an entry as a suggestion. No ledger, no order."""

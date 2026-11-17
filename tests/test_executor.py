@@ -210,9 +210,14 @@ def test_suggest_only_never_opens_a_position(india, monkeypatch):
 def test_suggestion_still_needs_the_risk_rules(india, monkeypatch):
     from botv2 import suggest
     _price(monkeypatch, 100.0)
+    india._snapshots["Y.NS"] = {"price": 100.0}
     india._apply({"action": "BUY", "symbol": "X.NS", "stop": 95, "target": 104}, {}, None, {})  # 0.8R
     india._apply({"action": "BUY", "symbol": "Y.NS", "stop": 95, "target": 115}, {}, None, {"Y.NS": 1})  # earnings
-    assert suggest.load(india.journal, "INDIA") == []
+    items = suggest.load(india.journal, "INDIA")
+    assert [s["status"] for s in items] == ["blocked", "blocked"]          # kept, never suggested
+    assert items[0]["blocked_by"] == "risk" and "reward/risk" in items[0]["reason"]
+    assert items[1]["reason"] == "earnings report in 1 day(s)"
+    assert [s["rank"] for s in suggest.recent(india.journal, "INDIA")] == [None, None]
 
 
 def test_skeptic_block_means_no_suggestion(india, monkeypatch):
@@ -221,8 +226,11 @@ def test_skeptic_block_means_no_suggestion(india, monkeypatch):
     india.skeptic = types.SimpleNamespace(review=lambda *a: types.SimpleNamespace(
         approved=False, ruling="REJECT", summary="extended", reasons=["rsi 85"]))
     monkeypatch.setattr(india, "_log_skeptic", lambda *a: None)
-    india._apply({"action": "BUY", "symbol": "X.NS", "stop": 95, "target": 115}, {}, None, {})
-    assert suggest.load(india.journal, "INDIA") == []
+    india._apply({"action": "BUY", "symbol": "X.NS", "stop": 95, "target": 115, "confidence": 0.6}, {}, None, {})
+    s = suggest.load(india.journal, "INDIA")
+    assert len(s) == 1 and s[0]["status"] == "blocked" and s[0]["blocked_by"] == "skeptic"
+    assert s[0]["reason"] == "extended" and s[0]["ruling"] == "REJECT" and s[0]["priority"] == "MEDIUM"
+    assert not any("Buy suggestions for" in m for m in india.sent)
 
 
 def test_cycle_sends_one_ranked_list_and_does_not_repeat(india, monkeypatch):
@@ -334,3 +342,28 @@ def test_suggestion_shows_what_happened_to_its_approval(journal):
     out = suggest.attach_approvals(suggest.recent(journal, "US"), reqs, "US")
     assert out[0]["approval"]["id"] == "abc123" and out[0]["approval"]["status"] == "filled"
     assert "approval" not in suggest.attach_approvals([dict(s, symbol="Y")], reqs, "US")[0]
+
+
+
+def test_a_later_pass_replaces_a_stopped_idea_but_not_the_reverse(india, monkeypatch):
+    from botv2 import suggest
+    _price(monkeypatch, 100.0)
+    caps = india.cfg.caps
+    p = {"kind": "BUY", "symbol": "X.NS", "price": 100, "stop": 95, "target": 115}
+    assert suggest.record_blocked(india.journal, "INDIA", "INR", p, caps, "skeptic", "too early")
+    assert suggest.record(india.journal, "INDIA", "INR", p, caps)["status"] == "suggest"
+    assert suggest.record_blocked(india.journal, "INDIA", "INR", p, caps, "risk", "x") is None
+    assert [s["status"] for s in suggest.load(india.journal, "INDIA")] == ["suggest"]
+
+
+def test_digest_mentions_stopped_ideas(india, monkeypatch):
+    from botv2 import data, executor
+    _price(monkeypatch, 100.0)
+    monkeypatch.setattr(data, "fetch_snapshot", lambda s: None)
+    monkeypatch.setattr(data, "fetch_market_context", lambda b: [])
+    monkeypatch.setattr(executor, "universe_for", lambda m: ([], []))
+    india.ai.decide = lambda p: {"market_view": "", "actions": [
+        {"action": "BUY", "symbol": "LOW.NS", "stop": 95, "target": 101}]}   # fails 2R
+    india.run_cycle()
+    msg = [m for m in india.sent if "No buy suggestions" in m][0]
+    assert "1 idea the AI proposed today was stopped" in msg

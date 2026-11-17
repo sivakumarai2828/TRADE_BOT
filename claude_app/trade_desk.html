@@ -75,6 +75,9 @@ table.td-table{width:100%;border-collapse:collapse;font-size:14px}
 .td-table td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
 .td-table .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
 .td-foot{color:var(--muted);font-size:12.5px;line-height:1.5}
+details.td-stopped{border-top:1px solid var(--line);padding-top:10px}
+details.td-stopped summary{cursor:pointer;font-weight:500;font-size:14px;color:var(--warn);margin-bottom:8px}
+details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
 </style>
 
 <div class="td-wrap">
@@ -327,8 +330,9 @@ table.td-table{width:100%;border-collapse:collapse;font-size:14px}
   function renderSuggestions() {
     document.querySelectorAll(".td-tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.m === market)));
     const box = $("suggestions"), m = market, today = dayIn(Date.now(), m);
-    const all = data.sug[m] || [];
-    const rows = all.filter(s => s.day === today).sort((a, b) => (b.score || 0) - (a.score || 0) || (b.r || 0) - (a.r || 0));
+    const all = (data.sug[m] || []).filter(s => s.day === today)
+      .sort((a, b) => (b.score || 0) - (a.score || 0) || (b.r || 0) - (a.r || 0));
+    const rows = all.filter(s => s.status !== "blocked"), stopped = all.filter(s => s.status === "blocked");
     const onlySuggest = rows.length ? rows.every(s => s.status === "suggest") : m === "INDIA";
     $("sugHint").textContent = onlySuggest
       ? NAME[m] + " is suggestions only: the bot places no orders here. Buy with your own broker if you agree. Check the live price first."
@@ -337,8 +341,9 @@ table.td-table{width:100%;border-collapse:collapse;font-size:14px}
     if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
     if (!rows.length) {
       const next = data.status && data.status.markets && data.status.markets[m] && data.status.markets[m].next_cycle;
-      box.append(el("div", "td-empty", "No suggestions yet today for " + NAME[m] + "." + (next ? " Next scan: " + clock(next * 1000) + " your time." : "")));
-      return;
+      box.append(el("div", "td-empty", stopped.length
+        ? "Today's scan ran. No buy passed the checks, so nothing is suggested for " + NAME[m] + " today. The ideas the checks stopped are below."
+        : "No suggestions yet today for " + NAME[m] + "." + (next ? " Next scan: " + clock(next * 1000) + " your time." : "")));
     }
     rows.forEach((s, i) => {
       const it = el("div", "td-item"), row = el("div", "td-row1"), ap = approvalFor(s, m);
@@ -352,6 +357,19 @@ table.td-table{width:100%;border-collapse:collapse;font-size:14px}
       else if (ap && ap.note && ap.status !== "rejected") it.append(el("div", "td-why", "Result: " + ap.note));
       box.append(it);
     });
+    if (stopped.length) {
+      const det = el("details", "td-stopped"); det.open = !rows.length;
+      det.append(el("summary", null, "Stopped by the checks (" + stopped.length + "): proposed by the AI, not suggested"));
+      for (const s of stopped) {
+        const it = el("div", "td-item"), row = el("div", "td-row1");
+        row.append(el("span", "td-pill plain", "AI " + (s.priority || "–")), el("span", "td-sym", s.symbol),
+                   el("span", "td-pill bad", s.blocked_by === "skeptic" ? "Stopped: second AI check" : "Stopped: risk rules"));
+        it.append(row, levels(s, m, false), el("div", "td-why", "Reason: " + (s.reason || "–")));
+        if (s.thesis) it.append(el("div", "td-why", "AI's idea: " + s.thesis));
+        det.append(it);
+      }
+      box.append(det);
+    }
   }
 
   function renderRecent() {
