@@ -93,6 +93,7 @@
   </div>
   <div class="nav" data-market="US" onclick="setMarket('US')">🇺🇸&ensp;US Stocks — Swing</div>
   <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE — Swing</div>
+  <div class="nav" data-market="OPTIONS" onclick="setMarket('OPTIONS')" style="display:none">🎯&ensp;US Options — Paper</div>
   <div class="spacer"></div>
   <div class="sidebox"><div class="l">Broker</div><div class="v" id="side-broker">Paper Ledger</div></div>
   <div class="sidebox mode" id="side-mode-box"><div class="l">Mode</div><div class="v" id="side-mode">Paper trading</div>
@@ -114,6 +115,7 @@
   <div class="mktbar">
     <div class="nav" data-market="US" onclick="setMarket('US')">🇺🇸&ensp;US Stocks</div>
     <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE</div>
+    <div class="nav" data-market="OPTIONS" onclick="setMarket('OPTIONS')" style="display:none">🎯&ensp;Options</div>
   </div>
 
   <div class="subhead">
@@ -121,7 +123,7 @@
     <div class="d" id="mkt-sub">Daily bars · Claude portfolio manager · <span id="updated"></span></div>
   </div>
 
-  <div class="tabs">
+  <div class="tabs" id="tabs">
     <div class="tab on" data-tab="overview" onclick="setTab('overview')">Overview</div>
     <div class="tab" data-tab="suggestions" onclick="setTab('suggestions')">Suggestions</div>
     <div class="tab" data-tab="positions" onclick="setTab('positions')">My Positions</div>
@@ -166,6 +168,10 @@ function setTab(t){ TAB=t; render(); }
 function render(){
   document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("on", n.dataset.market===MARKET));
   document.querySelectorAll(".tab").forEach(n=>n.classList.toggle("on", n.dataset.tab===TAB));
+  // style.display, not the hidden attribute: .nav and .tabs set display in CSS
+  document.querySelectorAll('.nav[data-market="OPTIONS"]').forEach(n=>n.style.display = DATA && DATA.OPTIONS ? "" : "none");
+  document.getElementById("tabs").style.display = MARKET==="OPTIONS" ? "none" : "";
+  if(MARKET==="OPTIONS"){ renderOptions(); return; }
   document.getElementById("mkt-title").textContent = MARKET==="US" ? "US Stocks — Swing Bot" : "India NSE — Swing Bot";
   if(!DATA || !DATA[MARKET]) return;
   const d = DATA[MARKET], c = d.currency, s = d.stats||{};
@@ -293,13 +299,60 @@ function feedHtml(){
     <div class="tm">${ts(f.ts)}</div></div></div>`).join("");
 }
 
+// ── Options (paper) ─────────────────────────────────────────────
+function optName(p){ return `${esc(p.underlying)} ${p.strike} call`; }
+function renderOptions(){
+  document.getElementById("mkt-title").textContent = "US Options — Paper";
+  document.getElementById("side-broker").textContent = "None (paper, real delayed quotes)";
+  document.getElementById("side-mode").textContent = "Paper options";
+  document.getElementById("side-mode-d").textContent = "Virtual fills at real quotes. No broker orders.";
+  const o = DATA && DATA.OPTIONS, box = document.getElementById("content");
+  if(!o){ box.innerHTML = `<div class="panel"><div class="empty">The options desk is switched off on the bot.</div></div>`; return; }
+  if(o.error){ box.innerHTML = `<div class="panel"><div class="empty">${esc(o.error)}</div></div>`; return; }
+  const s = o.stats||{}, pos = o.positions||[], c = "USD";
+  const atRisk = pos.reduce((a,p)=>a+p.entry*p.qty,0);
+  let h = `<div class="cards">
+    <div class="stat"><div class="top"><span class="lbl">Options book value</span><span class="ico">🎯</span></div>
+      <div class="val">${fmt(o.equity,c)}</div><div class="sub">Cash: ${fmt(o.cash,c)} · return <span class="${cls(o.total_return_pct)}">${o.total_return_pct}%</span></div></div>
+    <div class="stat"><div class="top"><span class="lbl">Open contracts</span><span class="ico">📄</span></div>
+      <div class="val">${pos.length}</div><div class="sub">Paid in: ${fmt(atRisk,c)} (most that can be lost)</div></div>
+    <div class="stat"><div class="top"><span class="lbl">Closed trades</span><span class="ico">⚡</span></div>
+      <div class="val">${s.closed_trades||0}</div><div class="sub">Win rate: ${s.win_rate_pct ?? "—"}% · P&L ${fmt(s.total_pnl,c)}</div></div>
+    <div class="stat"><div class="top"><span class="lbl">Rules</span><span class="ico">📏</span></div>
+      <div class="val">$${o.budget_usd}</div><div class="sub">per trade · sell at ${o.target_mult}× or ${o.exit_dte} days before expiry · no stop</div></div>
+  </div>`;
+  h += `<div class="panel" style="margin-bottom:18px"><h3>Open option positions (${pos.length})</h3>`;
+  h += pos.length ? `<div class="tablewrap"><table><tr><th>Contract</th><th>Contracts</th><th>Paid</th><th>Worth now</th><th>P&L</th><th>Sells at</th><th>Expires</th><th>Why</th></tr>`+
+    pos.map(p=>`<tr><td><b>${optName(p)}</b><div class="note" style="margin:0">${esc(p.symbol)}</div></td><td>${p.contracts}</td>
+      <td>${fmt(p.entry*p.qty,c)}<div class="note" style="margin:0">${fmt(p.entry,c)}/sh</div></td>
+      <td>${p.mark_ts?fmt(p.market_value,c):"not marked yet"}</td>
+      <td class="${cls(p.unrealized_pnl)}">${p.mark_ts?`${fmt(p.unrealized_pnl,c)} (${p.unrealized_pnl_pct}%)`:"—"}</td>
+      <td>${fmt(p.target*p.qty,c)}</td><td>${esc(p.expiry)}</td><td class="why">${esc(p.thesis||"")}</td></tr>`).join("")+`</table></div>`
+    : `<div class="empty">No option positions. After the US scan (10:00 New York time), each idea that passes the checks gets a $${o.budget_usd} call if a contract fits the rules.</div>`;
+  h += `<div class="note">Prices are delayed quotes, marked every 20 minutes in the US session. Buys pay the ask and sales get the bid. The most a position can lose is what was paid.</div></div>`;
+  const closed = (TRADES||[]).filter(t=>t.status==="closed");
+  h += `<div class="row2"><div class="panel"><h3>Closed option trades</h3>`;
+  h += closed.length ? `<div class="tablewrap"><table><tr><th>Contract</th><th>Paid</th><th>Sold</th><th>P&L</th><th>Why sold</th><th>Closed</th></tr>`+
+    closed.map(t=>`<tr><td><b>${esc(t.symbol)}</b></td><td>${fmt(t.entry*t.qty,c)}</td><td>${fmt(t.exit_price*t.qty,c)}</td>
+      <td class="${cls(t.pnl)}">${fmt(t.pnl,c)} (${t.pnl_pct==null?"—":t.pnl_pct.toFixed(0)}%)</td>
+      <td>${esc(t.exit_reason==="take_profit"?"Reached the target":t.exit_reason==="expiry_near"?"Close to expiry":t.exit_reason||"")}</td><td>${ts(t.ts_close)}</td></tr>`).join("")+`</table></div>`
+    : `<div class="empty">No closed option trades yet.</div>`;
+  h += `</div><div class="panel"><h3>Ideas with no option</h3>`;
+  const sk = o.skipped||[];
+  h += sk.length ? sk.map(x=>`<div class="feed-item"><b>${esc(x.symbol)}</b> · ${esc(x.why)}<div class="note" style="margin:0">${ts(x.ts)}</div></div>`).join("")
+    : `<div class="empty">None yet. A stock idea gets no option when no contract fits $${o.budget_usd} within the rules.</div>`;
+  h += `</div></div>`;
+  box.innerHTML = h;
+}
+
 async function refresh(){
   const apiPill = document.getElementById("pill-api"), botPill = document.getElementById("pill-bot");
   try{
     DATA = await (await fetch("/api/summary")).json();
     applyMode();
-    TRADES = await (await fetch("/api/trades?market="+MARKET)).json();
-    FEED = await (await fetch("/api/activity?market="+MARKET)).json();
+    const apiMarket = MARKET==="OPTIONS" ? "OPT" : MARKET;
+    TRADES = await (await fetch("/api/trades?market="+apiMarket)).json();
+    FEED = await (await fetch("/api/activity?market="+apiMarket)).json();
     apiPill.className="pill ok"; apiPill.lastElementChild.textContent="API online";
     const alive = DATA._bot_alive;
     botPill.className="pill "+(alive?"ok":"bad");
