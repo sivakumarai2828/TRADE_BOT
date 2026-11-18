@@ -50,6 +50,7 @@ add APPROVAL_TIMEOUT_MIN 390
 grep -qE "^APPROVAL_TIMEOUT_MIN=90$" "$V3/.env" && sed -i 's/^APPROVAL_TIMEOUT_MIN=90$/APPROVAL_TIMEOUT_MIN=390/' "$V3/.env" && echo "  APPROVAL_TIMEOUT_MIN 90 -> 390"
 add APPROVAL_MAX_DRIFT_PCT 0.015
 add INDIA_MODE suggest          # India: daily buy suggestions only, no orders
+add OPTIONS_ENABLED true        # paper options desk: $50 calls, approve each one (user OK 2026-11-17)
 if ! grep -qE "^DASHBOARD_TOKEN=.+" "$V3/.env"; then
     sed -i '/^DASHBOARD_TOKEN=/d' "$V3/.env"
     echo "DASHBOARD_TOKEN=$("$PY" -c 'import secrets;print(secrets.token_urlsafe(24))')" >> "$V3/.env"
