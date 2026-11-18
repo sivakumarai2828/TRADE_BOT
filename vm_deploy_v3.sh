@@ -51,6 +51,7 @@ grep -qE "^APPROVAL_TIMEOUT_MIN=90$" "$V3/.env" && sed -i 's/^APPROVAL_TIMEOUT_M
 add APPROVAL_MAX_DRIFT_PCT 0.015
 add INDIA_MODE suggest          # India: daily buy suggestions only, no orders
 add OPTIONS_ENABLED true        # paper options desk: $50 calls, approve each one (user OK 2026-11-17)
+add INDIA_OPTIONS_ENABLED true  # India option ideas, estimated premiums, never traded (user OK 2026-11-18)
 if ! grep -qE "^DASHBOARD_TOKEN=.+" "$V3/.env"; then
     sed -i '/^DASHBOARD_TOKEN=/d' "$V3/.env"
     echo "DASHBOARD_TOKEN=$("$PY" -c 'import secrets;print(secrets.token_urlsafe(24))')" >> "$V3/.env"
