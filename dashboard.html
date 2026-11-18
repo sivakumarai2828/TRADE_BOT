@@ -301,10 +301,10 @@ function optionIdeasHtml(d){
   const ideas = d.option_ideas||[];
   if(MARKET!=="INDIA") return "";
   let h = `<div class="panel" style="margin-bottom:18px"><h3>Option ideas · estimated premiums (${ideas.length})</h3>`;
-  h += ideas.length ? `<div class="tablewrap"><table><tr><th>Option</th><th>Expiry</th><th>Lot</th><th>Est. premium</th><th>Est. per lot</th><th>Tracked to</th><th>Now (est.)</th><th>Status</th><th>Stock idea</th></tr>`+
+  h += ideas.length ? `<div class="tablewrap"><table><tr><th>Option</th><th>Expiry</th><th>Sell by</th><th>Lot</th><th>Est. premium</th><th>Est. per lot</th><th>Tracked to</th><th>Now (est.)</th><th>Status</th><th>Stock idea</th></tr>`+
     ideas.map(i=>{ const pnl = i.est_now!=null ? Math.round(100*(i.est_now/i.est_premium-1)) : null;
       return `<tr><td><b>${esc(i.root)} ${i.strike} CE</b><div class="note" style="margin:0">stock ₹${i.spot} on ${esc(i.day)}</div></td>
-      <td>${esc(i.expiry)}</td><td>${i.lot}</td><td>₹${i.est_premium}</td><td>₹${Number(i.est_cost_lot).toLocaleString("en-IN")}</td>
+      <td>${esc(i.expiry)}</td><td>${esc(i.exit_by||"—")}</td><td>${i.lot}</td><td>₹${i.est_premium}</td><td>₹${Number(i.est_cost_lot).toLocaleString("en-IN")}</td>
       <td>₹${i.sell_at}</td><td class="${cls(pnl)}">${i.est_now!=null?`₹${i.est_now} (${pnl>=0?"+":""}${pnl}%)`:"—"}</td>
       <td><span class="prio ${i.status==="target"?"HIGH":i.status==="open"?"MEDIUM":""}">${esc(IDEA_STATUS[i.status]||i.status)}</span></td>
       <td class="why">${esc(i.thesis)}</td></tr>`}).join("")+`</table></div>`
@@ -397,6 +397,28 @@ function renderETF(){
 
 // ── Options (paper) ─────────────────────────────────────────────
 function optName(p){ return `${esc(p.underlying)} ${p.strike} call`; }
+// Option suggestions: one per US stock idea, with what happened to it.
+const OPT_OUTCOME = {bought:["Bought (paper)","HIGH"], sent_for_approval:["Waiting for approval","MEDIUM"], already_waiting:["Already waiting","MEDIUM"],
+  not_bought:["Not bought",""], no_contract:["No contract fits",""], no_room:["No room",""], already_held:["Already held",""], stock_stopped:["Stock idea stopped",""]};
+function optSuggestionsHtml(o){
+  const all = o.suggestions||[], today = all.filter(x=>x.day===o.today), c = "USD";
+  const days = [...new Set(all.filter(x=>x.day!==o.today).map(x=>x.day))].slice(0,5);
+  const table = rows => `<div class="tablewrap"><table><tr><th>Stock idea</th><th>Call option</th><th>Expires</th><th>Sell by</th><th>Cost</th><th>Sells at (target)</th><th>What happened</th></tr>`+
+    rows.map(x=>{ const st = OPT_OUTCOME[x.outcome]||[x.outcome,""];
+      return `<tr><td><b>${esc(x.symbol)}</b> <span class="prio ${esc(x.priority||"")}">${esc(x.priority||"")}</span>
+        <div class="note" style="margin:0">${x.stock_status==="passed"?"passed the checks":"stopped by the checks"}</div></td>
+      <td>${x.contract?`${esc(x.symbol)} ${x.strike} call<div class="note" style="margin:0">stock $${x.spot} · strike ${x.otm_pct>=0?"+":""}${x.otm_pct}%</div>`:"—"}</td>
+      <td>${x.expiry?esc(x.expiry):"—"}</td><td>${x.exit_by?esc(x.exit_by):"—"}</td>
+      <td>${x.cost!=null?`${fmt(x.cost,c)}<div class="note" style="margin:0">${x.contracts} × $${x.price}/sh</div>`:"—"}</td>
+      <td>${x.sell_at!=null?`${fmt(x.sell_at*100*x.contracts,c)}<div class="note" style="margin:0">$${x.sell_at}/sh (2×)</div>`:"—"}</td>
+      <td><span class="prio ${st[1]}">${esc(st[0])}</span>${x.note?`<div class="note" style="margin:2px 0 0">${esc(x.note)}</div>`:""}</td></tr>`}).join("")+`</table></div>`;
+  let h = `<div class="panel" style="margin-bottom:18px"><h3>Option suggestions today (${today.length})</h3>`;
+  h += today.length ? table(today)
+    : `<div class="empty">No option suggestions yet today. After the US scan (10:00 New York time) every stock idea gets one: the $${o.budget_usd} call the bot would buy, and whether it bought it.</div>`;
+  for(const d of days) h += `<div class="sugday">${esc(d)}</div>` + table(all.filter(x=>x.day===d));
+  h += `<div class="note">"Sell by" is the latest exit: the bot sells ${o.exit_dte} days before expiry if the target hasn't been reached first. Only ideas that passed the checks are bought; for stopped ideas the table shows the contract the bot would have picked. Paper only.</div>`;
+  return h + `</div>`;
+}
 function renderOptions(){
   document.getElementById("mkt-title").textContent = "US Options — Paper";
   document.getElementById("side-broker").textContent = "None (paper, real delayed quotes)";
@@ -417,13 +439,14 @@ function renderOptions(){
     <div class="stat"><div class="top"><span class="lbl">Rules</span><span class="ico">📏</span></div>
       <div class="val">$${o.budget_usd}</div><div class="sub">per trade · sell at ${o.target_mult}× or ${o.exit_dte} days before expiry · no stop</div></div>
   </div>`;
+  h += optSuggestionsHtml(o);
   h += `<div class="panel" style="margin-bottom:18px"><h3>Open option positions (${pos.length})</h3>`;
-  h += pos.length ? `<div class="tablewrap"><table><tr><th>Contract</th><th>Contracts</th><th>Paid</th><th>Worth now</th><th>P&L</th><th>Sells at</th><th>Expires</th><th>Why</th></tr>`+
+  h += pos.length ? `<div class="tablewrap"><table><tr><th>Contract</th><th>Contracts</th><th>Paid</th><th>Worth now</th><th>P&L</th><th>Sells at</th><th>Expires</th><th>Sell by</th><th>Why</th></tr>`+
     pos.map(p=>`<tr><td><b>${optName(p)}</b><div class="note" style="margin:0">${esc(p.symbol)}</div></td><td>${p.contracts}</td>
       <td>${fmt(p.entry*p.qty,c)}<div class="note" style="margin:0">${fmt(p.entry,c)}/sh</div></td>
       <td>${p.mark_ts?fmt(p.market_value,c):"not marked yet"}</td>
       <td class="${cls(p.unrealized_pnl)}">${p.mark_ts?`${fmt(p.unrealized_pnl,c)} (${p.unrealized_pnl_pct}%)`:"—"}</td>
-      <td>${fmt(p.target*p.qty,c)}</td><td>${esc(p.expiry)}</td><td class="why">${esc(p.thesis||"")}</td></tr>`).join("")+`</table></div>`
+      <td>${fmt(p.target*p.qty,c)}</td><td>${esc(p.expiry)}</td><td>${esc(p.exit_by||"—")}</td><td class="why">${esc(p.thesis||"")}</td></tr>`).join("")+`</table></div>`
     : `<div class="empty">No option positions. After the US scan (10:00 New York time), each idea that passes the checks gets a $${o.budget_usd} call if a contract fits the rules.</div>`;
   h += `<div class="note">Prices are delayed quotes, marked every 20 minutes in the US session. Buys pay the ask and sales get the bid. The most a position can lose is what was paid.</div></div>`;
   const closed = (TRADES||[]).filter(t=>t.status==="closed");

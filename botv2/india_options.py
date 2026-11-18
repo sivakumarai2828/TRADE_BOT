@@ -184,6 +184,7 @@ class IndiaOptionIdeas:
                 "id": f"{day}-{root}", "day": day, "ts": time.time(), "symbol": sym, "root": root,
                 "priority": s.get("priority"), "spot": round(spot, 2), "strike": K,
                 "expiry": exp.isoformat(), "days": days, "lot": lot, "vol": round(sigma, 3),
+                "exit_by": (exp - timedelta(days=self.cfg.opt_exit_dte)).isoformat(),
                 "est_premium": round(prem, 2), "est_cost_lot": round(prem * lot, 0),
                 "sell_at": round(prem * self.cfg.opt_target_mult, 2),
                 "status": "open", "est_now": round(prem, 2), "marked": time.time(),
@@ -201,7 +202,7 @@ class IndiaOptionIdeas:
         for i in made:
             lines.append(f"• <b>{notify._esc(i['root'])} {i['strike']:g} CE</b> exp {i['expiry']} · "
                          f"est ₹{i['est_premium']:,.2f}/sh × lot {i['lot']} ≈ ₹{i['est_cost_lot']:,.0f} · "
-                         f"tracked to ₹{i['sell_at']:,.2f}")
+                         f"tracked to ₹{i['sell_at']:,.2f} or until {i['exit_by']}")
         lines.append("Estimates from the stock price, not live quotes: the real premium can differ a lot. "
                      "Not advice; nothing is traded.")
         notify.alert("\n".join(lines))

@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import notify, suggest
@@ -38,6 +38,7 @@ log = logging.getLogger("botv2.options")
 MARKET = "OPT"
 NY = ZoneInfo("America/New_York")
 K_CASH, K_START, K_MARKS = "OPT_cash", "OPT_start_cash", "OPT_marks"
+K_SUGG = "OPT_suggestions"
 
 
 # ── quotes ───────────────────────────────────────────────────────
@@ -103,6 +104,7 @@ class OptionsDesk:
             px = bid if bid is not None else t["entry"]
             root, exp, strike = occ_parts(t["symbol"])
             out.append({**t, "underlying": root, "expiry": exp.isoformat(), "strike": strike,
+                        "exit_by": (exp - timedelta(days=self.cfg.opt_exit_dte)).isoformat(),
                         "contracts": round(t["qty"] / 100), "last_price": px, "mark_ts": m.get("ts"),
                         "market_value": round(px * t["qty"], 2),
                         "unrealized_pnl": round((px - t["entry"]) * t["qty"], 2),
@@ -160,42 +162,46 @@ class OptionsDesk:
 
     # ── daily proposals ──────────────────────────────────────────
     def propose_from_today(self) -> int:
-        """One call per US idea that passed the checks today: sent for
-        approval when the approval switch is on, bought at once when it is off."""
+        """One call per US idea today. Ideas that passed the checks are sent
+        for approval (switch on) or bought at once (switch off); ideas the
+        checks stopped still get the contract the desk would have picked, so
+        the Options page can show a suggestion for every idea, each with what
+        happened to it. Returns the number sent / bought."""
         ask_first = bool(self.needs_approval()) and self.approvals is not None
         day = suggest.today("US")
-        ideas = [s for s in suggest.load(self.journal, "US")
-                 if s["day"] == day and s.get("status") in ("approval", "bought", "suggest")]
+        todays = [s for s in suggest.load(self.journal, "US") if s["day"] == day]
+        ideas = [s for s in todays if s.get("status") in ("approval", "bought", "suggest")]
+        stopped = [s for s in todays if s.get("status") == "blocked"]
         held = {occ_parts(t["symbol"])[0] for t in self.journal.open_trades(MARKET)}
         room = self.cfg.opt_max_open - len(held)
         sent = 0
         for s in suggest.ranked(ideas):
-            if sent >= room:
-                break
+            base = {"day": day, "symbol": s["symbol"], "priority": s.get("priority"),
+                    "stock_status": "passed", "thesis": str(s.get("thesis", ""))[:200]}
             if s["symbol"] in held:
+                self._record(dict(base, outcome="already_held", note="an option on this stock is already held"))
+                continue
+            if sent >= room:
+                self._record(dict(base, outcome="no_room", note=f"already {self.cfg.opt_max_open} option positions"))
                 continue
             try:
                 q, why = self.pick_contract(s["symbol"])
             except Exception as exc:
                 log.warning("options: chain for %s failed: %s", s["symbol"], type(exc).__name__)
+                self._record(dict(base, outcome="no_contract", note="option prices unavailable right now"))
                 continue
             if not q:
                 log.info("options: no contract for %s — %s", s["symbol"], why)
                 self._note_skip(s["symbol"], why)
+                self._record(dict(base, outcome="no_contract", note=why))
                 continue
-            n = int(self.cfg.opt_budget_usd // (q["ask"] * 100))
-            req = {"kind": "OPTION", "market": "US", "currency": "USD", "symbol": s["symbol"],
-                   "contract": q["contract"], "expiry": q["expiry"], "strike": q["strike"],
-                   "days": q["days"], "otm_pct": q["otm_pct"], "spot": q["spot"],
-                   "price": q["ask"], "bid": q["bid"], "contracts": n,
-                   "cost": round(q["ask"] * 100 * n, 2),
-                   "sell_at": round(q["ask"] * self.cfg.opt_target_mult, 2),
-                   "stop": None, "target": None, "qty": n,
-                   "thesis": f"Call on {s['symbol']}: the stock idea passed the checks today "
-                             f"({s.get('priority', '')} priority). {s.get('thesis', '')}"[:300]}
+            req = self._request(s, q)
+            req["exit_by"] = self.exit_by(req["expiry"])
             if ask_first:
-                if self.approvals.submit(req):
-                    sent += 1
+                ok = bool(self.approvals.submit(req))
+                sent += ok
+                self._record(dict(base, **self._contract_fields(req),
+                                  outcome="sent_for_approval" if ok else "already_waiting", note=""))
                 continue
             ok, note = self.execute_approved(req)            # approval off: same checks, no wait
             log.info("options: auto %s %s — %s", req["contract"], "bought" if ok else "not bought", note)
@@ -204,8 +210,63 @@ class OptionsDesk:
                 held.add(s["symbol"])
             else:
                 self._note_skip(s["symbol"], f"not bought: {note}")
-        log.info("options: %d %s from %d idea(s)", sent, "proposal(s) sent" if ask_first else "bought", len(ideas))
+            self._record(dict(base, **self._contract_fields(req), outcome="bought" if ok else "not_bought", note=note))
+        for s in suggest.ranked(stopped):                     # what the desk would have picked
+            base = {"day": day, "symbol": s["symbol"], "priority": s.get("priority"),
+                    "stock_status": "stopped", "thesis": str(s.get("thesis", ""))[:200],
+                    "note": f"stock idea stopped by the {'second AI check' if s.get('blocked_by') == 'skeptic' else 'risk rules'}"
+                            + (f" ({s.get('ruling')})" if s.get("ruling") else "") + f": {s.get('reason', '')}"[:240]}
+            try:
+                q, why = self.pick_contract(s["symbol"])
+            except Exception:
+                q, why = None, "option prices unavailable right now"
+            if q:
+                self._record(dict(base, **self._contract_fields(self._request(s, q)), outcome="stock_stopped"))
+            else:
+                self._record(dict(base, outcome="stock_stopped", note=base["note"] + f" · no contract: {why}"))
+        log.info("options: %d %s from %d passed idea(s); %d stopped idea(s) recorded",
+                 sent, "proposal(s) sent" if ask_first else "bought", len(ideas), len(stopped))
         return sent
+
+    def _request(self, s: dict, q: dict) -> dict:
+        n = int(self.cfg.opt_budget_usd // (q["ask"] * 100))
+        return {"kind": "OPTION", "market": "US", "currency": "USD", "symbol": s["symbol"],
+                "contract": q["contract"], "expiry": q["expiry"], "strike": q["strike"],
+                "days": q["days"], "otm_pct": q["otm_pct"], "spot": q["spot"],
+                "price": q["ask"], "bid": q["bid"], "contracts": n,
+                "cost": round(q["ask"] * 100 * n, 2),
+                "sell_at": round(q["ask"] * self.cfg.opt_target_mult, 2),
+                "stop": None, "target": None, "qty": n,
+                "thesis": f"Call on {s['symbol']}: the stock idea passed the checks today "
+                          f"({s.get('priority', '')} priority). {s.get('thesis', '')}"[:300]}
+
+    def exit_by(self, expiry: str) -> str:
+        """Latest exit date: OPT_EXIT_DTE days before expiry (sold then if the target wasn't hit)."""
+        return (date.fromisoformat(expiry) - timedelta(days=self.cfg.opt_exit_dte)).isoformat()
+
+    def _contract_fields(self, req: dict) -> dict:
+        out = {k: req[k] for k in ("contract", "expiry", "strike", "days", "otm_pct", "spot",
+                                   "price", "contracts", "cost", "sell_at")}
+        out["exit_by"] = self.exit_by(req["expiry"])
+        return out
+
+    def suggestions(self, days: int = 7) -> list[dict]:
+        try:
+            items = json.loads(self.journal.kv_get(K_SUGG) or "[]")
+        except ValueError:
+            return []
+        keep = sorted({i["day"] for i in items}, reverse=True)[:days]
+        return [i for i in reversed(items) if i["day"] in keep]
+
+    def _record(self, item: dict) -> None:
+        """One suggestion per symbol per day; a later record replaces it."""
+        try:
+            items = json.loads(self.journal.kv_get(K_SUGG) or "[]")
+            items = [i for i in items if not (i["day"] == item["day"] and i["symbol"] == item["symbol"])]
+            items.append(dict(item, ts=time.time()))
+            self.journal.kv_set(K_SUGG, json.dumps(items[-200:]))
+        except Exception:
+            log.exception("options: could not record suggestion for %s", item.get("symbol"))
 
     def _note_skip(self, symbol: str, why: str) -> None:
         try:
@@ -243,7 +304,8 @@ class OptionsDesk:
         notify.alert(f"🟢 <b>[OPTIONS · PAPER] BUY {n} × {req['contract']}</b>\n"
                      f"{req['symbol']} {req['strike']:g} call, expires {req['expiry']}\n"
                      f"Paid ${ask:.2f}/share = ${cost:,.2f} · sells at ${target:.2f} "
-                     f"(${target * 100 * n:,.0f}) or {c.opt_exit_dte} days before expiry")
+                     f"(${target * 100 * n:,.0f}), else on {self.exit_by(req['expiry'])} "
+                     f"({c.opt_exit_dte} days before expiry)")
         return True, f"{n} contract(s) @ ${ask:.2f} = ${cost:,.2f} (paper)"
 
     def on_approval_rejected(self, req: dict, why: str) -> None:
@@ -303,4 +365,5 @@ class OptionsDesk:
                 "total_return_pct": round((eq / start - 1) * 100, 2) if start else 0.0,
                 "positions": pos, "stats": self.journal.stats(MARKET),
                 "budget_usd": self.cfg.opt_budget_usd, "target_mult": self.cfg.opt_target_mult,
-                "exit_dte": self.cfg.opt_exit_dte, "skipped": list(reversed(skipped))}
+                "exit_dte": self.cfg.opt_exit_dte, "skipped": list(reversed(skipped)),
+                "suggestions": self.suggestions(), "today": suggest.today("US")}

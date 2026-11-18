@@ -43,7 +43,7 @@ class FakeChains:
         return ["2026-11-20", EXP, EXP_FAR]
 
     def calls(self, symbol, expiry):
-        return [dict(r) for r in self.rows.get(expiry, [])]
+        return [dict(r) for r in self.rows.get(expiry, []) if r["contractSymbol"][:-15] == symbol]
 
     def spot(self, symbol):
         return self.spot_px
@@ -264,3 +264,36 @@ def test_main_wires_the_options_switch_to_the_approval_flag(journal):
     control.set_gate(journal, "approval", False)
     assert opt.needs_approval() is False
     assert main.build_options(cfg, journal, None).needs_approval() is False   # no desk at all
+
+
+# ── option suggestions for every idea + sell-by date (2026-11-18) ──
+def test_every_idea_gets_an_option_suggestion_with_what_happened(journal, cfg, sent):
+    idea(journal, "INTC")
+    suggest.record_blocked(journal, "US", "USD", {"symbol": "AMD", "price": 55, "stop": 52, "target": 62},
+                           cfg.caps, "skeptic", "too early", ruling="WAIT")
+    ch = FakeChains(55.0).add(65, 0.30, 0.33).add(65, 0.30, 0.33, root="AMD")
+    d, ad = make_desk(journal, cfg, ch)
+    d.needs_approval = lambda: False
+    d.propose_from_today()
+    by = {s["symbol"]: s for s in d.suggestions()}
+    assert by["INTC"]["outcome"] == "bought" and by["INTC"]["stock_status"] == "passed"
+    assert by["AMD"]["outcome"] == "stock_stopped" and by["AMD"]["contract"].startswith("AMD")
+    assert "second AI check (WAIT)" in by["AMD"]["note"]
+    assert len(journal.open_trades(MARKET)) == 1                              # stopped idea never bought
+    assert by["INTC"]["exit_by"] == "2026-12-11"                              # 7 days before Dec 18
+
+
+def test_no_contract_is_recorded_with_the_reason(journal, cfg, sent):
+    idea(journal, "INTC")
+    d, ad = make_desk(journal, cfg, FakeChains(55.0).add(57.5, 3.8, 4.0))
+    d.needs_approval = lambda: False
+    d.propose_from_today()
+    s = d.suggestions()[0]
+    assert s["outcome"] == "no_contract" and s["note"] == "no strike fits the budget"
+
+
+def test_positions_show_their_sell_by_date(journal, cfg, sent):
+    d = _hold(journal, cfg, FakeChains(55.0).add(65, 0.30, 0.33))
+    p = d.positions()[0]
+    assert p["expiry"] == "2026-12-18" and p["exit_by"] == "2026-12-11"
+    assert d.summary()["suggestions"][0]["exit_by"] == "2026-12-11"

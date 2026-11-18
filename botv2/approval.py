@@ -236,7 +236,7 @@ class ApprovalDesk:
                 f"expires {r['expiry']} ({r['days']} days)",
                 f"Stock ${r['spot']:,.2f} · strike {r['otm_pct']:+.1f}% above · ask ${r['price']:.2f}/share",
                 f"Cost ${r['cost']:,.2f} · sells at ${r['sell_at']:.2f}/share "
-                f"(${r['sell_at'] * 100 * r['contracts']:,.0f}) or before expiry · can lose all of it",
+                f"(${r['sell_at'] * 100 * r['contracts']:,.0f}), else sold by {r.get('exit_by') or 'a week before expiry'} · can lose all of it",
                 f"⏱ Expires in {left // 60}h {left % 60}m."])
         rr = ""
         try:

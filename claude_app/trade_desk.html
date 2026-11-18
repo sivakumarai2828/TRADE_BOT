@@ -336,6 +336,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
              level("Stock now", money(r.spot, "US") + " (strike " + (r.otm_pct >= 0 ? "+" : "") + r.otm_pct + "%)"),
              level("Cost", money(r.cost, "US") + " (" + n + " × " + money(r.price, "US") + "×100)"),
              level("Sells at", money(r.sell_at * 100 * n, "US") + " (" + money(r.sell_at, "US") + "/sh)"),
+             level("Sell by", r.exit_by || "a week before expiry"),
              level("Most you can lose", money(r.cost, "US")));
     return g;
   }
@@ -456,6 +457,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       const g = el("div", "td-levels");
       g.append(level("Est. premium", "₹" + i.est_premium), level("Lot", String(i.lot)),
                level("Est. per lot", "₹" + Number(i.est_cost_lot).toLocaleString("en-IN")), level("Tracked to", "₹" + i.sell_at),
+               level("Sell by", i.exit_by || "–"),
                level("Now (est.)", i.est_now != null ? "₹" + i.est_now + " (" + (pnl >= 0 ? "+" : "") + pnl + "%)" : "–"));
       it.append(row, g);
       det.append(it);
@@ -513,7 +515,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     if (!opts.length) box.append(el("div", "td-empty", "No option positions. Proposals appear under Waiting for you after the US scan."));
     else {
       const wrap = el("div", "td-scroll"), t = el("table", "td-table"), head = el("tr");
-      for (const [h, c] of [["Contract", ""], ["Contracts", "num"], ["Paid", "num"], ["Worth now", "num"], ["Sells at", "num"], ["Expires", ""]]) head.append(el("th", c, h));
+      for (const [h, c] of [["Contract", ""], ["Contracts", "num"], ["Paid", "num"], ["Worth now", "num"], ["Sells at", "num"], ["Expires", ""], ["Sell by", ""]]) head.append(el("th", c, h));
       t.append(head);
       for (const p of opts) {
         const k = occ(p.symbol) || {}, n = Math.round(p.qty / 100), mk = o.marks[p.symbol], bid = mk && mk.bid != null ? mk.bid : null;
@@ -523,7 +525,8 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
         sym.append(el("span", "td-sym", (k.root || p.symbol) + " " + (k.strike || "") + " call"));
         const worth = el("td", "num", now != null ? money(now, "US") + " (" + (now >= paid ? "+" : "") + Math.round(100 * (now / paid - 1)) + "%)" : "not marked yet");
         tr.append(sym, el("td", "num", String(n)), el("td", "num", money(paid, "US")), worth,
-                  el("td", "num", money(p.target * p.qty, "US")), el("td", null, k.expiry || "–"));
+                  el("td", "num", money(p.target * p.qty, "US")), el("td", null, k.expiry || "–"),
+                  el("td", null, k.expiry ? new Date(Date.parse(k.expiry) - 7 * 86400000).toISOString().slice(0, 10) : "–"));
         t.append(tr);
       }
       wrap.append(t); box.append(wrap);

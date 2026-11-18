@@ -68,6 +68,7 @@ def test_each_passed_india_idea_gets_one_estimated_call(journal, sent, monkeypat
     assert [i["root"] for i in made] == ["TITAN"]
     i = made[0]
     assert i["strike"] == 3500 and i["expiry"] == "2026-12-29" and i["lot"] == 175 and i["days"] == 41
+    assert i["exit_by"] == "2026-12-22"                                    # 7 days before expiry
     expect = bs_call(3452, 3500, 41 / 365, 0.065, i["vol"])
     assert i["est_premium"] == pytest.approx(round(expect, 2)) and i["est_cost_lot"] == round(expect * 175)
     assert i["sell_at"] == pytest.approx(round(expect * 2, 2))
