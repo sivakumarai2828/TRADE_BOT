@@ -111,7 +111,7 @@ def test_realized_r_negative_on_loss(runner, monkeypatch):
 # ══ Phase 3: WATCH ═══════════════════════════════════════════════
 def test_watch_created(runner, monkeypatch):
     act = {"action": "WATCH", "symbol": "X", "setup": "BREAKOUT",                 # price is 100:
-           "ideal_entry": 95, "stop": 85, "target": 125, "thesis": "waiting"}       # level below it
+           "ideal_entry": 105, "stop": 95, "target": 125, "thesis": "waiting"}      # breakout above it
     runner._apply(act, {}, halt=None, earnings={})
     w = runner.journal.active_watches("US")
     assert len(w) == 1 and w[0]["symbol"] == "X" and w[0]["setup"] == "BREAKOUT"

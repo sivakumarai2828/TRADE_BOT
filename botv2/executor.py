@@ -39,6 +39,19 @@ log = logging.getLogger("botv2.executor")
 SETUPS = ("BREAKOUT", "PULLBACK", "CONTINUATION")
 
 
+def watch_level_reached(setup: str | None, price: float, level: float) -> bool:
+    """Has a WATCH reached its entry level? A BREAKOUT waits for the price to
+    rise to the level (clearing resistance); every other setup waits for it to
+    fall back to the level (support). Before 2026-11-18 every watch fired when
+    the price was at or BELOW the level, so breakout watches bought before the
+    breakout they were waiting for."""
+    if not level:
+        return False
+    if str(setup or "").upper() == "BREAKOUT":
+        return price >= level * 0.995
+    return price <= level * 1.005
+
+
 def classify_regime(regime: list[dict]) -> str:
     """BULL / NEUTRAL / CHOPPY / BEAR from the primary benchmark.
 
@@ -154,8 +167,8 @@ class MarketRunner:
             px = data.fetch_price(sym)
             if px is None:
                 continue
-            if px > (w["ideal_entry"] or 0) * 1.005:      # not at the level yet
-                continue
+            if not watch_level_reached(w.get("setup"), px, w["ideal_entry"] or 0):
+                continue                                  # not at the level yet
             if halt:
                 log.info("watch %s at level but halt active", sym)
                 continue
@@ -386,7 +399,7 @@ class MarketRunner:
         # CB armed at 385 fired 4 s later), so take it as a buy idea now:
         # same risk rules, Skeptic and approval, recorded as what it is.
         px = (self._snapshots.get(sym) or {}).get("price") or data.fetch_price(sym)
-        if px and px <= entry * 1.005:
+        if px and watch_level_reached(act.get("setup"), px, entry):
             log.info("%s WATCH %s level %.2f already reached (price %.2f) — treated as a buy idea",
                      self.market, sym, entry, px)
             self._buy(dict(act, action="BUY", thesis=f"[watch level {entry:g} already reached] "

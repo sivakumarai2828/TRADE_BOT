@@ -410,3 +410,20 @@ def test_renamed_tickers_are_in_the_lists():
     for gone in ("LTIM.NS", "PIDILITE.NS", "MMC"):
         assert gone not in INDIA_UNIVERSE + US_UNIVERSE
     assert "LTM.NS" in INDIA_UNIVERSE and "PIDILITIND.NS" in INDIA_UNIVERSE and "MRSH" in US_UNIVERSE
+
+
+# ── 2026-11-18: watch direction depends on the setup ─────────────
+def test_breakout_watch_waits_for_the_price_to_rise(runner, monkeypatch):
+    """DIS/MAR breakout watches at 122.80 / 433.40 were treated as reached with the price below."""
+    from botv2.executor import watch_level_reached
+    assert watch_level_reached("BREAKOUT", 119.20, 122.80) is False
+    assert watch_level_reached("BREAKOUT", 123.00, 122.80) is True
+    assert watch_level_reached("PULLBACK", 119.20, 122.80) is True
+    assert watch_level_reached("PULLBACK", 125.00, 122.80) is False
+    _price(monkeypatch, 100.0)
+    runner._apply({"action": "WATCH", "symbol": "X", "setup": "BREAKOUT", "ideal_entry": 104,
+                   "stop": 99, "target": 115}, {}, None, {})
+    assert [w["symbol"] for w in runner.journal.active_watches("US")] == ["X"]   # armed, not bought
+    assert runner.ledger.positions() == []
+    runner.check_watch_triggers()
+    assert runner.ledger.positions() == []                                     # still below 104
