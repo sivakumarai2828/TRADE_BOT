@@ -93,6 +93,9 @@ class OptionRules:
     rate: float = 0.04
     half_spread: float = 0.03     # cost per side as a share of the option price
     min_tick: float = 0.05        # ...but at least this per share
+    premium_usd: float | None = None   # fixed dollars per trade instead of premium_pct
+    otm: float = 0.0              # strike this far above the price (0.10 = 10% out of the money)
+    fractional: bool = False      # research only: allow part-contracts so any budget can be tested
 
 
 @dataclass
@@ -159,13 +162,13 @@ def simulate_calls(px, stock_trades: pd.DataFrame, start: str, end: str,
             exp = pick_expiry(day, rules.dte_min, rules.dte_max)
             if S != S or exp is None:
                 continue
-            K = atm_strike(S)
+            K = atm_strike(S * (1 + rules.otm))
             mid = bs_call(S, K, (exp - day).days / 365.0, rules.rate, sigma_at(row.ticker, day))
             ask = mid + _cost(mid, rules)
             equity = cash + sum(p["last"] * 100 * p["n"] for p in held)
-            budget = min(cash, equity * rules.premium_pct)
-            n = int(budget // (ask * 100))          # whole contracts only
-            if n < 1:
+            budget = min(cash, rules.premium_usd if rules.premium_usd else equity * rules.premium_pct)
+            n = budget / (ask * 100) if rules.fractional else int(budget // (ask * 100))   # whole contracts
+            if n <= 0 or (not rules.fractional and n < 1):
                 out.append((row.ticker, day, day, K, exp, ask, ask, 0.0, 0.0, "unaffordable", row.ret))
                 continue
             cost = ask * 100 * n
