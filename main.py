@@ -105,6 +105,9 @@ def build_options(cfg, journal, desk):
     from botv2.options_desk import OptionsDesk
     opt = OptionsDesk(journal, cfg)
     opt.approvals = desk
+    # Same switch as stock buys (dashboard / control flag "approval").
+    opt.needs_approval = lambda: desk is not None and control.gate_on(
+        journal, "approval", cfg.approval_mode == "telegram")
     if desk:
         desk.options = opt
     return opt

@@ -7,6 +7,7 @@ options book (OPT_cash) and the journal.
 from __future__ import annotations
 
 import dataclasses
+import json
 import types
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -232,3 +233,34 @@ def test_desk_is_off_unless_enabled_and_never_in_broker_mode(journal):
     assert main.build_options(dataclasses.replace(base, options_enabled=True, broker_trading=True),
                               journal, None) is None
     assert main.build_options(dataclasses.replace(base, options_enabled=True), journal, None) is not None
+
+
+def test_with_approval_off_the_desk_buys_on_its_own(journal, cfg, sent):
+    idea(journal, "INTC")
+    d, ad = make_desk(journal, cfg, FakeChains(55.0).add(65, 0.30, 0.33))
+    d.needs_approval = lambda: False
+    assert d.propose_from_today() == 1
+    assert ad.pending() == []                                                # nothing waits
+    t = journal.open_trades(MARKET)[0]
+    assert t["qty"] == 100 and t["entry"] == 0.33 and d.cash == pytest.approx(467)
+    assert d.propose_from_today() == 0                                       # already held
+
+
+def test_with_approval_off_the_fill_checks_still_apply(journal, cfg, sent):
+    cfg = dataclasses.replace(cfg, opt_start_cash=20)                        # less than one contract
+    idea(journal, "INTC")
+    d, ad = make_desk(journal, cfg, FakeChains(55.0).add(65, 0.30, 0.33))
+    d.needs_approval = lambda: False
+    assert d.propose_from_today() == 0 and journal.open_trades(MARKET) == []
+    assert "not bought" in json.loads(journal.kv_get("OPT_skipped"))[-1]["why"]
+
+
+def test_main_wires_the_options_switch_to_the_approval_flag(journal):
+    import main
+    from botv2 import control
+    cfg = dataclasses.replace(V2Config(), options_enabled=True, approval_mode="telegram")
+    opt = main.build_options(cfg, journal, types.SimpleNamespace())
+    assert opt.needs_approval() is True
+    control.set_gate(journal, "approval", False)
+    assert opt.needs_approval() is False
+    assert main.build_options(cfg, journal, None).needs_approval() is False   # no desk at all

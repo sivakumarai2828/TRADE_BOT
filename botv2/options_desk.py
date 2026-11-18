@@ -74,6 +74,9 @@ class OptionsDesk:
         self.chains = chains or YahooChains()
         self.now = now or (lambda: datetime.now(NY))
         self.approvals = None                 # ApprovalDesk, set by main
+        # True = each proposal waits for Approve; False = the desk buys on its
+        # own. main.py wires it to the same approval switch as stock buys.
+        self.needs_approval = lambda: self.approvals is not None
         if journal.kv_get(K_CASH) is None:
             journal.kv_set(K_CASH, str(cfg.opt_start_cash))
             journal.kv_set(K_START, str(cfg.opt_start_cash))
@@ -157,10 +160,9 @@ class OptionsDesk:
 
     # ── daily proposals ──────────────────────────────────────────
     def propose_from_today(self) -> int:
-        """One call proposal per US idea that passed the checks today."""
-        if self.approvals is None:
-            log.warning("options: approvals are off — proposals need them, nothing sent")
-            return 0
+        """One call per US idea that passed the checks today: sent for
+        approval when the approval switch is on, bought at once when it is off."""
+        ask_first = bool(self.needs_approval()) and self.approvals is not None
         day = suggest.today("US")
         ideas = [s for s in suggest.load(self.journal, "US")
                  if s["day"] == day and s.get("status") in ("approval", "bought", "suggest")]
@@ -191,9 +193,18 @@ class OptionsDesk:
                    "stop": None, "target": None, "qty": n,
                    "thesis": f"Call on {s['symbol']}: the stock idea passed the checks today "
                              f"({s.get('priority', '')} priority). {s.get('thesis', '')}"[:300]}
-            if self.approvals.submit(req):
+            if ask_first:
+                if self.approvals.submit(req):
+                    sent += 1
+                continue
+            ok, note = self.execute_approved(req)            # approval off: same checks, no wait
+            log.info("options: auto %s %s — %s", req["contract"], "bought" if ok else "not bought", note)
+            if ok:
                 sent += 1
-        log.info("options: %d proposal(s) sent from %d idea(s)", sent, len(ideas))
+                held.add(s["symbol"])
+            else:
+                self._note_skip(s["symbol"], f"not bought: {note}")
+        log.info("options: %d %s from %d idea(s)", sent, "proposal(s) sent" if ask_first else "bought", len(ideas))
         return sent
 
     def _note_skip(self, symbol: str, why: str) -> None:

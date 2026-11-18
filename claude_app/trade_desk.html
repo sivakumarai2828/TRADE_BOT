@@ -93,7 +93,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   <div class="td-notice" id="notice" role="status" hidden></div>
 
   <section class="td-panel" aria-label="Waiting for you">
-    <div class="td-phead"><h2>Waiting for you</h2><span class="td-pill plain warn" id="waitCount">0</span>
+    <div class="td-phead"><h2 id="waitTitle">Waiting for you</h2><span class="td-pill plain warn" id="waitCount">0</span>
       <span class="td-hint">The bot buys only what you approve, after re-checking the price. Requests stay open until that market closes.</span></div>
     <div class="td-list" id="waiting"><div class="td-empty">Reading the bot's records…</div></div>
   </section>
@@ -135,7 +135,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   const SERVER = "Supabase", TOOL = "execute_sql", PROJECT = "ocuknhkchjhwuqnwuuqg";
   const APPROVAL_MIN = 90;             // fallback for requests made before "expires" was stored
   const KV_KEYS = ["approval_requests","ctl_results","ctl_queue","heartbeat","bot_status","US_suggestions","INDIA_suggestions",
-                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks"];
+                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks","ctl_approval"];
   const READ_SQL = "select json_build_object(" +
     "'kv', (select json_object_agg(k, v) from v2_kv where k in (" + KV_KEYS.map(k => "'" + k + "'").join(",") + "))," +
     "'positions', (select coalesce(json_agg(t), '[]'::json) from (select id, market, symbol, qty, entry, stop, target, thesis, ts_open " +
@@ -208,6 +208,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
               INDIA: {killed: kv.INDIA_killed === "1", paused: kv.ctl_INDIA_paused === "1"}},
       positions: Array.isArray(d && d.positions) ? d.positions : [],
       opt: {cash: parseFloat(kv.OPT_cash), start: parseFloat(kv.OPT_start_cash), marks: parse(kv.OPT_marks, {})},
+      approvalOff: kv.ctl_approval === "off",
     };
   }
 
@@ -366,7 +367,8 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     $("waitCount").textContent = pend.length;
     box.replaceChildren();
     if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
-    if (!pend.length) { box.append(el("div", "td-empty", "Nothing is waiting for you. New requests appear here after the bot's daily scan.")); return; }
+    if (data.approvalOff) box.append(el("div", "td-notice", "Approval is off: the bot buys shares and options on its own, on the paper accounts, after the risk rules and the second AI check. Turn it back on with the Telegram approval switch on the control page."));
+    if (!pend.length) { if (!data.approvalOff) box.append(el("div", "td-empty", "Nothing is waiting for you. New requests appear here after the bot's daily scan.")); return; }
     for (const r of pend) {
       const it = el("div", "td-item wait"), row = el("div", "td-row1"), m = r.market in CUR ? r.market : "US";
       row.append(el("span", "td-sym", (r.kind === "REPLACE" ? "Swap into " : "Buy ") + r.symbol + (isOpt(r) ? " " + r.strike + " call" : "")),
@@ -394,7 +396,9 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     const onlySuggest = rows.length ? rows.every(s => s.status === "suggest") : m === "INDIA";
     $("sugHint").textContent = onlySuggest
       ? NAME[m] + " is suggestions only: the bot places no orders here. Buy with your own broker if you agree. Check the live price first."
-      : "Ideas that passed the risk rules and the second AI check today, best first. The bot buys only the ones you approve.";
+      : data.approvalOff
+        ? "Ideas that passed the risk rules and the second AI check today, best first. Approval is off, so the bot bought them on the paper account."
+        : "Ideas that passed the risk rules and the second AI check today, best first. The bot buys only the ones you approve.";
     box.replaceChildren();
     if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
     if (!rows.length) {
