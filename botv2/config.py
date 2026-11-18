@@ -113,6 +113,12 @@ class V2Config:
     # ── Options desk (PAPER ONLY, botv2/options_desk.py) ──
     options_enabled: bool = False
     india_options_enabled: bool = False   # India option ideas, estimated premiums, never traded
+    # ── ETF core (PAPER, botv2/etf_core.py): monthly trend + momentum rotation ──
+    etf_core_enabled: bool = False
+    etf_start_cash: float = 437.0
+    etf_top_n: int = 5
+    etf_hold_spy_pct: float = 0.0         # 0.5 = the 50/50 blend with holding the S&P 500
+    etf_cost_pct: float = 0.0005
     opt_budget_usd: float = 50.0          # dollars per option trade
     opt_target_mult: float = 2.0          # sell when the bid reaches 2x what was paid ($50 -> $100)
     opt_exit_dte: int = 7                 # sell this many days before expiry
@@ -145,6 +151,8 @@ def load_config() -> V2Config:
         daily_loss_halt_pct=_f("CAP_DAILY_LOSS_HALT_PCT", "0.03"),
         max_drawdown_kill_pct=_f("CAP_MAX_DRAWDOWN_KILL_PCT", "0.10"),
     )
+    assert 1 <= _i("ETF_TOP_N", "5") <= 8, "ETF_TOP_N must be 1-8"
+    assert 0 <= _f("ETF_HOLD_SPY_PCT", "0") <= 1, "ETF_HOLD_SPY_PCT must be 0-1"
     # Options are paper only and small: refuse settings outside the agreed range.
     assert 10 <= _f("OPT_BUDGET_USD", "50") <= 500, "OPT_BUDGET_USD must be 10-500"
     assert 1.2 <= _f("OPT_TARGET_MULT", "2.0") <= 10, "OPT_TARGET_MULT must be 1.2-10"
@@ -185,6 +193,11 @@ def load_config() -> V2Config:
         approval_max_drift_pct=_f("APPROVAL_MAX_DRIFT_PCT", "0.015"),
         options_enabled=_b("OPTIONS_ENABLED", "false"),
         india_options_enabled=_b("INDIA_OPTIONS_ENABLED", "false"),
+        etf_core_enabled=_b("ETF_CORE_ENABLED", "false"),
+        etf_start_cash=_f("ETF_START_CASH", "437"),
+        etf_top_n=_i("ETF_TOP_N", "5"),
+        etf_hold_spy_pct=_f("ETF_HOLD_SPY_PCT", "0"),
+        etf_cost_pct=_f("ETF_COST_PCT", "0.0005"),
         opt_budget_usd=_f("OPT_BUDGET_USD", "50"),
         opt_target_mult=_f("OPT_TARGET_MULT", "2.0"),
         opt_exit_dte=_i("OPT_EXIT_DTE", "7"),

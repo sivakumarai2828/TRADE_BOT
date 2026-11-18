@@ -120,6 +120,12 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     <div id="positions"><div class="td-empty">Reading the bot's records…</div></div>
   </section>
 
+  <section class="td-panel" aria-label="ETF core">
+    <div class="td-phead"><h2>ETF core · paper</h2><span class="td-pill plain" id="etfCount">0</span>
+      <span class="td-hint">Monthly rotation: top 5 ETFs by 6-month return that are above their trend and beat cash.</span></div>
+    <div id="etf"><div class="td-empty">Reading the bot's records…</div></div>
+  </section>
+
   <section class="td-panel" aria-label="Option positions">
     <div class="td-phead"><h2>Option positions · paper</h2><span class="td-pill plain" id="optCount">0</span>
       <span class="td-hint">Sold automatically at the target or before expiry. The most each can lose is what was paid.</span></div>
@@ -135,7 +141,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   const SERVER = "Supabase", TOOL = "execute_sql", PROJECT = "ocuknhkchjhwuqnwuuqg";
   const APPROVAL_MIN = 90;             // fallback for requests made before "expires" was stored
   const KV_KEYS = ["approval_requests","ctl_results","ctl_queue","heartbeat","bot_status","US_suggestions","INDIA_suggestions",
-                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks","ctl_approval","INDIA_option_ideas"];
+                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks","ctl_approval","INDIA_option_ideas","ETF_book"];
   const READ_SQL = "select json_build_object(" +
     "'kv', (select json_object_agg(k, v) from v2_kv where k in (" + KV_KEYS.map(k => "'" + k + "'").join(",") + "))," +
     "'positions', (select coalesce(json_agg(t), '[]'::json) from (select id, market, symbol, qty, entry, stop, target, thesis, ts_open " +
@@ -210,6 +216,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       opt: {cash: parseFloat(kv.OPT_cash), start: parseFloat(kv.OPT_start_cash), marks: parse(kv.OPT_marks, {})},
       approvalOff: kv.ctl_approval === "off",
       indiaIdeas: parse(kv.INDIA_option_ideas, []),
+      etf: parse(kv.ETF_book, null),
     };
   }
 
@@ -526,6 +533,30 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       " (" + (ret >= 0 ? "+" : "") + ret.toFixed(1) + "% since start). Prices are delayed quotes, refreshed every 20 minutes in the US session."));
   }
 
+  function renderETF() {
+    const box = $("etf"), b = data.etf;
+    box.replaceChildren();
+    if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
+    if (!b) { $("etfCount").textContent = "off"; box.append(el("div", "td-empty", "The ETF core is switched off on the bot.")); return; }
+    const hold = Object.entries(b.holdings || {}), marks = b.marks || {};
+    $("etfCount").textContent = hold.length;
+    let eq = b.cash; for (const [s, h] of hold) eq += h.shares * (marks[s] || h.avg);
+    const ret = b.start ? 100 * (eq / b.start - 1) : 0;
+    box.append(el("div", "td-hint", "Book " + money(eq, "US") + " (" + (ret >= 0 ? "+" : "") + ret.toFixed(1) + "% since start) · cash " + money(b.cash, "US") +
+      (b.last_month ? " · last rebalance " + b.last_month : " · first rebalance at the next US scan")));
+    if (!hold.length) return;
+    const wrap = el("div", "td-scroll"), t = el("table", "td-table"), head = el("tr");
+    for (const [h, c] of [["ETF", ""], ["Weight", "num"], ["Value", "num"], ["P&L", "num"]]) head.append(el("th", c, h));
+    t.append(head);
+    for (const [s, h] of hold.sort((a, z) => z[1].shares * (marks[z[0]] || z[1].avg) - a[1].shares * (marks[a[0]] || a[1].avg))) {
+      const px = marks[s] || h.avg, v = h.shares * px, tr = el("tr");
+      tr.append(el("td", "td-sym", s), el("td", "num", Math.round(100 * v / eq) + "%"), el("td", "num", money(v, "US")),
+                el("td", "num", money(h.shares * (px - h.avg), "US")));
+      t.append(tr);
+    }
+    wrap.append(t); box.append(wrap);
+  }
+
   function renderTop() {
     const pill = $("botPill");
     if (!loaded) { pill.className = "td-pill"; pill.textContent = mcp === null ? "Not connected" : "Connecting…"; return; }
@@ -540,7 +571,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       : paused.length ? "Paper account · " + paused.join(" and ") + " paused" : "Paper account";
   }
 
-  function render() { renderTop(); renderWaiting(); renderSuggestions(); renderRecent(); renderPositions(); }
+  function render() { renderTop(); renderWaiting(); renderSuggestions(); renderRecent(); renderPositions(); renderETF(); }
 
   // ── wiring ─────────────────────────────────────────────────────
   $("btnRefresh").onclick = () => refresh();

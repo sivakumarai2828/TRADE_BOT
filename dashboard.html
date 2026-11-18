@@ -93,6 +93,7 @@
   </div>
   <div class="nav" data-market="US" onclick="setMarket('US')">🇺🇸&ensp;US Stocks — Swing</div>
   <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE — Swing</div>
+  <div class="nav" data-market="ETF" onclick="setMarket('ETF')" style="display:none">📊&ensp;ETF Core — Paper</div>
   <div class="nav" data-market="OPTIONS" onclick="setMarket('OPTIONS')" style="display:none">🎯&ensp;US Options — Paper</div>
   <div class="spacer"></div>
   <div class="sidebox"><div class="l">Broker</div><div class="v" id="side-broker">Paper Ledger</div></div>
@@ -115,6 +116,7 @@
   <div class="mktbar">
     <div class="nav" data-market="US" onclick="setMarket('US')">🇺🇸&ensp;US Stocks</div>
     <div class="nav" data-market="INDIA" onclick="setMarket('INDIA')">🇮🇳&ensp;India NSE</div>
+    <div class="nav" data-market="ETF" onclick="setMarket('ETF')" style="display:none">📊&ensp;ETF</div>
     <div class="nav" data-market="OPTIONS" onclick="setMarket('OPTIONS')" style="display:none">🎯&ensp;Options</div>
   </div>
 
@@ -170,8 +172,10 @@ function render(){
   document.querySelectorAll(".tab").forEach(n=>n.classList.toggle("on", n.dataset.tab===TAB));
   // style.display, not the hidden attribute: .nav and .tabs set display in CSS
   document.querySelectorAll('.nav[data-market="OPTIONS"]').forEach(n=>n.style.display = DATA && DATA.OPTIONS ? "" : "none");
-  document.getElementById("tabs").style.display = MARKET==="OPTIONS" ? "none" : "";
+  document.querySelectorAll('.nav[data-market="ETF"]').forEach(n=>n.style.display = DATA && DATA.ETF ? "" : "none");
+  document.getElementById("tabs").style.display = MARKET==="OPTIONS" || MARKET==="ETF" ? "none" : "";
   if(MARKET==="OPTIONS"){ renderOptions(); return; }
+  if(MARKET==="ETF"){ renderETF(); return; }
   document.getElementById("mkt-title").textContent = MARKET==="US" ? "US Stocks — Swing Bot" : "India NSE — Swing Bot";
   if(!DATA || !DATA[MARKET]) return;
   const d = DATA[MARKET], c = d.currency, s = d.stats||{};
@@ -318,6 +322,54 @@ function feedHtml(){
     <div class="tm">${ts(f.ts)}</div></div></div>`).join("");
 }
 
+// ── ETF core (paper) ────────────────────────────────────────────
+function etfSpark(hist){
+  if(!hist || hist.length < 2) return `<div class="empty">The equity line starts after a few days of history.</div>`;
+  const W = 600, H = 120, ys = hist.map(p=>p.equity), lo = Math.min(...ys), hi = Math.max(...ys), span = (hi-lo)||1;
+  const pts = hist.map((p,i)=>`${(i/(hist.length-1)*W).toFixed(1)},${(H-6-(p.equity-lo)/span*(H-12)).toFixed(1)}`).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="ETF book value over time">
+    <polyline points="${pts}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/></svg>
+    <div class="note" style="margin:0">${esc(hist[0].day)} → ${esc(hist[hist.length-1].day)} · low ${fmt(lo,"USD")} · high ${fmt(hi,"USD")}</div>`;
+}
+function renderETF(){
+  document.getElementById("mkt-title").textContent = "ETF Core — Paper";
+  document.getElementById("side-broker").textContent = "None (paper, Yahoo prices)";
+  document.getElementById("side-mode").textContent = "Paper ETF rotation";
+  document.getElementById("side-mode-d").textContent = "Monthly trend + momentum rule. No broker orders.";
+  const e = DATA && DATA.ETF, box = document.getElementById("content"), c = "USD";
+  if(!e){ box.innerHTML = `<div class="panel"><div class="empty">The ETF core is switched off on the bot.</div></div>`; return; }
+  if(e.error){ box.innerHTML = `<div class="panel"><div class="empty">${esc(e.error)}</div></div>`; return; }
+  const last = e.last_rebalance;
+  let h = `<div class="cards">
+    <div class="stat"><div class="top"><span class="lbl">ETF book value</span><span class="ico">📊</span></div>
+      <div class="val">${fmt(e.equity,c)}</div><div class="sub">Started ${fmt(e.start,c)} · return <span class="${cls(e.total_return_pct)}">${e.total_return_pct}%</span></div></div>
+    <div class="stat"><div class="top"><span class="lbl">Holdings</span><span class="ico">🧺</span></div>
+      <div class="val">${e.holdings.length}</div><div class="sub">Cash ${fmt(e.cash,c)}</div></div>
+    <div class="stat"><div class="top"><span class="lbl">Last rebalance</span><span class="ico">🗓️</span></div>
+      <div class="val">${last?esc(last.month):"—"}</div><div class="sub">${last?`${last.trades.length} trade(s)`:"Runs at the next US scan"} · next: first US trading day of next month</div></div>
+    <div class="stat"><div class="top"><span class="lbl">Rule</span><span class="ico">📏</span></div>
+      <div class="val">Top ${e.top_n}</div><div class="sub">by 6-month return, above 10-month avg, beating cash${e.hold_spy_pct?` · ${Math.round(e.hold_spy_pct*100)}% always in S&P 500`:""}</div></div>
+  </div>`;
+  h += `<div class="panel" style="margin-bottom:18px"><h3>Holdings (${e.holdings.length})</h3>`;
+  h += e.holdings.length ? `<div class="tablewrap"><table><tr><th>ETF</th><th>What it is</th><th>Weight</th><th>Value</th><th>Shares</th><th>Avg cost</th><th>Price</th><th>P&L</th></tr>`+
+    e.holdings.map(x=>`<tr><td><b>${esc(x.symbol)}</b></td><td>${esc(x.name)}</td><td>${Math.round(x.weight*100)}%</td><td>${fmt(x.value,c)}</td>
+      <td>${x.shares}</td><td>${fmt(x.avg,c)}</td><td>${fmt(x.price,c)}</td><td class="${cls(x.pnl)}">${fmt(x.pnl,c)}</td></tr>`).join("")+`</table></div>`
+    : `<div class="empty">Nothing held yet. The first rebalance runs at the next US scan (10:00 New York time).</div>`;
+  h += `<div class="note">Paper only: virtual fills at delayed prices, fractional shares, 0.05% cost per trade. Rebalanced once a month; a holding is only resized when it is more than 2% of the book away from its target.</div></div>`;
+  h += `<div class="row2"><div class="panel"><h3>Book value</h3>${etfSpark(e.history)}</div><div class="panel"><h3>This month's ranking</h3>`;
+  h += last && last.ranking ? `<div class="tablewrap"><table><tr><th>#</th><th>ETF</th><th>6-month</th><th>Trend</th><th>Picked</th></tr>`+
+    last.ranking.map(r=>`<tr><td>${r.rank}</td><td><b>${esc(r.symbol)}</b> <span class="note">${esc(r.name)}</span></td>
+      <td class="${cls(r.mom_6m)}">${(r.mom_6m*100).toFixed(1)}%</td><td>${r.above_trend?"above 10-mo avg":"below"}</td>
+      <td>${r.picked?"✓":(!r.above_trend?"no: below trend":!r.beats_cash?"no: weaker than cash":"no: not top "+e.top_n)}</td></tr>`).join("")+`</table></div>`
+    : `<div class="empty">The ranking appears after the first rebalance.</div>`;
+  h += `</div></div>`;
+  if(e.rebalances && e.rebalances.length){
+    h += `<div class="panel"><h3>Rebalance history</h3>` + e.rebalances.map(r=>`<div class="feed-item"><b>${esc(r.month)}</b> · book ${fmt(r.equity,c)} · ${
+      r.trades.length ? r.trades.map(t=>`${t.side} ${esc(t.symbol)} ${fmt(t.value,c)}`).join(", ") : "no changes"}</div>`).join("") + `</div>`;
+  }
+  box.innerHTML = h;
+}
+
 // ── Options (paper) ─────────────────────────────────────────────
 function optName(p){ return `${esc(p.underlying)} ${p.strike} call`; }
 function renderOptions(){
@@ -369,7 +421,7 @@ async function refresh(){
   try{
     DATA = await (await fetch("/api/summary")).json();
     applyMode();
-    const apiMarket = MARKET==="OPTIONS" ? "OPT" : MARKET;
+    const apiMarket = MARKET==="OPTIONS" ? "OPT" : MARKET==="ETF" ? "US" : MARKET;
     TRADES = await (await fetch("/api/trades?market="+apiMarket)).json();
     FEED = await (await fetch("/api/activity?market="+apiMarket)).json();
     apiPill.className="pill ok"; apiPill.lastElementChild.textContent="API online";

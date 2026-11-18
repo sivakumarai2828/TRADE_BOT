@@ -259,3 +259,14 @@ at or above it (approximate NSE steps), monthly expiry on the last Tuesday
 from NSE's fo_mktlots.csv. Ideas are re-estimated every 20 minutes in the NSE
 session and closed on paper at 2x or 7 days before expiry. Nothing is traded.
 Off by default.
+
+## ETF core (paper) — `botv2/etf_core.py`, `ETF_CORE_ENABLED=true`
+
+Monthly trend + momentum rotation, the rule that held up in the 2007-16 and
+2017-26 backtest: of SPY QQQ IWM EFA EEM XLK XLF XLV XLE XLI XLY XLP XLU XLB
+TLT GLD, hold the top `ETF_TOP_N` (5) by 6-month return that are above their
+~10-month average and beat SHY; empty slots go to SHY. Optional
+`ETF_HOLD_SPY_PCT` sleeve (0.5 = 50/50 with holding SPY). Rebalanced on the
+first US cycle of each month (and once when the book is new), only resizing
+holdings more than 2% of equity off target. Paper book in kv `ETF_book`,
+fractional shares, 0.05% cost per side; dashboard section "ETF Core — Paper".

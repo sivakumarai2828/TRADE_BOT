@@ -167,6 +167,12 @@ def summary():
             "scanned_today": bool(last_dec) and suggest.day_of(last_dec[0]["ts"], market) == suggest.today(market),
             "option_ideas": _india_option_ideas(j) if market == "INDIA" else [],
         }
+    if CFG.etf_core_enabled and not broker:
+        try:
+            from botv2.etf_core import ETFCore
+            out["ETF"] = ETFCore(j, CFG, history=object()).summary()   # no prices fetched here
+        except Exception as exc:
+            out["ETF"] = {"error": f"ETF summary failed: {type(exc).__name__}"}
     if CFG.options_enabled and not broker:
         try:
             from botv2.options_desk import OptionsDesk

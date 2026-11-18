@@ -140,6 +140,10 @@ def main() -> None:
     journal = make_journal(cfg.db_path)
     runners, desk = build_runners(cfg, journal)
     options = build_options(cfg, journal, desk)
+    etf_core = None
+    if cfg.etf_core_enabled and cfg.trade_us and not cfg.broker_trading:
+        from botv2.etf_core import ETFCore
+        etf_core = ETFCore(journal, cfg)
     india_opts = None
     if cfg.india_options_enabled and "INDIA" in runners and runners["INDIA"].suggest_only:
         from botv2.india_options import IndiaOptionIdeas
@@ -214,6 +218,11 @@ def main() -> None:
                     options.propose_from_today()       # one call per idea that passed today
                 except Exception:
                     log.exception("options proposals failed")
+            if market == "US" and etf_core:
+                try:
+                    etf_core.rebalance()               # once a month (and once when new)
+                except Exception:
+                    log.exception("etf core rebalance failed")
             if market == "INDIA" and india_opts:
                 try:
                     india_opts.build()                 # estimated call idea per passed suggestion
@@ -230,6 +239,11 @@ def main() -> None:
                     options.monitor()                  # targets and pre-expiry exits
                 except Exception:
                     log.exception("options monitor failed")
+            if market == "US" and etf_core:
+                try:
+                    etf_core.mark()                    # value the ETF book for its equity line
+                except Exception:
+                    log.exception("etf core mark failed")
             if market == "INDIA" and india_opts:
                 try:
                     india_opts.monitor()               # re-estimate, close at target / near expiry
@@ -243,7 +257,8 @@ def main() -> None:
                  f"approvals {cfg.approval_mode}"
                  + "".join(f" | {m}: suggestions only" for m, r in runners.items() if r.suggest_only)
                  + (f" | options: paper, ${cfg.opt_budget_usd:g}/trade" if options else "")
-                 + (" | India option ideas: estimated" if india_opts else ""))
+                 + (" | India option ideas: estimated" if india_opts else "")
+                 + (f" | ETF core: paper, top {cfg.etf_top_n}" if etf_core else ""))
 
     # A transient network blip (e.g. Supabase 'connection reset by peer') must
     # never kill the scheduler: on 2026-08-06 one such error crashed the process
