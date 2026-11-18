@@ -94,7 +94,7 @@ def record(journal, market: str, currency: str, proposal: dict, caps,
         **extra,
     }
     items.append(s)
-    journal.kv_set(_key(market), json.dumps(items[-KEEP:]))
+    journal.kv_set(_key(market), json.dumps(items[-KEEP_TRACKED:]))
     return s
 
 
@@ -124,6 +124,90 @@ def recent(journal, market: str, days: int = 7) -> list[dict]:
             out.append(dict(s, rank=n))
         out += [dict(s, rank=None) for s in ranked([x for x in rows if x.get("status") == "blocked"])]
     return out
+
+
+# ── what-if tracking: how every idea would have done ─────────────
+# Each idea (passed or stopped) is followed on paper from its scan price as
+# if it had been bought: it "hits target" or "hits stop" the first time a
+# monitor pass sees the price at or beyond either level, or is closed at the
+# last price after TRACK_DAYS calendar days. That puts ideas the checks
+# passed and ideas they stopped on the same footing, so their results can be
+# compared. Prices are checked every 20 minutes, not tick by tick.
+TRACK_DAYS = 30
+KEEP_TRACKED = 400
+
+
+def track_outcomes(journal, market: str, price_fn, now_ts: float | None = None) -> list[dict]:
+    """Update the what-if outcome of each open idea. Returns the ones closed now."""
+    items = load(journal, market)
+    now_ts = now_ts or time.time()
+    closed, changed = [], False
+    prices: dict = {}
+    for s in items:
+        o = s.get("outcome") or {"status": "open"}
+        if o.get("status") != "open" or not s.get("stop") or not s.get("target") or not s.get("price"):
+            continue
+        sym = s["symbol"]
+        if sym not in prices:
+            try:
+                prices[sym] = price_fn(sym)
+            except Exception:
+                prices[sym] = None
+        px = prices[sym]
+        if not px:
+            continue
+        o.update(last=round(px, 2), marked=now_ts)
+        entry = float(s["price"])
+        if px >= float(s["target"]):
+            o.update(status="target", exit=float(s["target"]))
+        elif px <= float(s["stop"]):
+            o.update(status="stop", exit=float(s["stop"]))
+        elif now_ts - float(s.get("ts") or now_ts) > TRACK_DAYS * 86400:
+            o.update(status="expired", exit=round(px, 2))
+        if o["status"] != "open":
+            o.update(ret=round(o["exit"] / entry - 1, 4), closed=now_ts)
+            closed.append(s)
+        else:
+            o["ret_now"] = round(px / entry - 1, 4)
+        s["outcome"] = o
+        changed = True
+    if changed:
+        journal.kv_set(_key(market), json.dumps(items[-KEEP_TRACKED:]))
+    return closed
+
+
+def outcome_stats(items: list[dict]) -> list[dict]:
+    """Results by group: passed the checks, stopped by the second AI check
+    (by ruling), stopped by the risk rules."""
+    def group(s):
+        if s.get("status") != "blocked":
+            return "Passed the checks"
+        if s.get("blocked_by") == "skeptic":
+            return f"Stopped by the second AI check ({s.get('ruling') or 'WAIT'})"
+        return "Stopped by the risk rules"
+    out = {}
+    for s in items:
+        o = s.get("outcome") or {}
+        if not s.get("stop") or not s.get("target"):
+            continue
+        g = out.setdefault(group(s), {"group": group(s), "ideas": 0, "closed": 0, "target": 0, "stop": 0,
+                                      "expired": 0, "rets": [], "open_rets": []})
+        g["ideas"] += 1
+        if o.get("status") in ("target", "stop", "expired"):
+            g["closed"] += 1
+            g[o["status"]] += 1
+            g["rets"].append(o["ret"])
+        elif o.get("ret_now") is not None:
+            g["open_rets"].append(o["ret_now"])
+    rows = []
+    for g in out.values():
+        r, op = g.pop("rets"), g.pop("open_rets")
+        g["avg_closed_ret"] = round(sum(r) / len(r), 4) if r else None
+        g["win_rate"] = round(g["target"] / g["closed"], 3) if g["closed"] else None
+        g["avg_open_ret"] = round(sum(op) / len(op), 4) if op else None
+        rows.append(g)
+    order = {"Passed the checks": 0}
+    return sorted(rows, key=lambda g: (order.get(g["group"], 1), g["group"]))
 
 
 def blocked_today(journal, market: str) -> int:

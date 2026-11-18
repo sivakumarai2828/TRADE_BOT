@@ -166,6 +166,7 @@ def summary():
             # apart from "not scanned yet".
             "scanned_today": bool(last_dec) and suggest.day_of(last_dec[0]["ts"], market) == suggest.today(market),
             "option_ideas": _india_option_ideas(j) if market == "INDIA" else [],
+            "check_results": suggest.outcome_stats(suggest.load(j, market)),
         }
     if CFG.etf_core_enabled and not broker:
         try:

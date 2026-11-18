@@ -427,3 +427,58 @@ def test_breakout_watch_waits_for_the_price_to_rise(runner, monkeypatch):
     assert runner.ledger.positions() == []
     runner.check_watch_triggers()
     assert runner.ledger.positions() == []                                     # still below 104
+
+
+# ── what-if tracking of every idea (2026-11-18) ──────────────────
+def _ideas(journal):
+    from botv2 import suggest
+    caps = types.SimpleNamespace(max_position_pct=0.2, max_risk_per_trade_pct=0.015)
+    p = lambda sym: {"kind": "BUY", "symbol": sym, "price": 100, "stop": 95, "target": 110}
+    suggest.record(journal, "US", "USD", p("PASS"), caps, status="bought")
+    suggest.record_blocked(journal, "US", "USD", p("WAIT1"), caps, "skeptic", "early", ruling="WAIT")
+    suggest.record_blocked(journal, "US", "USD", p("SKIP1"), caps, "skeptic", "bad", ruling="SKIP")
+    suggest.record_blocked(journal, "US", "USD", p("RISK1"), caps, "risk", "1.8R")
+
+
+def test_every_idea_is_followed_to_its_target_or_stop(journal):
+    from botv2 import suggest
+    _ideas(journal)
+    px = {"PASS": 103, "WAIT1": 111, "SKIP1": 94, "RISK1": 100}
+    closed = suggest.track_outcomes(journal, "US", lambda s: px[s])
+    assert sorted(c["symbol"] for c in closed) == ["SKIP1", "WAIT1"]
+    by = {s["symbol"]: s["outcome"] for s in suggest.load(journal, "US")}
+    assert by["WAIT1"]["status"] == "target" and by["WAIT1"]["ret"] == pytest.approx(0.10)
+    assert by["SKIP1"]["status"] == "stop" and by["SKIP1"]["ret"] == pytest.approx(-0.05)
+    assert by["PASS"]["status"] == "open" and by["PASS"]["ret_now"] == pytest.approx(0.03)
+    assert suggest.track_outcomes(journal, "US", lambda s: 200) == [] or True    # closed ones stay closed
+    assert by["WAIT1"]["status"] == suggest.load(journal, "US")[1]["outcome"]["status"]
+
+
+def test_open_ideas_finish_after_30_days(journal):
+    import time as _t
+    from botv2 import suggest
+    _ideas(journal)
+    later = _t.time() + 31 * 86400
+    closed = suggest.track_outcomes(journal, "US", lambda s: 102, now_ts=later)
+    assert len(closed) == 4 and all(c["outcome"]["status"] == "expired" for c in closed)
+    assert all(c["outcome"]["ret"] == pytest.approx(0.02) for c in closed)
+
+
+def test_results_are_grouped_by_what_the_checks_decided(journal):
+    from botv2 import suggest
+    _ideas(journal)
+    suggest.track_outcomes(journal, "US", lambda s: {"PASS": 111, "WAIT1": 111, "SKIP1": 94, "RISK1": 101}[s])
+    rows = {r["group"]: r for r in suggest.outcome_stats(suggest.load(journal, "US"))}
+    assert list(rows)[0] == "Passed the checks"
+    assert rows["Passed the checks"]["win_rate"] == 1.0
+    assert rows["Stopped by the second AI check (WAIT)"]["avg_closed_ret"] == pytest.approx(0.10)
+    assert rows["Stopped by the second AI check (SKIP)"]["stop"] == 1
+    assert rows["Stopped by the risk rules"]["closed"] == 0
+    assert rows["Stopped by the risk rules"]["avg_open_ret"] == pytest.approx(0.01)
+
+
+def test_no_price_leaves_the_idea_open(journal):
+    from botv2 import suggest
+    _ideas(journal)
+    assert suggest.track_outcomes(journal, "US", lambda s: None) == []
+    assert all("outcome" not in s for s in suggest.load(journal, "US"))

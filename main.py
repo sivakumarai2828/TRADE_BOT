@@ -234,6 +234,11 @@ def main() -> None:
         def _go():
             runners[market].monitor_positions()
             control.mark(journal, market, "monitor")
+            try:                                      # what-if outcome of every idea, passed or stopped
+                from botv2 import data, suggest
+                suggest.track_outcomes(journal, market, data.fetch_price)
+            except Exception:
+                log.exception("what-if tracking failed")
             if market == "US" and options:
                 try:
                     options.monitor()                  # targets and pre-expiry exits

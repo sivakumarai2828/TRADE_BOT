@@ -211,6 +211,7 @@ function render(){
     </div>`;
   }
   else if(TAB==="suggestions"){
+    html += checkResultsHtml(d);
     html += suggestionsHtml(d,c,true);
     html += optionIdeasHtml(d);
   }
@@ -239,11 +240,11 @@ function render(){
 const esc = t => String(t??"").replace(/[&<>"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
 const SUG_STATUS = {approval:"Sent to Telegram for your approval", bought:"Bought by the bot", suggest:"Suggestion only"};
 function sugTable(rows,c,traded){
-  return `<div class="tablewrap"><table><tr><th>#</th><th>Priority</th><th>Symbol</th><th>Buy near</th><th>Stop</th><th>Target</th><th>Reward : risk</th><th>Size</th>${traded?"<th>What the bot did</th>":""}<th>Why</th></tr>`+
+  return `<div class="tablewrap"><table><tr><th>#</th><th>Priority</th><th>Symbol</th><th>Buy near</th><th>Stop</th><th>Target</th><th>Reward : risk</th><th>Size</th>${traded?"<th>What the bot did</th>":""}<th>Since then</th><th>Why</th></tr>`+
     rows.map(x=>`<tr><td>${x.rank}</td><td><span class="prio ${esc(x.priority)}">${esc(x.priority)}</span></td>
       <td><b>${esc(x.symbol)}</b></td><td>${fmt(x.price,c)}</td><td>${fmt(x.stop,c)}</td><td>${fmt(x.target,c)}</td>
       <td>${x.r==null?"—":x.r+" : 1"}</td><td>up to ${x.size_pct}%</td>
-      ${traded?`<td>${sugOutcome(x)}</td>`:""}<td class="why">${esc(x.thesis)}</td></tr>`).join("")+`</table></div>`;
+      ${traded?`<td>${sugOutcome(x)}</td>`:""}<td>${sinceThen(x)}</td><td class="why">${esc(x.thesis)}</td></tr>`).join("")+`</table></div>`;
 }
 // What happened to an idea that was sent for approval.
 const AP_STATUS = {pending:["Waiting for your Approve or Skip","MEDIUM"], filled:["Approved and bought","HIGH"],
@@ -256,12 +257,36 @@ function sugOutcome(x){
 }
 // Ideas the AI proposed but a check stopped, with the reason.
 const STOPPED_BY = {skeptic:"Second AI check", risk:"Risk rules"};
+// What-if outcome of an idea, followed on paper from its scan price.
+function sinceThen(x){
+  const o = x.outcome;
+  if(!o) return `<span class="note">tracking starts at the next price check</span>`;
+  const pct = v => `${v>=0?"+":""}${(v*100).toFixed(1)}%`;
+  if(o.status==="target") return `<span class="prio HIGH">Hit target ${pct(o.ret)}</span>`;
+  if(o.status==="stop") return `<span class="prio">Hit stop ${pct(o.ret)}</span>`;
+  if(o.status==="expired") return `<span class="prio">30 days, ${pct(o.ret)}</span>`;
+  return o.ret_now!=null ? `<span class="${cls(o.ret_now)}">${pct(o.ret_now)} so far</span>` : "—";
+}
+function checkResultsHtml(d){
+  const rows = d.check_results||[];
+  let h = `<div class="panel" style="margin-bottom:18px"><h3>How the checks are doing</h3>`;
+  if(!rows.length) return h + `<div class="empty">No ideas tracked yet.</div></div>`;
+  const pct = v => v==null ? "—" : `${v>=0?"+":""}${(v*100).toFixed(1)}%`;
+  h += `<div class="tablewrap"><table><tr><th>Ideas</th><th>Count</th><th>Finished</th><th>Hit target</th><th>Hit stop</th><th>Avg result (finished)</th><th>Avg so far (open)</th></tr>`+
+    rows.map(g=>`<tr><td><b>${esc(g.group)}</b></td><td>${g.ideas}</td><td>${g.closed}</td>
+      <td>${g.target}${g.closed?` (${Math.round(100*g.win_rate)}%)`:""}</td><td>${g.stop}</td>
+      <td class="${cls(g.avg_closed_ret)}">${pct(g.avg_closed_ret)}</td><td class="${cls(g.avg_open_ret)}">${pct(g.avg_open_ret)}</td></tr>`).join("")+`</table></div>`;
+  h += `<div class="note">Every idea, passed or stopped, is followed on paper from its scan price as if it had been bought: it finishes when the price reaches its target or its stop, or after 30 days. If stopped ideas keep doing as well as passed ones, the second AI check is too strict; if they do worse, it is saving money. Give it a few weeks: a handful of ideas proves nothing.</div>`;
+  return h + `</div>`;
+}
+
 function stoppedTable(rows,c){
-  return `<div class="tablewrap"><table><tr><th>AI confidence</th><th>Symbol</th><th>Price</th><th>Stop</th><th>Target</th><th>Reward : risk</th><th>Stopped by</th><th>Reason</th><th>AI's idea</th></tr>`+
+  return `<div class="tablewrap"><table><tr><th>AI confidence</th><th>Symbol</th><th>Price</th><th>Stop</th><th>Target</th><th>Reward : risk</th><th>Stopped by</th><th>Since then</th><th>Reason</th><th>AI's idea</th></tr>`+
     rows.map(x=>`<tr><td><span class="prio ${esc(x.priority)}">${esc(x.priority)}</span></td>
       <td><b>${esc(x.symbol)}</b></td><td>${fmt(x.price,c)}</td><td>${fmt(x.stop,c)}</td><td>${fmt(x.target,c)}</td>
       <td>${x.r==null?"—":x.r+" : 1"}</td>
       <td>${esc(STOPPED_BY[x.blocked_by]||"A check")}${x.ruling?` <span class="note">(${esc(x.ruling)})</span>`:""}</td>
+      <td>${sinceThen(x)}</td>
       <td class="why">${esc(x.reason)}</td><td class="why">${esc(x.thesis)}</td></tr>`).join("")+`</table></div>`;
 }
 function dayBlock(rows,c,traded,open){
