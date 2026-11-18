@@ -112,6 +112,7 @@ class V2Config:
 
     # ── Options desk (PAPER ONLY, botv2/options_desk.py) ──
     options_enabled: bool = False
+    india_options_enabled: bool = False   # India option ideas, estimated premiums, never traded
     opt_budget_usd: float = 50.0          # dollars per option trade
     opt_target_mult: float = 2.0          # sell when the bid reaches 2x what was paid ($50 -> $100)
     opt_exit_dte: int = 7                 # sell this many days before expiry
@@ -183,6 +184,7 @@ def load_config() -> V2Config:
         approval_timeout_min=_f("APPROVAL_TIMEOUT_MIN", "390"),
         approval_max_drift_pct=_f("APPROVAL_MAX_DRIFT_PCT", "0.015"),
         options_enabled=_b("OPTIONS_ENABLED", "false"),
+        india_options_enabled=_b("INDIA_OPTIONS_ENABLED", "false"),
         opt_budget_usd=_f("OPT_BUDGET_USD", "50"),
         opt_target_mult=_f("OPT_TARGET_MULT", "2.0"),
         opt_exit_dte=_i("OPT_EXIT_DTE", "7"),

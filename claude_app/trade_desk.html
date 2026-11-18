@@ -135,7 +135,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   const SERVER = "Supabase", TOOL = "execute_sql", PROJECT = "ocuknhkchjhwuqnwuuqg";
   const APPROVAL_MIN = 90;             // fallback for requests made before "expires" was stored
   const KV_KEYS = ["approval_requests","ctl_results","ctl_queue","heartbeat","bot_status","US_suggestions","INDIA_suggestions",
-                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks","ctl_approval"];
+                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks","ctl_approval","INDIA_option_ideas"];
   const READ_SQL = "select json_build_object(" +
     "'kv', (select json_object_agg(k, v) from v2_kv where k in (" + KV_KEYS.map(k => "'" + k + "'").join(",") + "))," +
     "'positions', (select coalesce(json_agg(t), '[]'::json) from (select id, market, symbol, qty, entry, stop, target, thesis, ts_open " +
@@ -209,6 +209,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       positions: Array.isArray(d && d.positions) ? d.positions : [],
       opt: {cash: parseFloat(kv.OPT_cash), start: parseFloat(kv.OPT_start_cash), marks: parse(kv.OPT_marks, {})},
       approvalOff: kv.ctl_approval === "off",
+      indiaIdeas: parse(kv.INDIA_option_ideas, []),
     };
   }
 
@@ -432,6 +433,28 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       }
       box.append(det);
     }
+    if (m === "INDIA") renderIndiaIdeas(box);
+  }
+
+  function renderIndiaIdeas(box) {
+    const ideas = (data.indiaIdeas || []).slice().reverse().filter(i => i.status === "open" || i.day === dayIn(Date.now(), "INDIA")).slice(0, 12);
+    const det = el("details", "td-stopped"); det.open = true;
+    det.append(el("summary", null, "Option ideas · estimated premiums (" + ideas.length + ")"));
+    if (!ideas.length) det.append(el("div", "td-empty", "No option ideas yet. Each India suggestion that passes the checks also gets one call idea, priced by estimate."));
+    for (const i of ideas) {
+      const it = el("div", "td-item"), row = el("div", "td-row1"), pnl = i.est_now != null ? Math.round(100 * (i.est_now / i.est_premium - 1)) : null;
+      row.append(el("span", "td-sym", i.root + " " + i.strike + " CE"), el("span", "td-mk", "exp " + i.expiry),
+                 el("span", "td-pill " + (i.status === "target" ? "good" : i.status === "open" ? "warn" : ""),
+                    i.status === "open" ? "Tracking" : i.status === "target" ? "Reached target (estimate)" : "Closed before expiry (estimate)"));
+      const g = el("div", "td-levels");
+      g.append(level("Est. premium", "₹" + i.est_premium), level("Lot", String(i.lot)),
+               level("Est. per lot", "₹" + Number(i.est_cost_lot).toLocaleString("en-IN")), level("Tracked to", "₹" + i.sell_at),
+               level("Now (est.)", i.est_now != null ? "₹" + i.est_now + " (" + (pnl >= 0 ? "+" : "") + pnl + "%)" : "–"));
+      it.append(row, g);
+      det.append(it);
+    }
+    det.append(el("div", "td-hint", "ESTIMATES from the stock price, not live NSE quotes; the real premium can differ a lot. Check it and the expiry in your broker's app. Paper tracking only, not advice."));
+    box.append(det);
   }
 
   function renderRecent() {

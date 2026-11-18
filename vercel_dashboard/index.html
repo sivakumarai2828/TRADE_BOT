@@ -208,6 +208,7 @@ function render(){
   }
   else if(TAB==="suggestions"){
     html += suggestionsHtml(d,c,true);
+    html += optionIdeasHtml(d);
   }
   else if(TAB==="positions"){
     html += `<div class="panel"><h3>Open Positions (${d.positions.length})</h3>${posTable(d,c,true)}</div>`;
@@ -265,6 +266,24 @@ function dayBlock(rows,c,traded,open){
   if(stopped.length) h += `<details class="stopped"${open?" open":""}><summary>Stopped by the checks (${stopped.length}): proposed by the AI, not suggested</summary>${stoppedTable(stopped,c)}</details>`;
   return h;
 }
+// India option ideas: ESTIMATED premiums, tracked on paper, never traded.
+const IDEA_STATUS = {open:"Tracking", target:"Reached target (estimate)", expiry_near:"Closed before expiry (estimate)"};
+function optionIdeasHtml(d){
+  const ideas = d.option_ideas||[];
+  if(MARKET!=="INDIA") return "";
+  let h = `<div class="panel" style="margin-bottom:18px"><h3>Option ideas · estimated premiums (${ideas.length})</h3>`;
+  h += ideas.length ? `<div class="tablewrap"><table><tr><th>Option</th><th>Expiry</th><th>Lot</th><th>Est. premium</th><th>Est. per lot</th><th>Tracked to</th><th>Now (est.)</th><th>Status</th><th>Stock idea</th></tr>`+
+    ideas.map(i=>{ const pnl = i.est_now!=null ? Math.round(100*(i.est_now/i.est_premium-1)) : null;
+      return `<tr><td><b>${esc(i.root)} ${i.strike} CE</b><div class="note" style="margin:0">stock ₹${i.spot} on ${esc(i.day)}</div></td>
+      <td>${esc(i.expiry)}</td><td>${i.lot}</td><td>₹${i.est_premium}</td><td>₹${Number(i.est_cost_lot).toLocaleString("en-IN")}</td>
+      <td>₹${i.sell_at}</td><td class="${cls(pnl)}">${i.est_now!=null?`₹${i.est_now} (${pnl>=0?"+":""}${pnl}%)`:"—"}</td>
+      <td><span class="prio ${i.status==="target"?"HIGH":i.status==="open"?"MEDIUM":""}">${esc(IDEA_STATUS[i.status]||i.status)}</span></td>
+      <td class="why">${esc(i.thesis)}</td></tr>`}).join("")+`</table></div>`
+    : `<div class="empty">No option ideas yet. Each India suggestion that passes the checks also gets one call idea, priced by estimate.</div>`;
+  h += `<div class="note">Premiums are ESTIMATES worked out from the stock price and its recent volatility, not live NSE quotes, and can differ a lot from the real price: check the real premium in your broker's app. Strike and expiry follow NSE rules as closely as the bot can (monthly expiry on the last Tuesday); confirm them before any trade. These ideas are tracked on paper only. Not investment advice.</div>`;
+  return h + `</div>`;
+}
+
 function suggestionsHtml(d,c,all){
   const s = d.suggestions||[], todayAll = s.filter(x=>x.day===d.suggestions_today), traded = !d.suggest_only;
   const today = todayAll.filter(x=>x.status!=="blocked"), stoppedN = todayAll.length - today.length;

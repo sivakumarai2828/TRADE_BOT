@@ -165,6 +165,7 @@ def summary():
             # Did today's scan already run? Lets the pages tell "nothing passed"
             # apart from "not scanned yet".
             "scanned_today": bool(last_dec) and suggest.day_of(last_dec[0]["ts"], market) == suggest.today(market),
+            "option_ideas": _india_option_ideas(j) if market == "INDIA" else [],
         }
     if CFG.options_enabled and not broker:
         try:
@@ -173,6 +174,16 @@ def summary():
         except Exception as exc:
             out["OPTIONS"] = {"error": f"options summary failed: {type(exc).__name__}"}
     return jsonify(out)
+
+
+def _india_option_ideas(j) -> list:
+    if not CFG.india_options_enabled:
+        return []
+    try:
+        from botv2.india_options import IndiaOptionIdeas
+        return IndiaOptionIdeas(j, CFG).recent()
+    except Exception:
+        return []
 
 
 @app.route("/api/trades")

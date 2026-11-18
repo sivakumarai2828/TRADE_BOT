@@ -140,6 +140,10 @@ def main() -> None:
     journal = make_journal(cfg.db_path)
     runners, desk = build_runners(cfg, journal)
     options = build_options(cfg, journal, desk)
+    india_opts = None
+    if cfg.india_options_enabled and "INDIA" in runners and runners["INDIA"].suggest_only:
+        from botv2.india_options import IndiaOptionIdeas
+        india_opts = IndiaOptionIdeas(journal, cfg)
     if cfg.broker_trading:
         log.info(runners["US"].ledger.preflight())   # bad keys / blocked account -> crash, no trading
     skeptic = next((r.skeptic for r in runners.values()), None)
@@ -210,6 +214,11 @@ def main() -> None:
                     options.propose_from_today()       # one call per idea that passed today
                 except Exception:
                     log.exception("options proposals failed")
+            if market == "INDIA" and india_opts:
+                try:
+                    india_opts.build()                 # estimated call idea per passed suggestion
+                except Exception:
+                    log.exception("india option ideas failed")
         return _go
 
     def monitor(market):
@@ -221,6 +230,11 @@ def main() -> None:
                     options.monitor()                  # targets and pre-expiry exits
                 except Exception:
                     log.exception("options monitor failed")
+            if market == "INDIA" and india_opts:
+                try:
+                    india_opts.monitor()               # re-estimate, close at target / near expiry
+                except Exception:
+                    log.exception("india option ideas monitor failed")
         return _go
 
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
@@ -228,7 +242,8 @@ def main() -> None:
                  f"skeptic {'on' if cfg.skeptic_enabled else 'off'} | "
                  f"approvals {cfg.approval_mode}"
                  + "".join(f" | {m}: suggestions only" for m, r in runners.items() if r.suggest_only)
-                 + (f" | options: paper, ${cfg.opt_budget_usd:g}/trade" if options else ""))
+                 + (f" | options: paper, ${cfg.opt_budget_usd:g}/trade" if options else "")
+                 + (" | India option ideas: estimated" if india_opts else ""))
 
     # A transient network blip (e.g. Supabase 'connection reset by peer') must
     # never kill the scheduler: on 2026-08-06 one such error crashed the process

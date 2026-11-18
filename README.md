@@ -248,3 +248,14 @@ the price paid ($50 -> $100) or `OPT_EXIT_DTE` days before expiry. No stop:
 the most a position can lose is what was paid. No broker order is placed;
 broker mode refuses to start the desk. Off by default. Research before
 building it (`tools/options_lab.py`) found this rule lost money on history.
+
+## India option ideas (estimated) — `botv2/india_options.py`, `INDIA_OPTIONS_ENABLED=true`
+
+No live NSE option feed is available to the bot (Yahoo has none; HDFC's
+market-data API is "coming soon"), so each India suggestion that passes the
+checks gets one call idea with an ESTIMATED premium: strike nearest the price
+at or above it (approximate NSE steps), monthly expiry on the last Tuesday
+21-50 days out, Black-Scholes from 30-day realized volatility x 1.1, lot size
+from NSE's fo_mktlots.csv. Ideas are re-estimated every 20 minutes in the NSE
+session and closed on paper at 2x or 7 days before expiry. Nothing is traded.
+Off by default.
