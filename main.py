@@ -98,6 +98,18 @@ def build_runners(cfg, journal=None):
     return runners, desk
 
 
+def build_options(cfg, journal, desk):
+    """Paper options desk, or None. Proposals need the approval desk."""
+    if not (cfg.options_enabled and cfg.trade_us) or cfg.broker_trading:
+        return None
+    from botv2.options_desk import OptionsDesk
+    opt = OptionsDesk(journal, cfg)
+    opt.approvals = desk
+    if desk:
+        desk.options = opt
+    return opt
+
+
 NY = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -124,6 +136,7 @@ def main() -> None:
         notify.PREFIX = "💵 LIVE " if cfg.live_real_money else "🧪 ALPACA-PAPER "
     journal = make_journal(cfg.db_path)
     runners, desk = build_runners(cfg, journal)
+    options = build_options(cfg, journal, desk)
     if cfg.broker_trading:
         log.info(runners["US"].ledger.preflight())   # bad keys / blocked account -> crash, no trading
     skeptic = next((r.skeptic for r in runners.values()), None)
@@ -189,19 +202,30 @@ def main() -> None:
                 return
             runners[market].run_cycle()
             control.mark(journal, market, "cycle")
+            if market == "US" and options:
+                try:
+                    options.propose_from_today()       # one call per idea that passed today
+                except Exception:
+                    log.exception("options proposals failed")
         return _go
 
     def monitor(market):
         def _go():
             runners[market].monitor_positions()
             control.mark(journal, market, "monitor")
+            if market == "US" and options:
+                try:
+                    options.monitor()                  # targets and pre-expiry exits
+                except Exception:
+                    log.exception("options monitor failed")
         return _go
 
     log.info("TRADE_BOT_V2 scheduler running (markets: %s)", ", ".join(runners))
     notify.alert(f"🟢 TRADE_BOT_V3 started (markets: {', '.join(runners)}) | "
                  f"skeptic {'on' if cfg.skeptic_enabled else 'off'} | "
                  f"approvals {cfg.approval_mode}"
-                 + "".join(f" | {m}: suggestions only" for m, r in runners.items() if r.suggest_only))
+                 + "".join(f" | {m}: suggestions only" for m, r in runners.items() if r.suggest_only)
+                 + (f" | options: paper, ${cfg.opt_budget_usd:g}/trade" if options else ""))
 
     # A transient network blip (e.g. Supabase 'connection reset by peer') must
     # never kill the scheduler: on 2026-08-06 one such error crashed the process

@@ -110,6 +110,21 @@ class V2Config:
     live_real_money: bool = False
     max_order_usd: float = 150.0          # hard ceiling on any single buy
 
+    # ── Options desk (PAPER ONLY, botv2/options_desk.py) ──
+    options_enabled: bool = False
+    opt_budget_usd: float = 50.0          # dollars per option trade
+    opt_target_mult: float = 2.0          # sell when the bid reaches 2x what was paid ($50 -> $100)
+    opt_exit_dte: int = 7                 # sell this many days before expiry
+    opt_dte_min: int = 30
+    opt_dte_max: int = 60
+    opt_max_open: int = 3
+    opt_min_open_interest: int = 100
+    opt_max_spread_pct: float = 0.30      # (ask - bid) / mid
+    opt_max_drift: float = 0.25           # cancel at approval if the ask rose more than this
+    opt_max_otm_pct: float = 0.25         # strike at most this far above the stock price
+    opt_min_ask: float = 0.10             # no penny contracts
+    opt_start_cash: float = 500.0         # paper options book
+
     caps: HardCaps = field(default_factory=HardCaps)
 
 
@@ -129,6 +144,11 @@ def load_config() -> V2Config:
         daily_loss_halt_pct=_f("CAP_DAILY_LOSS_HALT_PCT", "0.03"),
         max_drawdown_kill_pct=_f("CAP_MAX_DRAWDOWN_KILL_PCT", "0.10"),
     )
+    # Options are paper only and small: refuse settings outside the agreed range.
+    assert 10 <= _f("OPT_BUDGET_USD", "50") <= 500, "OPT_BUDGET_USD must be 10-500"
+    assert 1.2 <= _f("OPT_TARGET_MULT", "2.0") <= 10, "OPT_TARGET_MULT must be 1.2-10"
+    assert 1 <= _i("OPT_MAX_OPEN", "3") <= 5, "OPT_MAX_OPEN must be 1-5"
+    assert 1 <= _i("OPT_EXIT_DTE", "7") < _i("OPT_DTE_MIN", "30"), "OPT_EXIT_DTE must be below OPT_DTE_MIN"
     # Sanity-check the caps themselves so a typo can't disable safety.
     assert 0 < caps.max_position_pct <= 0.34, "max_position_pct must be (0, 0.34]"
     assert 0 < caps.max_risk_per_trade_pct <= 0.02, "risk per trade capped at 2%"
@@ -162,6 +182,19 @@ def load_config() -> V2Config:
         approval_mode=os.getenv("APPROVAL_MODE", "telegram").strip().lower(),
         approval_timeout_min=_f("APPROVAL_TIMEOUT_MIN", "390"),
         approval_max_drift_pct=_f("APPROVAL_MAX_DRIFT_PCT", "0.015"),
+        options_enabled=_b("OPTIONS_ENABLED", "false"),
+        opt_budget_usd=_f("OPT_BUDGET_USD", "50"),
+        opt_target_mult=_f("OPT_TARGET_MULT", "2.0"),
+        opt_exit_dte=_i("OPT_EXIT_DTE", "7"),
+        opt_dte_min=_i("OPT_DTE_MIN", "30"),
+        opt_dte_max=_i("OPT_DTE_MAX", "60"),
+        opt_max_open=_i("OPT_MAX_OPEN", "3"),
+        opt_min_open_interest=_i("OPT_MIN_OPEN_INTEREST", "100"),
+        opt_max_spread_pct=_f("OPT_MAX_SPREAD_PCT", "0.30"),
+        opt_max_drift=_f("OPT_MAX_DRIFT", "0.25"),
+        opt_max_otm_pct=_f("OPT_MAX_OTM_PCT", "0.25"),
+        opt_min_ask=_f("OPT_MIN_ASK", "0.10"),
+        opt_start_cash=_f("OPT_START_CASH", "500"),
         broker_trading=_b("BROKER_TRADING", "false"),
         live_real_money=_b("LIVE_REAL_MONEY", "false"),
         max_order_usd=_f("MAX_ORDER_USD", "150"),

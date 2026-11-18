@@ -120,6 +120,12 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     <div id="positions"><div class="td-empty">Reading the bot's records…</div></div>
   </section>
 
+  <section class="td-panel" aria-label="Option positions">
+    <div class="td-phead"><h2>Option positions · paper</h2><span class="td-pill plain" id="optCount">0</span>
+      <span class="td-hint">Sold automatically at the target or before expiry. The most each can lose is what was paid.</span></div>
+    <div id="options"><div class="td-empty">Reading the bot's records…</div></div>
+  </section>
+
   <p class="td-foot">This page reads the trading bot's records through your Supabase connector and refreshes every 30 seconds while open.
     Approve and Skip add one command to the bot's queue; the bot acts on it within about 20 seconds. Suggestions are the bot's ideas, not advice.</p>
 </div>
@@ -129,7 +135,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   const SERVER = "Supabase", TOOL = "execute_sql", PROJECT = "ocuknhkchjhwuqnwuuqg";
   const APPROVAL_MIN = 90;             // fallback for requests made before "expires" was stored
   const KV_KEYS = ["approval_requests","ctl_results","ctl_queue","heartbeat","bot_status","US_suggestions","INDIA_suggestions",
-                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused"];
+                   "US_killed","INDIA_killed","ctl_US_paused","ctl_INDIA_paused","OPT_cash","OPT_start_cash","OPT_marks"];
   const READ_SQL = "select json_build_object(" +
     "'kv', (select json_object_agg(k, v) from v2_kv where k in (" + KV_KEYS.map(k => "'" + k + "'").join(",") + "))," +
     "'positions', (select coalesce(json_agg(t), '[]'::json) from (select id, market, symbol, qty, entry, stop, target, thesis, ts_open " +
@@ -201,6 +207,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       flags: {US: {killed: kv.US_killed === "1", paused: kv.ctl_US_paused === "1"},
               INDIA: {killed: kv.INDIA_killed === "1", paused: kv.ctl_INDIA_paused === "1"}},
       positions: Array.isArray(d && d.positions) ? d.positions : [],
+      opt: {cash: parseFloat(kv.OPT_cash), start: parseFloat(kv.OPT_start_cash), marks: parse(kv.OPT_marks, {})},
     };
   }
 
@@ -309,6 +316,20 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   const PRIO = {HIGH: "good", MEDIUM: "warn", LOW: ""};
 
   function level(k, v) { const d = el("div"); d.append(el("div", "td-k", k), el("div", "td-v", v)); return d; }
+  const isOpt = r => r && r.kind === "OPTION";
+  function occ(c) {                 // 'INTC261218C00077500' -> {root, expiry, strike}
+    const m = /^([A-Z.]+)(\d{2})(\d{2})(\d{2})[CP](\d{8})$/.exec(String(c || ""));
+    return m ? {root: m[1], expiry: "20" + m[2] + "-" + m[3] + "-" + m[4], strike: parseInt(m[5], 10) / 1000} : null;
+  }
+  function optLevels(r) {
+    const g = el("div", "td-levels"), n = r.contracts || 1;
+    g.append(level("Contract", r.symbol + " " + r.strike + " call"), level("Expires", r.expiry + " (" + r.days + " d)"),
+             level("Stock now", money(r.spot, "US") + " (strike " + (r.otm_pct >= 0 ? "+" : "") + r.otm_pct + "%)"),
+             level("Cost", money(r.cost, "US") + " (" + n + " × " + money(r.price, "US") + "×100)"),
+             level("Sells at", money(r.sell_at * 100 * n, "US") + " (" + money(r.sell_at, "US") + "/sh)"),
+             level("Most you can lose", money(r.cost, "US")));
+    return g;
+  }
   function levels(x, m, withQty) {
     const g = el("div", "td-levels");
     const risk = x.price && x.stop && x.target && x.price > x.stop ? ((x.target - x.price) / (x.price - x.stop)).toFixed(2) + " : 1" : (x.r != null ? x.r + " : 1" : "–");
@@ -324,7 +345,9 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
       (s.state === "sending" ? " sending…" : " sent. The bot acts within about 20 seconds."))); return wrap; }
     if (confirming.has(req.id)) {
       const c = el("div", "td-confirm");
-      c.append(el("span", null, "Buy about " + Math.round(req.qty || 0) + " share(s) of " + req.symbol + " at the current price on the paper account?"));
+      c.append(el("span", null, isOpt(req)
+        ? "Buy " + (req.contracts || 1) + " " + req.symbol + " " + req.strike + " call contract(s) for about " + money(req.cost, "US") + " on the paper options book? It can lose all of it."
+        : "Buy about " + Math.round(req.qty || 0) + " share(s) of " + req.symbol + " at the current price on the paper account?"));
       const yes = el("button", "td-btn primary small", "Yes, buy"); yes.type = "button"; yes.onclick = () => send("approve", req);
       const no = el("button", "td-btn small", "Cancel"); no.type = "button"; no.onclick = () => { confirming.delete(req.id); render(); };
       c.append(yes, no); return c;
@@ -346,10 +369,11 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     if (!pend.length) { box.append(el("div", "td-empty", "Nothing is waiting for you. New requests appear here after the bot's daily scan.")); return; }
     for (const r of pend) {
       const it = el("div", "td-item wait"), row = el("div", "td-row1"), m = r.market in CUR ? r.market : "US";
-      row.append(el("span", "td-sym", (r.kind === "REPLACE" ? "Swap into " : "Buy ") + r.symbol), el("span", "td-mk", NAME[m]));
+      row.append(el("span", "td-sym", (r.kind === "REPLACE" ? "Swap into " : "Buy ") + r.symbol + (isOpt(r) ? " " + r.strike + " call" : "")),
+                 el("span", "td-mk", isOpt(r) ? "Option · paper" : NAME[m]));
       if (r.kind === "REPLACE" && r.replace) row.append(el("span", "td-hint", "sells " + r.replace + " first"));
       if (r.kind === "WATCH") row.append(el("span", "td-hint", "watched price reached"));
-      it.append(row, levels(r, m, true));
+      it.append(row, isOpt(r) ? optLevels(r) : levels(r, m, true));
       if (r.thesis) it.append(el("div", "td-why", "Why: " + r.thesis));
       if (r.skeptic) it.append(el("div", "td-why", "Second AI check: " + r.skeptic));
       it.append(actions(r));
@@ -358,7 +382,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   }
 
   function approvalFor(s, m) {
-    return data.requests.filter(r => r.market === m && r.symbol === s.symbol && r.created && dayIn(r.created * 1000, m) === s.day).pop();
+    return data.requests.filter(r => r.market === m && r.symbol === s.symbol && !isOpt(r) && r.created && dayIn(r.created * 1000, m) === s.day).pop();
   }
 
   function renderSuggestions() {
@@ -414,7 +438,7 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
     if (!done.length) { box.append(el("div", "td-empty", "No decisions yet. Each request you approve, skip or let expire is listed here.")); return; }
     for (const r of done) {
       const it = el("div", "td-item"), row = el("div", "td-row1"), st = AP[r.status] || [r.status, ""], m = r.market in CUR ? r.market : "US";
-      row.append(el("span", "td-sym", r.symbol), el("span", "td-mk", NAME[m]), el("span", "td-pill " + st[1], st[0]),
+      row.append(el("span", "td-sym", r.symbol + (isOpt(r) ? " " + r.strike + " call" : "")), el("span", "td-mk", isOpt(r) ? "Option" : NAME[m]), el("span", "td-pill " + st[1], st[0]),
                  el("span", "td-hint", r.resolved ? ago(r.resolved) : ""));
       it.append(row);
       if (r.note) it.append(el("div", "td-why", r.note));
@@ -423,22 +447,56 @@ details.td-stopped .td-item{margin-bottom:10px;opacity:.9}
   }
 
   function renderPositions() {
-    const box = $("positions"), pos = data.positions;
+    const box = $("positions"), all = data.positions;
+    const pos = all.filter(p => p.market !== "OPT"), opts = all.filter(p => p.market === "OPT");
     $("posCount").textContent = pos.length;
     box.replaceChildren();
     if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
-    if (!pos.length) { box.append(el("div", "td-empty", "The bot holds no shares right now.")); return; }
-    const wrap = el("div", "td-scroll"), t = el("table", "td-table"), head = el("tr");
-    for (const [h, c] of [["Symbol", ""], ["Shares", "num"], ["Bought at", "num"], ["Stop", "num"], ["Target", "num"], ["Why", ""]]) head.append(el("th", c, h));
-    t.append(head);
-    for (const p of pos) {
-      const tr = el("tr"), m = p.market in CUR ? p.market : "US", sym = el("td");
-      sym.append(el("span", "td-sym", p.symbol), document.createTextNode(" "), el("span", "td-mk", NAME[m]));
-      tr.append(sym, el("td", "num", String(Math.round(p.qty * 10000) / 10000)), el("td", "num", money(p.entry, m)),
-                el("td", "num", money(p.stop, m)), el("td", "num", money(p.target, m)), el("td", "td-why", p.thesis || ""));
-      t.append(tr);
+    if (!pos.length) box.append(el("div", "td-empty", "The bot holds no shares right now."));
+    else {
+      const wrap = el("div", "td-scroll"), t = el("table", "td-table"), head = el("tr");
+      for (const [h, c] of [["Symbol", ""], ["Shares", "num"], ["Bought at", "num"], ["Stop", "num"], ["Target", "num"], ["Why", ""]]) head.append(el("th", c, h));
+      t.append(head);
+      for (const p of pos) {
+        const tr = el("tr"), m = p.market in CUR ? p.market : "US", sym = el("td");
+        sym.append(el("span", "td-sym", p.symbol), document.createTextNode(" "), el("span", "td-mk", NAME[m]));
+        tr.append(sym, el("td", "num", String(Math.round(p.qty * 10000) / 10000)), el("td", "num", money(p.entry, m)),
+                  el("td", "num", money(p.stop, m)), el("td", "num", money(p.target, m)), el("td", "td-why", p.thesis || ""));
+        t.append(tr);
+      }
+      wrap.append(t); box.append(wrap);
     }
-    wrap.append(t); box.append(wrap);
+    renderOptions(opts);
+  }
+
+  function renderOptions(opts) {
+    const box = $("options"), o = data.opt;
+    $("optCount").textContent = opts.length;
+    box.replaceChildren();
+    if (!loaded) { box.append(el("div", "td-empty", mcp === null ? "Not connected." : "Reading the bot's records…")); return; }
+    if (isNaN(o.cash)) { box.append(el("div", "td-empty", "The options desk is switched off on the bot. When it is on, each US idea that passes the checks also gets a small call for you to approve.")); return; }
+    let value = o.cash;
+    if (!opts.length) box.append(el("div", "td-empty", "No option positions. Proposals appear under Waiting for you after the US scan."));
+    else {
+      const wrap = el("div", "td-scroll"), t = el("table", "td-table"), head = el("tr");
+      for (const [h, c] of [["Contract", ""], ["Contracts", "num"], ["Paid", "num"], ["Worth now", "num"], ["Sells at", "num"], ["Expires", ""]]) head.append(el("th", c, h));
+      t.append(head);
+      for (const p of opts) {
+        const k = occ(p.symbol) || {}, n = Math.round(p.qty / 100), mk = o.marks[p.symbol], bid = mk && mk.bid != null ? mk.bid : null;
+        const paid = p.entry * p.qty, now = bid != null ? bid * p.qty : null;
+        value += now != null ? now : paid;
+        const tr = el("tr"), sym = el("td");
+        sym.append(el("span", "td-sym", (k.root || p.symbol) + " " + (k.strike || "") + " call"));
+        const worth = el("td", "num", now != null ? money(now, "US") + " (" + (now >= paid ? "+" : "") + Math.round(100 * (now / paid - 1)) + "%)" : "not marked yet");
+        tr.append(sym, el("td", "num", String(n)), el("td", "num", money(paid, "US")), worth,
+                  el("td", "num", money(p.target * p.qty, "US")), el("td", null, k.expiry || "–"));
+        t.append(tr);
+      }
+      wrap.append(t); box.append(wrap);
+    }
+    const ret = o.start ? 100 * (value / o.start - 1) : 0;
+    box.append(el("div", "td-hint", "Paper options book: cash " + money(o.cash, "US") + " · value about " + money(value, "US") +
+      " (" + (ret >= 0 ? "+" : "") + ret.toFixed(1) + "% since start). Prices are delayed quotes, refreshed every 20 minutes in the US session."));
   }
 
   function renderTop() {

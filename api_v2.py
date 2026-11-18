@@ -166,6 +166,12 @@ def summary():
             # apart from "not scanned yet".
             "scanned_today": bool(last_dec) and suggest.day_of(last_dec[0]["ts"], market) == suggest.today(market),
         }
+    if CFG.options_enabled and not broker:
+        try:
+            from botv2.options_desk import OptionsDesk
+            out["OPTIONS"] = OptionsDesk(j, CFG, chains=object()).summary()   # no quotes fetched here
+        except Exception as exc:
+            out["OPTIONS"] = {"error": f"options summary failed: {type(exc).__name__}"}
     return jsonify(out)
 
 

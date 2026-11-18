@@ -65,6 +65,7 @@ class ApprovalDesk:
         self.max_drift_pct = max_drift_pct
         self.http = http
         self.runners: dict = {}            # set by main after runners exist
+        self.options = None                # OptionsDesk; handles kind "OPTION" requests
 
     # ── storage ──────────────────────────────────────────────────
     def _load(self) -> list[dict]:
@@ -81,6 +82,10 @@ class ApprovalDesk:
         done = [r for r in reqs if r["status"] != "pending"][-KEEP_RESOLVED:]
         self.journal.kv_set(KV_REQUESTS, json.dumps(pending + done))
 
+    def _handler(self, req: dict):
+        """Who fills / cleans up a request: the options desk or the market runner."""
+        return self.options if req.get("kind") == "OPTION" else self.runners.get(req["market"])
+
     def _expires(self, req: dict) -> float:
         return float(req.get("expires") or req["created"] + self.timeout_s)
 
@@ -94,7 +99,7 @@ class ApprovalDesk:
         request for the same symbol is already waiting (no duplicate pings)."""
         reqs = self._load()
         if any(r["status"] == "pending" and r["market"] == req["market"]
-               and r["symbol"] == req["symbol"] for r in reqs):
+               and r["symbol"] == req["symbol"] and r.get("kind") == req.get("kind") for r in reqs):
             log.info("approval for %s %s already pending", req["market"], req["symbol"])
             return None
         req = dict(req)
@@ -122,7 +127,7 @@ class ApprovalDesk:
             self._save(reqs)
             return f"{req['symbol']} expired before approval."
 
-        runner = self.runners.get(req["market"])
+        runner = self._handler(req)
         if not approve:
             self._resolve(req, "rejected", f"skipped via {source}")
             if runner:
@@ -159,7 +164,7 @@ class ApprovalDesk:
         for r in reqs:
             if r["status"] == "pending" and time.time() > self._expires(r):
                 self._resolve(r, "expired", "no answer in time")
-                runner = self.runners.get(r["market"])
+                runner = self._handler(r)
                 if runner:
                     try:
                         runner.on_approval_rejected(r, "approval expired")
@@ -223,6 +228,16 @@ class ApprovalDesk:
     # ── message formatting / Telegram API ────────────────────────
     def _request_text(self, r: dict) -> str:
         c = "₹" if r.get("currency") == "INR" else "$"
+        if r.get("kind") == "OPTION":
+            left = max(0, int((self._expires(r) - time.time()) // 60)) if r.get("created") else 0
+            return "\n".join([
+                f"🟡 <b>APPROVAL NEEDED · OPTION (PAPER)</b> <code>{r['id']}</code>",
+                f"<b>BUY {r['contracts']} × {html.escape(str(r['symbol']))} {r['strike']:g} call</b>, "
+                f"expires {r['expiry']} ({r['days']} days)",
+                f"Stock ${r['spot']:,.2f} · strike {r['otm_pct']:+.1f}% above · ask ${r['price']:.2f}/share",
+                f"Cost ${r['cost']:,.2f} · sells at ${r['sell_at']:.2f}/share "
+                f"(${r['sell_at'] * 100 * r['contracts']:,.0f}) or before expiry · can lose all of it",
+                f"⏱ Expires in {left // 60}h {left % 60}m."])
         rr = ""
         try:
             rr = f" ({(r['target'] - r['price']) / (r['price'] - r['stop']):.1f}R)"

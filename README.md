@@ -233,3 +233,18 @@ implied vol = realized). At 5% premium most capital sits idle; at 20–33%
 the worst drop reaches -55% to -94%. On a $437 account at 5% per trade, no
 contract was affordable on any signal. Phase 2 (building it) is not
 justified by these numbers.
+
+## Options desk (paper) — `botv2/options_desk.py`, `OPTIONS_ENABLED=true`
+
+After the US 10:00 ET scan, each US idea that passed the risk rules and the
+Skeptic gets one call proposal: 30-60 days out, the strike nearest the stock
+price (at most `OPT_MAX_OTM_PCT` above it) whose whole contract fits
+`OPT_BUDGET_USD` ($50), with open interest and spread filters. You approve
+or skip it in Trade Desk / the control page like a stock buy. Fills are
+virtual, at real delayed Yahoo quotes (buy at ask, sell at bid), in a
+separate paper book (`OPT_cash`, journal market `OPT`). Every 20 minutes in
+the US session positions are sold when the bid reaches `OPT_TARGET_MULT` x
+the price paid ($50 -> $100) or `OPT_EXIT_DTE` days before expiry. No stop:
+the most a position can lose is what was paid. No broker order is placed;
+broker mode refuses to start the desk. Off by default. Research before
+building it (`tools/options_lab.py`) found this rule lost money on history.
